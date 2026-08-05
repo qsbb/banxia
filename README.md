@@ -1,8 +1,8 @@
-# 伴栖 (Companion Presence)
+# 伴夏 (Banxia)
 
-“伴栖”是一个面向 Meta Quest 3 的 Unity 混合现实虚拟陪伴项目，让虚拟角色自然地存在于现实房间中。当前前端负责模型显示、基础交互、彩色 Passthrough、Quest 手追/手柄输入、VMD 动作和 AstrBot HTTP/SSE 对话桥接。
+“伴夏”是一个面向 Meta Quest 3 的 Unity 混合现实虚拟陪伴项目，让虚拟角色自然地存在于现实房间中。当前前端负责模型显示、基础交互、彩色 Passthrough、Quest 手追/手柄输入、VMD 动作和 AstrBot HTTP/SSE 对话桥接。
 
-仓库名使用 `companion-presence`。它不绑定 Quest、MMD 或 AstrBot 品牌，便于未来扩展到其他 XR 设备、模型格式、长期记忆和关系系统。
+仓库名使用 `banxia`。它不绑定 Quest、MMD 或 AstrBot 品牌，便于未来扩展到其他 XR 设备、模型格式、长期记忆和关系系统。
 
 本仓库不会提交用户提供的 PMX/GLB、贴图或第三方 VMD 动作。它们继续保留在开发机本地；新克隆在没有模型素材时使用内置回退角色完成编译和功能测试。
 

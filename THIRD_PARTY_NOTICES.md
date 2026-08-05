@@ -1,7 +1,7 @@
 # Third-party notices
 
 This repository contains or references software and assets owned by their
-respective authors. A future root license for original Companion Presence code
+respective authors. A future root license for original Banxia code
 does not replace these terms.
 
 ## UnityMMDTools

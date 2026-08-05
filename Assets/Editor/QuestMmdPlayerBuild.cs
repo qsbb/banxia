@@ -44,7 +44,7 @@ namespace QuestMmdPlayer.Editor
             ConfigureRuntimeShaders();
             EditorUserBuildSettings.buildAppBundle = false;
             PlayerSettings.companyName = "Quest MMD Player";
-            PlayerSettings.productName = "Quest MMD Player Prototype";
+            PlayerSettings.productName = "伴夏";
             PlayerSettings.colorSpace = ColorSpace.Linear;
             PlayerSettings.insecureHttpOption = InsecureHttpOption.AlwaysAllowed;
             PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { GraphicsDeviceType.Vulkan });
