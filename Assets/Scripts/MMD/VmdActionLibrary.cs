@@ -1,0 +1,946 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using UMT;
+using UnityEngine;
+
+namespace QuestMmdPlayer
+{
+    [Serializable]
+    public sealed class VmdActionLimits
+    {
+        public long maxFileBytes = 16L * 1024L * 1024L;
+        public int maxKeyframeCount = 100000;
+        public float maxDurationSeconds = 120f;
+        public float frameRate = 30f;
+    }
+
+    public sealed class VmdActionInfo
+    {
+        internal VmdActionInfo(string id, long byteLength, int keyframeCount, uint lastFrame, float durationSeconds)
+            : this(id, byteLength, keyframeCount, lastFrame, durationSeconds, false)
+        {
+        }
+
+        internal VmdActionInfo(string id, long byteLength, int keyframeCount, uint lastFrame, float durationSeconds, bool hasFacialTrack)
+        {
+            Id = id;
+            DisplayName = id;
+            ByteLength = byteLength;
+            KeyframeCount = keyframeCount;
+            LastFrame = lastFrame;
+            DurationSeconds = durationSeconds;
+            HasFacialTrack = hasFacialTrack;
+        }
+
+        public string Id { get; }
+        public string DisplayName { get; }
+        public long ByteLength { get; }
+        public int KeyframeCount { get; }
+        public uint LastFrame { get; }
+        public float DurationSeconds { get; }
+        public bool HasFacialTrack { get; }
+    }
+
+    public static class VmdActionFilePolicy
+    {
+        private const int SignatureLength = 30;
+        private const int BoneRecordLength = 111;
+        private const int MorphRecordLength = 23;
+        private const int CameraRecordLength = 61;
+        private const int LightRecordLength = 28;
+        private const int ShadowRecordLength = 9;
+        private const int ShowIkHeaderLength = 9;
+        private const int IkToggleRecordLength = 21;
+
+        public static bool TryResolveActionPath(string motionsDirectory, string actionId, out string path)
+        {
+            path = string.Empty;
+            if (string.IsNullOrEmpty(motionsDirectory) || !IsValidActionId(actionId))
+            {
+                return false;
+            }
+
+            try
+            {
+                var root = Path.GetFullPath(motionsDirectory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var candidate = Path.GetFullPath(Path.Combine(root, actionId + ".vmd"));
+                var parent = Path.GetDirectoryName(candidate)?.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                if (!string.Equals(parent, root, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(Path.GetExtension(candidate), ".vmd", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                path = candidate;
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException ||
+                exception is NotSupportedException ||
+                exception is PathTooLongException)
+            {
+                return false;
+            }
+        }
+
+        public static bool TryResolvePackagePaths(
+            string motionsDirectory,
+            string actionId,
+            out string motionPath,
+            out string facialPath)
+        {
+            motionPath = string.Empty;
+            facialPath = string.Empty;
+            if (string.IsNullOrEmpty(motionsDirectory) || !IsValidActionId(actionId))
+            {
+                return false;
+            }
+
+            try
+            {
+                var root = Path.GetFullPath(motionsDirectory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var package = Path.GetFullPath(Path.Combine(root, actionId));
+                var parent = Path.GetDirectoryName(package)?.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                if (!string.Equals(parent, root, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var candidateMotionPath = Path.Combine(package, "motion.vmd");
+                if (!File.Exists(candidateMotionPath))
+                {
+                    return false;
+                }
+                motionPath = candidateMotionPath;
+                var candidateFacialPath = Path.Combine(package, "facial.vmd");
+                facialPath = File.Exists(candidateFacialPath) ? candidateFacialPath : string.Empty;
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException ||
+                exception is NotSupportedException ||
+                exception is PathTooLongException)
+            {
+                return false;
+            }
+        }
+
+        public static VmdActionInfo Inspect(string path, string actionId, VmdActionLimits limits = null)
+        {
+            limits ??= new VmdActionLimits();
+            ValidateLimits(limits);
+            if (!IsValidActionId(actionId))
+            {
+                throw new InvalidDataException("VMD action id is invalid.");
+            }
+
+            var file = new FileInfo(path ?? string.Empty);
+            if (!file.Exists)
+            {
+                throw new FileNotFoundException("VMD action was not found.", path);
+            }
+            if (file.Length <= SignatureLength || file.Length > limits.maxFileBytes)
+            {
+                throw new InvalidDataException("VMD action file size is outside the allowed range.");
+            }
+
+            using var stream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var reader = new BinaryReader(stream, Encoding.ASCII, true);
+            var signature = Encoding.ASCII.GetString(ReadExact(reader, SignatureLength, "signature")).TrimEnd('\0');
+            int modelNameLength;
+            if (signature == "Vocaloid Motion Data file")
+            {
+                modelNameLength = 10;
+            }
+            else if (signature == "Vocaloid Motion Data 0002")
+            {
+                modelNameLength = 20;
+            }
+            else
+            {
+                throw new InvalidDataException("VMD signature is invalid.");
+            }
+
+            SkipExact(stream, modelNameLength, "model name");
+            long keyframeCount = 0;
+            uint lastFrame = 0;
+            var modelKeyframeCount = 0L;
+
+            var boneCount = ReadCount(reader, "bone count");
+            AddCount(ref keyframeCount, boneCount, limits);
+            AddCount(ref modelKeyframeCount, boneCount, limits);
+            InspectFixedRecords(reader, boneCount, BoneRecordLength, 15, ref lastFrame, "bone records");
+
+            var morphCount = ReadCount(reader, "morph count");
+            AddCount(ref keyframeCount, morphCount, limits);
+            AddCount(ref modelKeyframeCount, morphCount, limits);
+            InspectFixedRecords(reader, morphCount, MorphRecordLength, 15, ref lastFrame, "morph records");
+
+            if (HasOptionalSection(stream))
+            {
+                var cameraCount = ReadCount(reader, "camera count");
+                AddCount(ref keyframeCount, cameraCount, limits);
+                InspectFixedRecords(reader, cameraCount, CameraRecordLength, 0, ref lastFrame, "camera records");
+            }
+            if (HasOptionalSection(stream))
+            {
+                var lightCount = ReadCount(reader, "light count");
+                AddCount(ref keyframeCount, lightCount, limits);
+                InspectFixedRecords(reader, lightCount, LightRecordLength, 0, ref lastFrame, "light records");
+            }
+            if (HasOptionalSection(stream))
+            {
+                var shadowCount = ReadCount(reader, "self-shadow count");
+                AddCount(ref keyframeCount, shadowCount, limits);
+                InspectFixedRecords(reader, shadowCount, ShadowRecordLength, 0, ref lastFrame, "self-shadow records");
+            }
+            if (HasOptionalSection(stream))
+            {
+                var showIkCount = ReadCount(reader, "show/IK count");
+                AddCount(ref keyframeCount, showIkCount, limits);
+                for (uint index = 0; index < showIkCount; index++)
+                {
+                    EnsureRemaining(stream, ShowIkHeaderLength, "show/IK record");
+                    var frame = reader.ReadUInt32();
+                    lastFrame = Math.Max(lastFrame, frame);
+                    reader.ReadByte();
+                    var toggleCount = reader.ReadUInt32();
+                    AddCount(ref keyframeCount, toggleCount, limits);
+                    EnsureRecordBlock(stream, toggleCount, IkToggleRecordLength, "IK toggle records");
+                    stream.Seek((long)toggleCount * IkToggleRecordLength, SeekOrigin.Current);
+                }
+            }
+
+            if (stream.Position != stream.Length)
+            {
+                throw new InvalidDataException("VMD action has an incomplete or unsupported trailing section.");
+            }
+            if (modelKeyframeCount == 0)
+            {
+                throw new InvalidDataException("VMD action does not contain model bone or morph keyframes.");
+            }
+
+            var duration = lastFrame / limits.frameRate;
+            if (duration > limits.maxDurationSeconds)
+            {
+                throw new InvalidDataException("VMD action duration exceeds the allowed limit.");
+            }
+
+            return new VmdActionInfo(actionId, file.Length, checked((int)keyframeCount), lastFrame, duration);
+        }
+
+        private static bool IsValidActionId(string actionId)
+        {
+            if (string.IsNullOrWhiteSpace(actionId) || actionId.Length > 96 ||
+                actionId != actionId.Trim() || actionId == "." || actionId == ".." ||
+                actionId.EndsWith(".", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            foreach (var value in actionId)
+            {
+                if (char.IsControl(value) || value == '/' || value == '\\' || value == ':' ||
+                    Array.IndexOf(Path.GetInvalidFileNameChars(), value) >= 0)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static void ValidateLimits(VmdActionLimits limits)
+        {
+            if (limits.maxFileBytes <= SignatureLength || limits.maxKeyframeCount <= 0 ||
+                limits.maxDurationSeconds <= 0f || limits.frameRate <= 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(limits), "VMD action limits must be positive.");
+            }
+        }
+
+        private static byte[] ReadExact(BinaryReader reader, int count, string section)
+        {
+            EnsureRemaining(reader.BaseStream, count, section);
+            var bytes = reader.ReadBytes(count);
+            if (bytes.Length != count)
+            {
+                throw new InvalidDataException("VMD " + section + " is truncated.");
+            }
+            return bytes;
+        }
+
+        private static uint ReadCount(BinaryReader reader, string section)
+        {
+            EnsureRemaining(reader.BaseStream, sizeof(uint), section);
+            return reader.ReadUInt32();
+        }
+
+        private static void InspectFixedRecords(
+            BinaryReader reader,
+            uint count,
+            int recordLength,
+            int frameOffset,
+            ref uint lastFrame,
+            string section)
+        {
+            var stream = reader.BaseStream;
+            EnsureRecordBlock(stream, count, recordLength, section);
+            for (uint index = 0; index < count; index++)
+            {
+                var start = stream.Position;
+                stream.Seek(frameOffset, SeekOrigin.Current);
+                var frame = reader.ReadUInt32();
+                lastFrame = Math.Max(lastFrame, frame);
+                stream.Position = start + recordLength;
+            }
+        }
+
+        private static void AddCount(ref long total, uint count, VmdActionLimits limits)
+        {
+            total += count;
+            if (total > limits.maxKeyframeCount)
+            {
+                throw new InvalidDataException("VMD action keyframe count exceeds the allowed limit.");
+            }
+        }
+
+        private static bool HasOptionalSection(Stream stream)
+        {
+            var remaining = stream.Length - stream.Position;
+            if (remaining == 0)
+            {
+                return false;
+            }
+            if (remaining < sizeof(uint))
+            {
+                throw new InvalidDataException("VMD optional section count is truncated.");
+            }
+            return true;
+        }
+
+        private static void EnsureRecordBlock(Stream stream, uint count, int recordLength, string section)
+        {
+            var required = (long)count * recordLength;
+            EnsureRemaining(stream, required, section);
+        }
+
+        private static void EnsureRemaining(Stream stream, long required, string section)
+        {
+            if (required < 0 || stream.Length - stream.Position < required)
+            {
+                throw new InvalidDataException("VMD " + section + " is truncated.");
+            }
+        }
+
+        private static void SkipExact(Stream stream, int count, string section)
+        {
+            EnsureRemaining(stream, count, section);
+            stream.Seek(count, SeekOrigin.Current);
+        }
+    }
+
+    // UMT transform solver runs at 10000 in LateUpdate; VMD owns the final bone write.
+    [DefaultExecutionOrder(11000)]
+    [DisallowMultipleComponent]
+    public sealed class VmdActionLibrary : MonoBehaviour
+    {
+        [SerializeField] private VmdActionLimits limits = new VmdActionLimits();
+        [SerializeField, Range(1f, 12f)] private float frameBudgetMilliseconds = 3f;
+
+        private sealed class ActionSource
+        {
+            internal string motionPath;
+            internal string facialPath;
+        }
+
+        private readonly Dictionary<string, ActionSource> actionPaths =
+            new Dictionary<string, ActionSource>(StringComparer.OrdinalIgnoreCase);
+        private readonly SemaphoreSlim conversionGate = new SemaphoreSlim(1, 1);
+        private VmdActionInfo[] actions = Array.Empty<VmdActionInfo>();
+        private PMXModel boundModel;
+        private Transform boundRoot;
+        private AvatarController boundAvatar;
+        private MMDTransformManager transformManager;
+        private BoneBinding[] boneBindings = Array.Empty<BoneBinding>();
+        private MorphBinding[] morphBindings = Array.Empty<MorphBinding>();
+        private int generation;
+        private float playbackClock;
+        private float playbackDuration;
+        private bool physicsArbitrationActive;
+        private bool previousTransformEnabled;
+        private bool previousLivePhysics;
+
+        public event Action ActionsChanged;
+        public event Action PlaybackChanged;
+        public event Action<string> OperationFailed;
+        public event Action<string> ProgressChanged;
+
+        public IReadOnlyList<VmdActionInfo> Actions => actions;
+        public string MotionsDirectory => Path.Combine(Application.persistentDataPath, "Motions");
+        public bool BoundModel => boundModel != null && boundRoot != null;
+        public string CurrentActionId { get; private set; } = string.Empty;
+        public bool IsLoading { get; private set; }
+        public bool IsPlaying { get; private set; }
+
+        private sealed class BoneBinding
+        {
+            internal Transform target;
+            internal AnimationCurve[] curves;
+            internal Vector3 baselinePosition;
+            internal Quaternion baselineRotation;
+        }
+
+        private sealed class MorphBinding
+        {
+            internal SkinnedMeshRenderer renderer;
+            internal int blendShapeIndex;
+            internal AnimationCurve curve;
+            internal float baselineWeight;
+        }
+
+        public async Task<IReadOnlyList<VmdActionInfo>> RefreshAsync()
+        {
+            var discovered = new List<VmdActionInfo>();
+            var discoveredPaths = new Dictionary<string, ActionSource>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                Directory.CreateDirectory(MotionsDirectory);
+                var files = Directory.GetFiles(MotionsDirectory, "*", SearchOption.TopDirectoryOnly)
+                    .Where(path => string.Equals(Path.GetExtension(path), ".vmd", StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                foreach (var file in files)
+                {
+                    await Task.Yield();
+                    var actionId = Path.GetFileNameWithoutExtension(file);
+                    if (!VmdActionFilePolicy.TryResolveActionPath(MotionsDirectory, actionId, out var expectedPath) ||
+                        !string.Equals(Path.GetFullPath(file), expectedPath, StringComparison.OrdinalIgnoreCase) ||
+                        discoveredPaths.ContainsKey(actionId))
+                    {
+                        ReportFailure("已忽略名称不安全或重复的 VMD 动作：" + Path.GetFileName(file));
+                        continue;
+                    }
+
+                    try
+                    {
+                        var info = VmdActionFilePolicy.Inspect(file, actionId, limits);
+                        discovered.Add(info);
+                        discoveredPaths.Add(info.Id, new ActionSource { motionPath = expectedPath });
+                    }
+                    catch (Exception exception) when (
+                        exception is IOException ||
+                        exception is UnauthorizedAccessException ||
+                        exception is InvalidDataException ||
+                        exception is ArgumentException)
+                    {
+                        ReportFailure("VMD 动作已拒绝：" + Path.GetFileName(file) + "（" + exception.Message + "）");
+                    }
+                }
+
+                var packages = Directory.GetDirectories(MotionsDirectory, "*", SearchOption.TopDirectoryOnly)
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                foreach (var package in packages)
+                {
+                    await Task.Yield();
+                    var actionId = Path.GetFileName(package);
+                    if (!VmdActionFilePolicy.TryResolvePackagePaths(MotionsDirectory, actionId, out var motionPath, out var facialPath) ||
+                        discoveredPaths.ContainsKey(actionId))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var motionInfo = VmdActionFilePolicy.Inspect(motionPath, actionId, limits);
+                        var info = motionInfo;
+                        if (!string.IsNullOrEmpty(facialPath))
+                        {
+                            var facialInfo = VmdActionFilePolicy.Inspect(facialPath, actionId, limits);
+                            var totalKeyframes = checked(motionInfo.KeyframeCount + facialInfo.KeyframeCount);
+                            if (totalKeyframes > limits.maxKeyframeCount)
+                            {
+                                throw new InvalidDataException("VMD 动作包关键帧总数超过限制。");
+                            }
+                            info = new VmdActionInfo(
+                                actionId,
+                                checked(motionInfo.ByteLength + facialInfo.ByteLength),
+                                totalKeyframes,
+                                Math.Max(motionInfo.LastFrame, facialInfo.LastFrame),
+                                Math.Max(motionInfo.DurationSeconds, facialInfo.DurationSeconds),
+                                true);
+                        }
+                        discovered.Add(info);
+                        discoveredPaths.Add(info.Id, new ActionSource { motionPath = motionPath, facialPath = facialPath });
+                    }
+                    catch (Exception exception) when (
+                        exception is IOException ||
+                        exception is UnauthorizedAccessException ||
+                        exception is InvalidDataException ||
+                        exception is ArgumentException ||
+                        exception is OverflowException)
+                    {
+                        ReportFailure("VMD 动作包已拒绝：" + actionId + "（" + exception.Message + "）");
+                    }
+                }
+            }
+            catch (Exception exception) when (
+                exception is IOException ||
+                exception is UnauthorizedAccessException ||
+                exception is ArgumentException)
+            {
+                ReportFailure("无法刷新 VMD 动作目录：" + exception.Message);
+            }
+
+            actionPaths.Clear();
+            foreach (var pair in discoveredPaths)
+            {
+                actionPaths.Add(pair.Key, pair.Value);
+            }
+            actions = discovered.ToArray();
+            ActionsChanged?.Invoke();
+            return actions;
+        }
+
+        public void BindModel(PMXModel model, Transform modelRoot, AvatarController avatar)
+        {
+            ClearModel();
+            if (model == null || modelRoot == null || avatar == null)
+            {
+                return;
+            }
+
+            generation++;
+            boundModel = model;
+            boundRoot = modelRoot;
+            boundAvatar = avatar;
+            transformManager = modelRoot.GetComponent<MMDTransformManager>();
+        }
+
+        public void ClearModel()
+        {
+            generation++;
+            StopAndReturnToIdle();
+            boundModel = null;
+            boundRoot = null;
+            boundAvatar = null;
+            transformManager = null;
+        }
+
+        public async Task<bool> PlayAsync(string actionId)
+        {
+            if (IsLoading)
+            {
+                ReportFailure("另一个 VMD 动作正在加载。");
+                return false;
+            }
+            if (!BoundModel || string.IsNullOrEmpty(actionId) || !actionPaths.TryGetValue(actionId, out var source))
+            {
+                ReportFailure(BoundModel ? "请选择已刷新的 VMD 动作。" : "角色模型尚未准备好。");
+                return false;
+            }
+            if (!IsSourcePathCurrent(actionId, source))
+            {
+                ReportFailure("VMD 动作路径验证失败。");
+                return false;
+            }
+
+            IsLoading = true;
+            PlaybackChanged?.Invoke();
+            var requestGeneration = generation;
+            var requestModel = boundModel;
+            var requestRoot = boundRoot;
+            VMDAnimation motionAnimation = null;
+            VMDAnimation facialAnimation = null;
+            await conversionGate.WaitAsync();
+            try
+            {
+                var info = VmdActionFilePolicy.Inspect(source.motionPath, actionId, limits);
+                if (!string.IsNullOrEmpty(source.facialPath))
+                {
+                    var facialInfo = VmdActionFilePolicy.Inspect(source.facialPath, actionId, limits);
+                    var totalKeyframes = checked(info.KeyframeCount + facialInfo.KeyframeCount);
+                    if (totalKeyframes > limits.maxKeyframeCount)
+                    {
+                        throw new InvalidDataException("VMD 动作包关键帧总数超过限制。");
+                    }
+                    info = new VmdActionInfo(
+                        actionId,
+                        checked(info.ByteLength + facialInfo.ByteLength),
+                        totalKeyframes,
+                        Math.Max(info.LastFrame, facialInfo.LastFrame),
+                        Math.Max(info.DurationSeconds, facialInfo.DurationSeconds),
+                        true);
+                }
+                ProgressChanged?.Invoke("正在读取 " + info.DisplayName);
+                var budget = new UMTFrameBudget(frameBudgetMilliseconds);
+                using (var stream = new FileStream(source.motionPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    motionAnimation = await VMDReader.ReadAsync(budget, stream);
+                }
+                if (!string.IsNullOrEmpty(source.facialPath))
+                {
+                    using (var stream = new FileStream(source.facialPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        facialAnimation = await VMDReader.ReadAsync(budget, stream);
+                    }
+                }
+                if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
+                {
+                    return false;
+                }
+
+                ProgressChanged?.Invoke("正在适配骨骼与表情");
+                var options = new VMDAnimationClipOptions
+                {
+                    frameRate = limits.frameRate,
+                    bakeIKToFK = true,
+                    // Bake dynamic bones once, then pause live physics during playback.
+                    bakePhysicsToFK = true,
+                    physicsWarmUpDuration = .4f
+                };
+                var clipData = await VMDAnimationClipConverter.ConvertAsync(
+                    budget,
+                    motionAnimation,
+                    requestModel,
+                    null,
+                    options);
+                var facialClipData = facialAnimation == null
+                    ? null
+                    : await VMDAnimationClipConverter.ConvertAsync(
+                        budget,
+                        facialAnimation,
+                        requestModel,
+                        null,
+                        options);
+                if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
+                {
+                    return false;
+                }
+
+                var nextBones = BuildBoneBindings(requestRoot, clipData);
+                var nextMorphs = MergeMorphBindings(
+                    BuildMorphBindings(requestRoot, clipData),
+                    BuildMorphBindings(requestRoot, facialClipData));
+                if (nextBones.Length == 0 && nextMorphs.Length == 0)
+                {
+                    throw new InvalidDataException("VMD 动作没有可用于当前模型的骨骼或表情轨道。");
+                }
+
+                StopAndReturnToIdle();
+                boneBindings = nextBones;
+                morphBindings = nextMorphs;
+                playbackClock = 0f;
+                playbackDuration = Mathf.Max(.01f, info.DurationSeconds);
+                CurrentActionId = info.Id;
+                BeginPhysicsArbitration();
+                IsPlaying = true;
+                boundAvatar?.PlayAction("vmd");
+                ProgressChanged?.Invoke("正在播放 " + info.DisplayName);
+                PlaybackChanged?.Invoke();
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is IOException ||
+                exception is UnauthorizedAccessException ||
+                exception is InvalidDataException ||
+                exception is ArgumentException ||
+                exception is OverflowException)
+            {
+                ReportFailure("VMD 动作加载失败：" + exception.Message);
+                return false;
+            }
+            finally
+            {
+                if (motionAnimation != null)
+                {
+                    Destroy(motionAnimation);
+                }
+                if (facialAnimation != null)
+                {
+                    Destroy(facialAnimation);
+                }
+                conversionGate.Release();
+                IsLoading = false;
+                PlaybackChanged?.Invoke();
+            }
+        }
+
+        public void StopAndReturnToIdle()
+        {
+            RestoreBindings();
+            boneBindings = Array.Empty<BoneBinding>();
+            morphBindings = Array.Empty<MorphBinding>();
+            playbackClock = 0f;
+            playbackDuration = 0f;
+            CurrentActionId = string.Empty;
+            var wasPlaying = IsPlaying;
+            IsPlaying = false;
+            EndPhysicsArbitration();
+            transformManager?.ResetToBindPose();
+            boundAvatar?.PlayAction("idle");
+            if (wasPlaying)
+            {
+                PlaybackChanged?.Invoke();
+            }
+        }
+
+        private void LateUpdate()
+        {
+            if (!IsPlaying)
+            {
+                return;
+            }
+
+            playbackClock += Time.deltaTime;
+            if (playbackClock > playbackDuration)
+            {
+                StopAndReturnToIdle();
+                return;
+            }
+
+            foreach (var binding in boneBindings)
+            {
+                var curves = binding.curves;
+                var position = new Vector3(
+                    Evaluate(curves[0], playbackClock, binding.baselinePosition.x),
+                    Evaluate(curves[1], playbackClock, binding.baselinePosition.y),
+                    Evaluate(curves[2], playbackClock, binding.baselinePosition.z));
+                var rotation = new Quaternion(
+                    Evaluate(curves[3], playbackClock, binding.baselineRotation.x),
+                    Evaluate(curves[4], playbackClock, binding.baselineRotation.y),
+                    Evaluate(curves[5], playbackClock, binding.baselineRotation.z),
+                    Evaluate(curves[6], playbackClock, binding.baselineRotation.w));
+                binding.target.localPosition = position;
+                binding.target.localRotation = Normalize(rotation, binding.baselineRotation);
+            }
+
+            foreach (var binding in morphBindings)
+            {
+                binding.renderer.SetBlendShapeWeight(
+                    binding.blendShapeIndex,
+                    Mathf.Clamp(Evaluate(binding.curve, playbackClock, binding.baselineWeight), 0f, 100f));
+            }
+        }
+
+        private void BeginPhysicsArbitration()
+        {
+            if (physicsArbitrationActive || transformManager == null)
+            {
+                return;
+            }
+
+            previousTransformEnabled = transformManager.transformEnabled;
+            previousLivePhysics = transformManager.livePhysics;
+            physicsArbitrationActive = true;
+            transformManager.transformEnabled = false;
+            transformManager.livePhysics = false;
+        }
+
+        private void EndPhysicsArbitration()
+        {
+            if (!physicsArbitrationActive || transformManager == null)
+            {
+                return;
+            }
+
+            transformManager.transformEnabled = previousTransformEnabled;
+            transformManager.livePhysics = previousLivePhysics;
+            physicsArbitrationActive = false;
+        }
+
+        private bool IsRequestCurrent(int requestGeneration, PMXModel model, Transform root)
+        {
+            return requestGeneration == generation && model != null && root != null &&
+                model == boundModel && root == boundRoot;
+        }
+
+        private bool IsSourcePathCurrent(string actionId, ActionSource source)
+        {
+            if (source == null || string.IsNullOrEmpty(source.motionPath))
+            {
+                return false;
+            }
+            if (VmdActionFilePolicy.TryResolveActionPath(MotionsDirectory, actionId, out var directPath) &&
+                string.Equals(source.motionPath, directPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return VmdActionFilePolicy.TryResolvePackagePaths(MotionsDirectory, actionId, out var packageMotion, out var packageFacial) &&
+                string.Equals(source.motionPath, packageMotion, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(source.facialPath ?? string.Empty, packageFacial, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static BoneBinding[] BuildBoneBindings(Transform root, VMDModelClipData clipData)
+        {
+            if (clipData == null || !clipData.baked || clipData.bones == null)
+            {
+                throw new InvalidDataException("VMD converter did not return baked bone curves.");
+            }
+
+            const int channelCount = 7;
+            var result = new List<BoneBinding>();
+            for (var index = 0; index < clipData.bones.paths.Length; index++)
+            {
+                var offset = index * channelCount;
+                if (offset + channelCount > clipData.bones.curves.Length)
+                {
+                    throw new InvalidDataException("VMD bone curve layout is invalid.");
+                }
+                var curves = new AnimationCurve[channelCount];
+                var hasCurve = false;
+                for (var channel = 0; channel < channelCount; channel++)
+                {
+                    curves[channel] = clipData.bones.curves[offset + channel];
+                    hasCurve |= curves[channel] != null;
+                }
+                if (!hasCurve)
+                {
+                    continue;
+                }
+
+                var target = root.Find(clipData.bones.paths[index]);
+                if (target == null)
+                {
+                    continue;
+                }
+                var mmdBone = target.GetComponent<MMDBoneTransform>();
+                result.Add(new BoneBinding
+                {
+                    target = target,
+                    curves = curves,
+                    baselinePosition = mmdBone == null ? target.localPosition : mmdBone.initialLocalPosition,
+                    baselineRotation = mmdBone == null ? target.localRotation : mmdBone.initialLocalRotation
+                });
+            }
+            return result.ToArray();
+        }
+
+        private static MorphBinding[] BuildMorphBindings(Transform root, VMDModelClipData clipData)
+        {
+            if (clipData?.morphs == null)
+            {
+                return Array.Empty<MorphBinding>();
+            }
+
+            var morphs = clipData.morphs;
+            if (morphs.paths.Length != morphs.names.Length || morphs.paths.Length != morphs.curves.Length)
+            {
+                throw new InvalidDataException("VMD morph curve layout is invalid.");
+            }
+
+            var result = new List<MorphBinding>();
+            for (var index = 0; index < morphs.paths.Length; index++)
+            {
+                if (morphs.curves[index] == null)
+                {
+                    continue;
+                }
+                var target = root.Find(morphs.paths[index]);
+                var renderer = target == null ? null : target.GetComponent<SkinnedMeshRenderer>();
+                var blendShapeIndex = renderer?.sharedMesh == null
+                    ? -1
+                    : renderer.sharedMesh.GetBlendShapeIndex(morphs.names[index]);
+                if (blendShapeIndex < 0)
+                {
+                    continue;
+                }
+                result.Add(new MorphBinding
+                {
+                    renderer = renderer,
+                    blendShapeIndex = blendShapeIndex,
+                    curve = morphs.curves[index],
+                    baselineWeight = renderer.GetBlendShapeWeight(blendShapeIndex)
+                });
+            }
+            return result.ToArray();
+        }
+
+        private static MorphBinding[] MergeMorphBindings(MorphBinding[] primary, MorphBinding[] supplemental)
+        {
+            if (primary == null || primary.Length == 0) return supplemental ?? Array.Empty<MorphBinding>();
+            if (supplemental == null || supplemental.Length == 0) return primary;
+
+            var merged = new Dictionary<string, MorphBinding>(StringComparer.Ordinal);
+            foreach (var binding in primary)
+            {
+                merged[GetMorphKey(binding)] = binding;
+            }
+            foreach (var binding in supplemental)
+            {
+                merged[GetMorphKey(binding)] = binding;
+            }
+            return merged.Values.ToArray();
+        }
+
+        private static string GetMorphKey(MorphBinding binding)
+        {
+            return (binding.renderer == null ? string.Empty : binding.renderer.GetInstanceID().ToString()) + ":" + binding.blendShapeIndex;
+        }
+
+        private void RestoreBindings()
+        {
+            foreach (var binding in boneBindings)
+            {
+                if (binding.target == null)
+                {
+                    continue;
+                }
+                binding.target.localPosition = binding.baselinePosition;
+                binding.target.localRotation = binding.baselineRotation;
+            }
+            foreach (var binding in morphBindings)
+            {
+                if (binding.renderer != null)
+                {
+                    binding.renderer.SetBlendShapeWeight(binding.blendShapeIndex, binding.baselineWeight);
+                }
+            }
+        }
+
+        private static float Evaluate(AnimationCurve curve, float time, float fallback)
+        {
+            return curve == null || curve.length == 0 ? fallback : curve.Evaluate(time);
+        }
+
+        private static Quaternion Normalize(Quaternion value, Quaternion fallback)
+        {
+            var magnitude = Mathf.Sqrt(
+                value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w);
+            if (magnitude < .00001f || float.IsNaN(magnitude) || float.IsInfinity(magnitude))
+            {
+                return fallback;
+            }
+            var inverse = 1f / magnitude;
+            return new Quaternion(value.x * inverse, value.y * inverse, value.z * inverse, value.w * inverse);
+        }
+
+        private void ReportFailure(string message)
+        {
+            Debug.LogWarning("[VmdActionLibrary] " + message, this);
+            OperationFailed?.Invoke(message);
+        }
+
+        private void OnDisable()
+        {
+            StopAndReturnToIdle();
+        }
+
+        private void OnDestroy()
+        {
+            generation++;
+            RestoreBindings();
+        }
+    }
+}

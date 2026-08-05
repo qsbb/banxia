@@ -1,0 +1,175 @@
+using System;
+using System.IO;
+using System.Reflection;
+using System.Text;
+using NUnit.Framework;
+using UMT;
+using UnityEngine;
+
+namespace QuestMmdPlayer.Tests
+{
+    public sealed class VmdActionLibraryTests
+    {
+        private string directory;
+
+        [SetUp]
+        public void SetUp()
+        {
+            directory = Path.Combine(Path.GetTempPath(), "quest-vmd-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+
+        [Test]
+        public void ActionPathAllowsOnlyDirectSafeVmdFile()
+        {
+            Assert.That(VmdActionFilePolicy.TryResolveActionPath(directory, "wave", out var path), Is.True);
+            Assert.That(path, Is.EqualTo(Path.Combine(directory, "wave.vmd")));
+            Assert.That(VmdActionFilePolicy.TryResolveActionPath(directory, "../escape", out _), Is.False);
+            Assert.That(VmdActionFilePolicy.TryResolveActionPath(directory, "nested/action", out _), Is.False);
+            Assert.That(VmdActionFilePolicy.TryResolveActionPath(directory, "trailing. ", out _), Is.False);
+        }
+
+        [Test]
+        public void InspectorCountsFramesAndDurationBeforeUmtParsing()
+        {
+            var path = Path.Combine(directory, "greeting.vmd");
+            WriteVmd(path, new uint[] { 0, 90 }, new uint[] { 30 });
+
+            var info = VmdActionFilePolicy.Inspect(path, "greeting");
+
+            Assert.That(info.Id, Is.EqualTo("greeting"));
+            Assert.That(info.KeyframeCount, Is.EqualTo(3));
+            Assert.That(info.LastFrame, Is.EqualTo(90));
+            Assert.That(info.DurationSeconds, Is.EqualTo(3f).Within(.0001f));
+        }
+
+        [Test]
+        public void InspectorRejectsMaliciousDeclaredCountBeforeAllocation()
+        {
+            var path = Path.Combine(directory, "bad.vmd");
+            using (var stream = File.Create(path))
+            using (var writer = new BinaryWriter(stream, Encoding.ASCII, false))
+            {
+                WriteFixedAscii(writer, "Vocaloid Motion Data 0002", 30);
+                WriteFixedAscii(writer, "test", 20);
+                writer.Write(uint.MaxValue);
+            }
+
+            Assert.Throws<InvalidDataException>(() => VmdActionFilePolicy.Inspect(path, "bad"));
+        }
+
+        [Test]
+        public void InspectorRejectsDurationAndAggregateKeyframeLimits()
+        {
+            var durationPath = Path.Combine(directory, "long.vmd");
+            WriteVmd(durationPath, new uint[] { 301 }, Array.Empty<uint>());
+            Assert.Throws<InvalidDataException>(() => VmdActionFilePolicy.Inspect(
+                durationPath,
+                "long",
+                new VmdActionLimits { maxDurationSeconds = 10f }));
+
+            var countPath = Path.Combine(directory, "busy.vmd");
+            WriteVmd(countPath, new uint[] { 0, 1 }, new uint[] { 0, 1 });
+            Assert.Throws<InvalidDataException>(() => VmdActionFilePolicy.Inspect(
+                countPath,
+                "busy",
+                new VmdActionLimits { maxKeyframeCount = 3 }));
+        }
+
+        [Test]
+        public void PackagePathRequiresMotionAndAcceptsOptionalFacialTrack()
+        {
+            var package = Path.Combine(directory, "cream_soda");
+            Directory.CreateDirectory(package);
+            var motionPath = Path.Combine(package, "motion.vmd");
+            var facialPath = Path.Combine(package, "facial.vmd");
+
+            Assert.That(VmdActionFilePolicy.TryResolvePackagePaths(directory, "cream_soda", out _, out _), Is.False);
+            File.WriteAllBytes(motionPath, new byte[] { 1 });
+            Assert.That(VmdActionFilePolicy.TryResolvePackagePaths(directory, "cream_soda", out var resolvedMotion, out var resolvedFacial), Is.True);
+            Assert.That(resolvedMotion, Is.EqualTo(motionPath));
+            Assert.That(resolvedFacial, Is.Empty);
+
+            File.WriteAllBytes(facialPath, new byte[] { 2 });
+            Assert.That(VmdActionFilePolicy.TryResolvePackagePaths(directory, "cream_soda", out resolvedMotion, out resolvedFacial), Is.True);
+            Assert.That(resolvedFacial, Is.EqualTo(facialPath));
+            Assert.That(VmdActionFilePolicy.TryResolvePackagePaths(directory, "../escape", out _, out _), Is.False);
+        }
+
+        [Test]
+        public void VmdPlaybackRunsAfterUmtAndTemporarilyOwnsTheSkeleton()
+        {
+            var modelRoot = new GameObject("MMD Model");
+            var libraryRoot = new GameObject("VMD Library");
+            try
+            {
+                var manager = modelRoot.AddComponent<MMDTransformManager>();
+                manager.transformEnabled = true;
+                manager.livePhysics = true;
+                var library = libraryRoot.AddComponent<VmdActionLibrary>();
+                typeof(VmdActionLibrary).GetField("transformManager", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.SetValue(library, manager);
+
+                typeof(VmdActionLibrary).GetMethod("BeginPhysicsArbitration", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.Invoke(library, null);
+                Assert.That(manager.transformEnabled, Is.False);
+                Assert.That(manager.livePhysics, Is.False);
+
+                typeof(VmdActionLibrary).GetMethod("EndPhysicsArbitration", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.Invoke(library, null);
+                Assert.That(manager.transformEnabled, Is.True);
+                Assert.That(manager.livePhysics, Is.True);
+
+                var executionOrder = typeof(VmdActionLibrary).GetCustomAttribute<DefaultExecutionOrder>();
+                Assert.That(executionOrder.order, Is.GreaterThan(10000));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(libraryRoot);
+                UnityEngine.Object.DestroyImmediate(modelRoot);
+            }
+        }
+
+        private static void WriteVmd(string path, uint[] boneFrames, uint[] morphFrames)
+        {
+            using var stream = File.Create(path);
+            using var writer = new BinaryWriter(stream, Encoding.ASCII, false);
+            WriteFixedAscii(writer, "Vocaloid Motion Data 0002", 30);
+            WriteFixedAscii(writer, "test", 20);
+            writer.Write((uint)boneFrames.Length);
+            foreach (var frame in boneFrames)
+            {
+                WriteFixedAscii(writer, "center", 15);
+                writer.Write(frame);
+                for (var index = 0; index < 7; index++) writer.Write(index == 6 ? 1f : 0f);
+                writer.Write(new byte[64]);
+            }
+            writer.Write((uint)morphFrames.Length);
+            foreach (var frame in morphFrames)
+            {
+                WriteFixedAscii(writer, "smile", 15);
+                writer.Write(frame);
+                writer.Write(1f);
+            }
+        }
+
+        private static void WriteFixedAscii(BinaryWriter writer, string value, int length)
+        {
+            var bytes = Encoding.ASCII.GetBytes(value);
+            writer.Write(bytes, 0, Math.Min(bytes.Length, length));
+            if (bytes.Length < length)
+            {
+                writer.Write(new byte[length - bytes.Length]);
+            }
+        }
+    }
+}

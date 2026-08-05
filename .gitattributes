@@ -1,0 +1,31 @@
+* text=auto
+
+*.cs text eol=lf
+*.shader text eol=lf
+*.compute text eol=lf
+*.cginc text eol=lf
+*.unity text eol=lf whitespace=-trailing-space
+*.prefab text eol=lf
+*.asset text eol=lf whitespace=-trailing-space
+*.meta text eol=lf whitespace=-trailing-space
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=crlf
+
+# Preserve known upstream/legacy whitespace without weakening checks for new code.
+Packages/com.candidumgames.unitymmdtools/** whitespace=-trailing-space,-blank-at-eof
+ASTRBOT_PLUGIN_DEVELOPMENT_PROMPT_CN.md whitespace=-blank-at-eof
+Assets/Scripts/Core/AvatarOutlineController.cs whitespace=-trailing-space
+Assets/Shaders/AvatarOutline.shader whitespace=-trailing-space
+Assets/Tests/Editor/AvatarOutlineControllerTests.cs whitespace=-trailing-space
+
+*.dll binary
+*.so binary
+*.a binary
+*.bytes binary
+*.png binary
+*.jpg binary
+*.jpeg binary

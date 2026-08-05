@@ -1,0 +1,308 @@
+using UnityEngine;
+
+namespace QuestMmdPlayer
+{
+    /// <summary>
+    /// Add this component to one empty GameObject in a scene. It creates enough
+    /// runtime content for an editor preview and for the first Quest smoke test.
+    /// </summary>
+    public sealed class QuestMmdPlayerBootstrap : MonoBehaviour
+    {
+        [SerializeField] private bool createCameraIfMissing = true;
+        [SerializeField] private bool createLightIfMissing = true;
+        [SerializeField] private bool createFallbackAvatar = true;
+        [SerializeField] private bool createPrototypeHud = true;
+        [SerializeField] private bool createTouchInteraction = true;
+        [SerializeField] private bool createHumanInteraction = true;
+        [SerializeField] private bool createConversationPrototype = true;
+        [SerializeField] private bool createVrLocomotion = true;
+        [SerializeField] private bool createAvatarPlacement = true;
+        [SerializeField] private Vector3 avatarStartPosition = new Vector3(0f, 0f, 2.2f);
+
+        public AvatarController Avatar { get; private set; }
+        public AvatarNaturalIdlePose IdlePose { get; private set; }
+        public AvatarTouchInteraction TouchInteraction { get; private set; }
+        public AvatarHumanInteraction HumanInteraction { get; private set; }
+        public QuestAvatarRayInteraction AvatarRayInteraction { get; private set; }
+        public CompanionWorldMenu Menu { get; private set; }
+        public ConversationController Conversation { get; private set; }
+        public QuestMicrophoneInput VoiceInput { get; private set; }
+        public QuestVrLocomotion Locomotion { get; private set; }
+        public AvatarPlacementService Placement { get; private set; }
+        public AvatarOutlineController Outline { get; private set; }
+        public AvatarPresence Presence { get; private set; }
+        public PassthroughFacade Passthrough { get; private set; }
+        public AstrBotBridge AstrBot { get; private set; }
+        public BackendPairingController Pairing { get; private set; }
+        public VmdActionLibrary VmdActions { get; private set; }
+        public QuestQualitySettings Quality { get; private set; }
+
+        private RuntimeMmdModelLoader runtimeMmdLoader;
+        private AvatarController fallbackAvatar;
+
+        private void Awake()
+        {
+            EnsureCamera();
+            EnsureLight();
+
+            Passthrough = gameObject.GetComponent<PassthroughFacade>() ?? gameObject.AddComponent<PassthroughFacade>();
+            AstrBot = gameObject.GetComponent<AstrBotBridge>() ?? gameObject.AddComponent<AstrBotBridge>();
+            Pairing = gameObject.GetComponent<BackendPairingController>() ?? gameObject.AddComponent<BackendPairingController>();
+            Pairing.Initialize(AstrBot);
+            IdlePose = gameObject.GetComponent<AvatarNaturalIdlePose>() ?? gameObject.AddComponent<AvatarNaturalIdlePose>();
+            if (createTouchInteraction)
+            {
+                TouchInteraction = gameObject.GetComponent<AvatarTouchInteraction>() ?? gameObject.AddComponent<AvatarTouchInteraction>();
+            }
+            if (createHumanInteraction)
+            {
+                HumanInteraction = gameObject.GetComponent<AvatarHumanInteraction>() ?? gameObject.AddComponent<AvatarHumanInteraction>();
+                AvatarRayInteraction = gameObject.GetComponent<QuestAvatarRayInteraction>() ?? gameObject.AddComponent<QuestAvatarRayInteraction>();
+            }
+            if (createConversationPrototype)
+            {
+                Conversation = gameObject.GetComponent<ConversationController>() ?? gameObject.AddComponent<ConversationController>();
+            }
+            if (createConversationPrototype)
+            {
+                VoiceInput = gameObject.GetComponent<QuestMicrophoneInput>() ?? gameObject.AddComponent<QuestMicrophoneInput>();
+                VoiceInput.Bind(Conversation);
+            }
+            if (createVrLocomotion)
+            {
+                Locomotion = gameObject.GetComponent<QuestVrLocomotion>() ?? gameObject.AddComponent<QuestVrLocomotion>();
+            }
+            if (createAvatarPlacement)
+            {
+                Placement = gameObject.GetComponent<AvatarPlacementService>() ?? gameObject.AddComponent<AvatarPlacementService>();
+            }
+            Presence = gameObject.GetComponent<AvatarPresence>() ?? gameObject.AddComponent<AvatarPresence>();
+            Outline = gameObject.GetComponent<AvatarOutlineController>() ?? gameObject.AddComponent<AvatarOutlineController>();
+            Quality = gameObject.GetComponent<QuestQualitySettings>() ?? gameObject.AddComponent<QuestQualitySettings>();
+            runtimeMmdLoader = GetComponent<RuntimeMmdModelLoader>();
+            VmdActions = gameObject.GetComponent<VmdActionLibrary>() ?? gameObject.AddComponent<VmdActionLibrary>();
+            _ = VmdActions.RefreshAsync();
+
+            Avatar = FindObjectOfType<AvatarController>();
+            if (Avatar == null && runtimeMmdLoader == null && createFallbackAvatar)
+            {
+                fallbackAvatar = FallbackAvatarFactory.Create(avatarStartPosition);
+                Avatar = fallbackAvatar;
+                BindInteractions();
+            }
+
+            BindInteractions();
+
+            if (createPrototypeHud)
+            {
+                Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
+                Menu.Initialize(this);
+#if UNITY_EDITOR
+                var hud = gameObject.GetComponent<PrototypeHud>() ?? gameObject.AddComponent<PrototypeHud>();
+                hud.Initialize(this);
+#endif
+                BindInteractions();
+            }
+        }
+
+        private void OnEnable()
+        {
+            if (AstrBot != null)
+            {
+                AstrBot.CommandReceived += HandleCommand;
+            }
+
+            if (runtimeMmdLoader != null)
+            {
+                runtimeMmdLoader.AvatarLoaded += HandleAvatarLoaded;
+                runtimeMmdLoader.ModelWillUnload += HandleModelWillUnload;
+                runtimeMmdLoader.LoadFailed += HandleMmdLoadFailed;
+                runtimeMmdLoader.ProgressChanged += HandleMmdProgress;
+            }
+        }
+
+        private void OnDisable()
+        {
+            if (AstrBot != null)
+            {
+                AstrBot.CommandReceived -= HandleCommand;
+            }
+
+            if (runtimeMmdLoader != null)
+            {
+                runtimeMmdLoader.AvatarLoaded -= HandleAvatarLoaded;
+                runtimeMmdLoader.ModelWillUnload -= HandleModelWillUnload;
+                runtimeMmdLoader.LoadFailed -= HandleMmdLoadFailed;
+                runtimeMmdLoader.ProgressChanged -= HandleMmdProgress;
+            }
+        }
+
+        private void HandleAvatarLoaded(AvatarController avatar)
+        {
+            if (fallbackAvatar != null && fallbackAvatar != avatar)
+            {
+                Destroy(fallbackAvatar.gameObject);
+                fallbackAvatar = null;
+            }
+
+            Avatar = avatar;
+            VmdActions?.BindModel(
+                runtimeMmdLoader == null ? null : runtimeMmdLoader.CurrentMmdModel,
+                runtimeMmdLoader == null || runtimeMmdLoader.CurrentModel == null
+                    ? null
+                    : runtimeMmdLoader.CurrentModel.transform,
+                avatar);
+            BindInteractions();
+            Debug.Log($"[QuestMmdPlayer] PMX avatar ready: {avatar.name}");
+        }
+
+        private void HandleModelWillUnload()
+        {
+            VmdActions?.ClearModel();
+        }
+
+        private void HandleMmdLoadFailed(string message)
+        {
+            Debug.LogWarning($"[QuestMmdPlayer] PMX load failed: {message}");
+            if (Avatar == null && createFallbackAvatar)
+            {
+                fallbackAvatar = FallbackAvatarFactory.Create(avatarStartPosition);
+                Avatar = fallbackAvatar;
+                BindInteractions();
+            }
+        }
+
+        private void HandleMmdProgress(string stage)
+        {
+            Debug.Log($"[QuestMmdPlayer] PMX load: {stage}");
+        }
+
+        private void BindInteractions()
+        {
+            if (IdlePose != null)
+            {
+                IdlePose.Bind(Avatar);
+            }
+            Avatar?.CaptureActionPose();
+            if (TouchInteraction != null)
+            {
+                TouchInteraction.Bind(Avatar);
+            }
+            if (HumanInteraction != null)
+            {
+                HumanInteraction.Bind(Avatar);
+            }
+            if (AvatarRayInteraction != null)
+            {
+                AvatarRayInteraction.Bind(Avatar, HumanInteraction, Menu);
+            }
+            if (Conversation != null)
+            {
+                Conversation.Bind(Avatar, HumanInteraction);
+            }
+            if (Presence != null)
+            {
+                Presence.Bind(Avatar);
+            }
+            if (Placement != null)
+            {
+                Placement.Bind(Avatar);
+            }
+            if (Outline != null)
+            {
+                Outline.Bind(Avatar);
+            }
+        }
+        private void EnsureCamera()
+        {
+            if (!createCameraIfMissing || Camera.main != null)
+            {
+                return;
+            }
+
+            var cameraObject = new GameObject("Main Camera");
+            cameraObject.tag = "MainCamera";
+            cameraObject.transform.position = new Vector3(0f, 1.6f, 0f);
+            cameraObject.transform.rotation = Quaternion.identity;
+            var camera = cameraObject.AddComponent<Camera>();
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = new Color(0.035f, 0.045f, 0.065f, 0f);
+            cameraObject.AddComponent<AudioListener>();
+        }
+
+        private void EnsureLight()
+        {
+            if (!createLightIfMissing || FindObjectOfType<Light>() != null)
+            {
+                return;
+            }
+
+            var lightObject = new GameObject("Key Light");
+            lightObject.transform.rotation = Quaternion.Euler(45f, -30f, 0f);
+            var light = lightObject.AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.intensity = 1.2f;
+        }
+
+        private void HandleCommand(AvatarCommand command)
+        {
+            if (Avatar == null || command == null)
+            {
+                return;
+            }
+
+            switch ((command.name ?? string.Empty).ToLowerInvariant())
+            {
+                case "play_motion":
+                case "play":
+                    Avatar.PlayAction(command.motionId);
+                    break;
+                case "toggle_pause":
+                case "pause":
+                    Avatar.TogglePlayback();
+                    break;
+                case "set_emotion":
+                case "emotion":
+                    Avatar.SetEmotion(command.emotion);
+                    break;
+                case "reset":
+                    Avatar.ResetTransform();
+                    break;
+                case "place":
+                case "place_avatar":
+                case "recenter_avatar":
+                    Placement?.RequestPlacement();
+                    break;
+                case "move":
+                    Avatar.Move(command.vector);
+                    break;
+                case "rotate":
+                    Avatar.Rotate(Mathf.Approximately(command.value, 0f) ? command.vector.y : command.value);
+                    break;
+                case "scale":
+                    Avatar.Scale(Mathf.Approximately(command.value, 0f) ? 1f : command.value);
+                    break;
+                case "set_action":
+                case "action":
+                    Avatar.PlayAction(command.motionId ?? command.text);
+                    break;
+                case "handshake":
+                    HumanInteraction?.SimulateInteraction(HumanInteractionKind.Handshake);
+                    break;
+                case "head_pat":
+                case "headpat":
+                case "pat":
+                    HumanInteraction?.SimulateInteraction(HumanInteractionKind.HeadPat);
+                    break;
+                case "cheek_pinch":
+                case "cheekpinch":
+                case "pinch":
+                    HumanInteraction?.SimulateInteraction(HumanInteractionKind.CheekPinch);
+                    break;
+                default:
+                    Debug.LogWarning($"[QuestMmdPlayer] unsupported command: {command.name}");
+                    break;
+            }
+        }
+    }
+}

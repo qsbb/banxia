@@ -1,0 +1,46 @@
+# Unity generated folders
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+
+# IDE files
+.vs/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+
+# Unity generated metadata
+sysinfo.txt
+
+# Build outputs and local test captures
+quest_mmd_player_build/
+captures/
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+quest_avatar_bridge.json
+*.keystore
+*.jks
+*.p12
+*.pem
+
+# User-provided avatar assets are local-only unless their authors grant redistribution.
+/Assets/Models/Source/
+/Assets/Models/Imported/ForestBerry.glb
+/Assets/Models/Imported/ForestBerry.glb.meta
+/Assets/StreamingAssets/MmdSamples/ForestBerry/*
+!/Assets/StreamingAssets/MmdSamples/ForestBerry/README.md
+!/Assets/StreamingAssets/MmdSamples/ForestBerry/README.md.meta
+
+# External motions are installed on-device or in persistent data, never committed by default.
+/Assets/StreamingAssets/Motions/
+*.vmd
