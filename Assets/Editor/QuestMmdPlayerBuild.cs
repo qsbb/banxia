@@ -21,6 +21,7 @@ namespace QuestMmdPlayer.Editor
     {
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
         private const string OutputPath = "Builds/QuestMmdPlayer.apk";
+        private const string AndroidApplicationIdentifier = "com.QuestMMDPlayer.QuestMMDPlayerPrototype";
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
         private static readonly string[] RuntimeShaderNames =
@@ -45,6 +46,7 @@ namespace QuestMmdPlayer.Editor
             EditorUserBuildSettings.buildAppBundle = false;
             PlayerSettings.companyName = "Quest MMD Player";
             PlayerSettings.productName = "伴夏";
+            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, AndroidApplicationIdentifier);
             PlayerSettings.colorSpace = ColorSpace.Linear;
             PlayerSettings.insecureHttpOption = InsecureHttpOption.AlwaysAllowed;
             PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { GraphicsDeviceType.Vulkan });
