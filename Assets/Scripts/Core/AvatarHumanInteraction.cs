@@ -223,6 +223,13 @@ namespace QuestMmdPlayer
         void Update()
         {
             if (avatar == null) return;
+            if (avatar.CurrentAction == "vmd")
+            {
+                if (current != HumanInteractionKind.None) SetState(HumanInteractionKind.None);
+                UnlockTouch();
+                Status = "Touch reactions paused during VMD motion";
+                return;
+            }
             if (!inputEnabled) { UnlockTouch(); return; }
             trackingSpace = QuestXrInputUtility.ResolveTrackingSpace(trackingSpace);
             Read(left);
@@ -248,6 +255,17 @@ namespace QuestMmdPlayer
         void LateUpdate()
         {
             if (avatar == null || bones == null) return;
+            if (avatar.CurrentAction == "vmd")
+            {
+                fade = 0f;
+                if (reactionPoseApplied || scaleChanged)
+                {
+                    RestorePose();
+                    RestoreMorphs();
+                    reactionPoseApplied = false;
+                }
+                return;
+            }
             var backendActive = backendReactionUntil > Time.unscaledTime;
             var desired = backendActive
                 ? backendReactionKind

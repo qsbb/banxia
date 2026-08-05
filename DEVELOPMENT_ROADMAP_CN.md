@@ -318,3 +318,28 @@ Meta NorthStar 为固定台词预烘焙嘴型，适合 Timeline；AstrBot 的回
 - Quest Passthrough 30 秒遥测：渲染 72/72 Hz，彩色图像 72/72 Hz，dropped_draw_rate=0.0%，连续丢帧 0/0/0。
 - 本轮未通过 ADB 模拟控制器/手追，因此菜单键、手追射线、触碰、动作菜单播放、描边粗细和后端连接仍需在头显内实际操作确认。
 - 测试结束只执行 force-stop，头显保持开机和在线。
+
+## 11. 2026-08-06 收口状态与下一阶段
+
+本轮已完成：
+
+- 语音采集初始等待改为 4 秒；只有检测到语音后才使用 1.15 秒尾静音结束，避免用户还没开口就自动结束。
+- 80 ms PCM 采集块在 HTTP 上传层合并为最多 16000 字节批次，降低请求数量；上传队列扩大到约 30 秒 PCM16。
+- 触碰默认只做本地即时反馈，不再让 start/update/end 自动创建 LLM 回合；这切断了触碰导致“境”反复进入回复链路的前端来源。
+- VMD 播放期间暂停待机、呼吸、注视和触碰骨骼写入；物理预热提高到 1 秒。
+- 呼吸不再平移胸骨或上下移动整个模型，改为 0.28 度胸部旋转，脚保持落地。
+- 新增 Quest Space Setup 房间语义读取和“扫描房间”，统计地面、座位、桌子、墙、门、窗；地面放置排除 Table 与 Seat。
+- “高度定位”改名为“站立校准”，明确其测量前提；高度仍由头显眼高、真实 Floor 和 0.11 m 眼顶估算得到。
+- APK 输出名改为 Builds/Banxia.apk，应用标签为“伴夏”。Android ID 是否从旧原型 ID 切换为 com.qsbb.banxia，等待用户明确接受新应用身份与重新绑定。
+- 严格静态门禁通过，Unity EditMode 83/83 通过，Android/IL2CPP 构建成功并通过 APK v2 签名校验。
+
+下一阶段按以下顺序进行：
+
+1. 真机只做一次受控验收并记录四段时间：停止录音到 asr.final、asr.final 到首个文字、首个文字到首段音频、reply.end 到实际播完。测试后只 force-stop 应用，不关闭头显。
+2. 为“临”设计 Protocol 2 草案，不直接修改 AstrBot：持久 WebSocket、100-160 ms PCM、server VAD、partial/final ASR、utterance_id、生成取消、流式文本、分句 TTS、barge-in、断线恢复。
+3. 对现有 Protocol 1.0 保持兼容；若后端没有 Protocol 2，只回退到当前整句 STT，不伪装实时。
+4. 增加 room.context@1.0 隐私安全契约草案。前端只发送语义面，不发送相机帧；后端不得把房间事实作为身份或权限依据。
+5. 完成 Floor 站立位置与空间锚持久化，再做 Seat 选择。坐姿必须经过模型骨骼/腿长/脚底偏移校准和 IK，不能只把站立角色移到椅面。
+6. 建立每模型 MotionCompatibilityProfile，记录动作根位移、脚底偏移、IK、物理预热、碰撞组和禁用动作；优先解决指定舞蹈穿模，再推广到其他 VMD。
+7. 如果 ARPlane 无法满足座位边界、遮挡和可行走区域，再引入 MRUK 的 Floor Zone、Scene Query、Environment Raycast 与 NavMesh 结构，不为单一功能升级整套 Unity。
+8. 在后端身份授权问题解决前，前端不自报自然人或人格；当前 protected_context_authorized=false 的根因是 trusted_platform_id_missing，与 STT 或 Unity 渲染无关。

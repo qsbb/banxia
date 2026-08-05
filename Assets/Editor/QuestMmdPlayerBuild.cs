@@ -20,7 +20,7 @@ namespace QuestMmdPlayer.Editor
     public static class QuestMmdPlayerBuild
     {
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
-        private const string OutputPath = "Builds/QuestMmdPlayer.apk";
+        private const string OutputPath = "Builds/Banxia.apk";
         private const string AndroidApplicationIdentifier = "com.QuestMMDPlayer.QuestMMDPlayerPrototype";
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";

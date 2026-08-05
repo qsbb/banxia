@@ -87,13 +87,14 @@ namespace QuestMmdPlayer.Tests
 
                 var root = GameObject.Find("Companion World Menu");
                 Assert.That(root, Is.Not.Null);
-                Assert.That(root.GetComponentsInChildren<BoxCollider>(true).Length, Is.EqualTo(40));
+                Assert.That(root.GetComponentsInChildren<BoxCollider>(true).Length, Is.EqualTo(41));
+                Assert.That(root.transform.Find("Appearance Layer/\u626b\u63cf\u623f\u95f4"), Is.Not.Null);
                 Assert.That(root.transform.Find("Main Menu Layer/绑定后端"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/刷新外部动作"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/播放选中"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/点头"), Is.Not.Null);
                 Assert.That(root.transform.Find("Appearance Layer/描边开关"), Is.Not.Null);
-                Assert.That(root.transform.Find("Appearance Layer/重置高度"), Is.Not.Null);
+                Assert.That(root.transform.Find("Appearance Layer/站立校准"), Is.Not.Null);
                 Assert.That(root.transform.Find("Appearance Layer/画质"), Is.Not.Null);
                 Assert.That(root.transform.Find("Quality Layer/清晰"), Is.Not.Null);
             }

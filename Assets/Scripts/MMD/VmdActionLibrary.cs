@@ -608,7 +608,7 @@ namespace QuestMmdPlayer
                     bakeIKToFK = true,
                     // Bake dynamic bones once, then pause live physics during playback.
                     bakePhysicsToFK = true,
-                    physicsWarmUpDuration = .4f
+                    physicsWarmUpDuration = 1f
                 };
                 var clipData = await VMDAnimationClipConverter.ConvertAsync(
                     budget,

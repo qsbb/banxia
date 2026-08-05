@@ -18,6 +18,7 @@ namespace QuestMmdPlayer
         private float interruptedUntil;
         private bool localReactionModeInitialized;
         private bool localReactionsEnabled = true;
+        [SerializeField] private bool sendInteractionEvents;
         private const float InteractionUpdateInterval = 5f;
 
         public event Action<ConversationState> StateChanged;
@@ -49,7 +50,7 @@ namespace QuestMmdPlayer
 
         private void OnDisable()
         {
-            if (lastInteraction != HumanInteractionKind.None)
+            if (sendInteractionEvents && lastInteraction != HumanInteractionKind.None)
             {
                 transport?.SendInteraction(InteractionName(lastInteraction), "cancel", 0f, InteractionDurationMs());
                 lastInteraction = HumanInteractionKind.None;
@@ -83,7 +84,7 @@ namespace QuestMmdPlayer
                 stateMachine.ResetToIdle();
                 NotifyStateChanged();
             }
-            if (lastInteraction != HumanInteractionKind.None &&
+            if (sendInteractionEvents && lastInteraction != HumanInteractionKind.None &&
                 Time.unscaledTime >= nextInteractionUpdateAt)
             {
                 SendInteractionFact(
@@ -273,7 +274,7 @@ namespace QuestMmdPlayer
         private void HandleInteractionChanged(HumanInteractionKind next)
         {
             var previous = lastInteraction;
-            if (lastInteraction != HumanInteractionKind.None && lastInteraction != next)
+            if (sendInteractionEvents && lastInteraction != HumanInteractionKind.None && lastInteraction != next)
             {
                 SendInteractionFact(
                     InteractionName(lastInteraction),
@@ -285,7 +286,10 @@ namespace QuestMmdPlayer
             {
                 interactionStartedAt = Time.unscaledTime;
                 nextInteractionUpdateAt = interactionStartedAt + InteractionUpdateInterval;
-                SendInteractionFact(InteractionName(next), "start", 1f, 0);
+                if (sendInteractionEvents)
+                {
+                    SendInteractionFact(InteractionName(next), "start", 1f, 0);
+                }
             }
             else if (previous != HumanInteractionKind.None)
             {

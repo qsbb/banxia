@@ -29,6 +29,7 @@ namespace QuestMmdPlayer
         public QuestMicrophoneInput VoiceInput { get; private set; }
         public QuestVrLocomotion Locomotion { get; private set; }
         public AvatarPlacementService Placement { get; private set; }
+        public RoomUnderstandingService RoomUnderstanding { get; private set; }
         public AvatarOutlineController Outline { get; private set; }
         public AvatarPresence Presence { get; private set; }
         public PassthroughFacade Passthrough { get; private set; }
@@ -72,6 +73,7 @@ namespace QuestMmdPlayer
             {
                 Locomotion = gameObject.GetComponent<QuestVrLocomotion>() ?? gameObject.AddComponent<QuestVrLocomotion>();
             }
+            RoomUnderstanding = gameObject.GetComponent<RoomUnderstandingService>() ?? gameObject.AddComponent<RoomUnderstandingService>();
             if (createAvatarPlacement)
             {
                 Placement = gameObject.GetComponent<AvatarPlacementService>() ?? gameObject.AddComponent<AvatarPlacementService>();

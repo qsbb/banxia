@@ -31,8 +31,7 @@ namespace QuestMmdPlayer
         private Quaternion rightUpperBase;
         private Quaternion rightLowerBase;
         private Quaternion rightHandBase;
-        private Vector3 visualRootBasePosition;
-        private float breathingClock;
+
 
         public AvatarController Avatar => avatar;
         public bool IsBound => avatar != null;
@@ -60,9 +59,6 @@ namespace QuestMmdPlayer
             rightHand = Find(all, "righthand", "hand_r", "右手首");
 
             CaptureBases();
-            visualRootBasePosition = avatar.VisualRoot == null
-                ? Vector3.zero
-                : avatar.VisualRoot.localPosition;
             ApplyRelaxedArms();
             Debug.Log($"[IdlePose] Bound natural stance; arms={(leftUpper != null ? 1 : 0) + (rightUpper != null ? 1 : 0)}/2, hands={(leftHand != null ? 1 : 0) + (rightHand != null ? 1 : 0)}/2.", this);
         }
@@ -74,15 +70,11 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            // Keep the pose still enough for touch targeting, with only a small
-            // breath-like vertical motion on the whole visual root.
-            breathingClock += Time.unscaledDeltaTime;
-            var visualRoot = avatar.VisualRoot;
-            if (visualRoot != null && avatar.CurrentAction == "idle")
+            // Keep both feet planted. Subtle breathing is applied as a tiny
+            // upper-body rotation by AvatarPresence instead of moving the model root.
+            if (avatar.CurrentAction == "idle")
             {
                 ApplyRelaxedArms();
-                var breath = Mathf.Sin(breathingClock * 1.35f) * .0035f;
-                visualRoot.localPosition = visualRootBasePosition + Vector3.up * breath;
             }
         }
 
@@ -109,8 +101,7 @@ namespace QuestMmdPlayer
         private void ClearBones()
         {
             leftUpper = leftLower = leftHand = rightUpper = rightLower = rightHand = null;
-            visualRootBasePosition = Vector3.zero;
-            breathingClock = 0f;
+
         }
 
         private static Transform Find(MMDBoneTransform[] all, params string[] names)

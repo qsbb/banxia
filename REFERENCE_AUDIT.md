@@ -184,3 +184,50 @@ AstrBot 对话、人格和记忆
 6. 最后接真 Passthrough、MRUK、空间锚、遮挡和房间级体验。
 
 详细里程碑和验收标准见 [DEVELOPMENT_ROADMAP_CN.md](DEVELOPMENT_ROADMAP_CN.md)。
+
+## 2026-08-06 实时语音、房间理解与 MMD 物理补充审计
+
+### 真实链路时延结论
+
+最近一次成功语音回合的脱敏日志显示：最后一个输入音频块到 audio/end 为 72 ms，STT 为 606.9 ms，LLM 为 10.535 s，TTS 为 5.451 s。当前主要等待来自 LLM 与整段 TTS，STT 不是主瓶颈。前端把 80 ms 采集块合并为不超过 16000 字节的上传批次，能把约 3.4 秒录音从约 43 次 HTTP 请求降到约 7 次，但 Protocol 1.0 仍要等 audio.end 才启动 STT，因此它不是实时识别。
+
+### Together Companion
+
+- 原项目：https://github.com/menglimi/astrbot_plugin_together_companion
+- 浏览器模式使用连续 Web Speech Recognition，保留 interim 文本，拿到 isFinal 后立即发送 user_text。
+- 房间使用持久 WebSocket；当前回复可停止播放，识别文本有 utterance_id 和排除语义，连接还包含恢复与心跳。
+- AstrBot STT 模式仍属于整段录音提交，不应被误写成流式 ASR。
+- 对本项目的可迁移点：一个房间只允许一个活跃生成任务；新语音先取消旧播放/旧 turn；final ASR 立即进入 LLM；交互事实不自动占用语音回复通道。
+
+### Gemini Live 官方示例
+
+- 原项目：https://github.com/google-gemini/live-api-web-console
+- 使用单条持久实时连接；录音上下文为 16000 Hz。
+- AudioWorklet 每 2048 个 PCM16 样本发送一次，约 128 ms，而不是等待完整句子。
+- 服务端显式返回 interrupted 与 turnComplete；音频、文本和控制事件在同一实时会话中交付。
+- 对本项目的可迁移点：Protocol 2 应采用持久双向传输、100-160 ms 音频块、utterance_id、服务端 VAD、partial/final ASR、可取消流式 LLM、分句 TTS 与 barge-in。
+
+### Deepgram FastAPI 实时转写示例
+
+- 原项目：https://github.com/deepgram-devs/live-transcription-fastapi
+- 浏览器到 FastAPI 使用 /listen WebSocket，服务端把每个二进制音频块持续转交给识别 WebSocket，再把 transcript 发回客户端。
+- 该示例明确是持久流式传输，但示例本身配置 interim_results=False；它只能证明实时管道结构，不能作为 partial ASR 已启用的证据。
+
+### Meta MRUK
+
+- 原项目：https://github.com/oculus-samples/Unity-MRUtilityKitSample
+- 官方样例包含无障碍 Floor Zone、按房间位置生成、多房间 Scene Query、由 Scene 数据构建 NavMesh、环境射线与真实环境碰撞。
+- 当前项目先使用已安装的 Meta OpenXR + AR Foundation 读取 Space Setup 的 Floor、Seat、Table、Wall、Door、Window 分类面，避免为 MRUK 整包升级 Unity 6。
+- 下一阶段只有在座位放置、导航、遮挡和环境碰撞需要超过 ARPlane 能力时，才迁移 MRUK 的查询与 NavMesh方法。
+
+### UnityMMDTools
+
+- 原项目：https://github.com/CandidumGames/UnityMMDTools
+- VMDAnimationClipOptions 明确提供 bakeIKToFK、bakePhysicsToFK、physicsSeed 与 physicsWarmUpDuration，当前上游默认物理预热为 5 秒。
+- MMDPhysicsManager 使用 Bullet 刚体、关节、固定步长和可选地面碰撞。
+- 当前项目已在播放时停止待机、注视、触碰反应对同一骨骼的竞争写入，并把预热从 0.4 秒提高到 1 秒。1 秒是 Quest 运行时转换成本与稳定性的折中，不等于彻底解决任意模型穿模。
+- 后续必须增加每模型动作兼容配置：骨骼映射、脚底偏移、IK 开关、物理预热、碰撞组、动作允许范围和问题动作禁用。通用 SkinnedMesh 自碰撞不应作为第一步。
+
+### 房间内容隐私边界
+
+当前 RoomUnderstandingService 只保留语义类别、中心姿态与平面尺寸，不上传相机像素。角色“看见房间”需要未来的 room.context@1.0 后端契约；契约只发送相对 XR Origin 的类别、位置、尺寸、置信度与时间戳，并将其视为可过期、不可授权的环境事实。没有这个契约前，Unity 只能本地放置和显示统计，不能声称 AstrBot 已知道房间。

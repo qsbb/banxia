@@ -21,6 +21,7 @@ namespace QuestMmdPlayer
         [SerializeField, Range(.003f, .08f)] private float voiceSilenceRms = .008f;
         [SerializeField, Range(.4f, 2.5f)] private float voiceSilenceSeconds = 1.15f;
         [SerializeField, Range(.2f, 1f)] private float minimumVoiceSeconds = .45f;
+        [SerializeField, Range(1.5f, 8f)] private float initialVoiceTimeoutSeconds = 4f;
 
         private readonly List<float> pendingMono = new List<float>(4096);
         private ConversationController conversation;
@@ -35,6 +36,7 @@ namespace QuestMmdPlayer
         private bool previousTrackedPinch;
         private bool trackedPinchTurnCompleted;
         private float lastVoiceAt;
+        private bool detectedSpeech;
         private CompanionWorldMenu menu;
         private AvatarTouchInteraction touchInteraction;
 
@@ -103,10 +105,23 @@ namespace QuestMmdPlayer
             {
                 StopAndSend();
             }
-            else if (autoStopOnSilence && Time.unscaledTime - recordingStartedAt >= Mathf.Max(.2f, minimumVoiceSeconds) &&
-                Time.unscaledTime - lastVoiceAt >= Mathf.Max(.4f, voiceSilenceSeconds))
+            else if (autoStopOnSilence && ShouldStopForSilence(
+                detectedSpeech,
+                Time.unscaledTime - recordingStartedAt,
+                Time.unscaledTime - lastVoiceAt,
+                minimumVoiceSeconds,
+                voiceSilenceSeconds,
+                initialVoiceTimeoutSeconds))
             {
-                StopAndSend();
+                if (detectedSpeech)
+                {
+                    StopAndSend();
+                }
+                else
+                {
+                    CancelRecording();
+                    Status = "No speech detected";
+                }
             }
         }
 
@@ -196,6 +211,7 @@ namespace QuestMmdPlayer
             InputLevel = 0f;
             recordingStartedAt = Time.unscaledTime;
             lastVoiceAt = recordingStartedAt;
+            detectedSpeech = false;
             IsRecording = true;
             Status = "Recording voice";
             return true;
@@ -220,8 +236,15 @@ namespace QuestMmdPlayer
                 return;
             }
             StopMicrophoneOnly();
-            conversation?.EndVoiceInput();
-            Status = "Voice sent";
+            if (conversation != null && conversation.EndVoiceInput())
+            {
+                Status = "Voice sent";
+            }
+            else
+            {
+                conversation?.CancelVoiceInput();
+                Status = "Voice send failed";
+            }
         }
 
         public void CancelRecording()
@@ -332,9 +355,28 @@ namespace QuestMmdPlayer
             InputLevel = Mathf.Sqrt(sumSquares / source.Count);
             if (InputLevel >= voiceSilenceRms)
             {
+                detectedSpeech = true;
                 lastVoiceAt = Time.unscaledTime;
             }
             return conversation != null && conversation.PushVoiceAudio(pcm16);
+        }
+
+        public static bool ShouldStopForSilence(
+            bool speechDetected,
+            float recordingSeconds,
+            float silentSeconds,
+            float minimumSeconds,
+            float trailingSilenceSeconds,
+            float initialTimeoutSeconds)
+        {
+            if (recordingSeconds < Mathf.Max(.2f, minimumSeconds))
+            {
+                return false;
+            }
+
+            return speechDetected
+                ? silentSeconds >= Mathf.Max(.4f, trailingSilenceSeconds)
+                : recordingSeconds >= Mathf.Max(1.5f, initialTimeoutSeconds);
         }
 
         private void StopMicrophoneOnly()

@@ -280,7 +280,7 @@ namespace QuestMmdPlayer
             CreateButton("握手", x[1], y[1], buttonWidth, buttonHeight, () => owner?.HumanInteraction?.SimulateInteraction(HumanInteractionKind.Handshake), mainLayer.transform);
             CreateButton("捏脸", x[2], y[1], buttonWidth, buttonHeight, () => owner?.HumanInteraction?.SimulateInteraction(HumanInteractionKind.CheekPinch), mainLayer.transform);
             CreateButton("重新放置", x[0], y[2], buttonWidth, buttonHeight, () => owner?.Placement?.RequestPlacement(), mainLayer.transform);
-            CreateButton("高度定位", x[1], y[2], buttonWidth, buttonHeight, () => owner?.Placement?.CalibrateHeightAndPlace(), mainLayer.transform);
+            CreateButton("站立校准", x[1], y[2], buttonWidth, buttonHeight, () => owner?.Placement?.CalibrateHeightAndPlace(), mainLayer.transform);
             CreateButton("彩色透视", x[2], y[2], buttonWidth, buttonHeight, () => owner?.Passthrough?.Toggle(), mainLayer.transform);
             CreateButton("绑定后端", x[0], y[3], buttonWidth, buttonHeight, ShowPairingPanel, mainLayer.transform);
             CreateButton("动作", x[1], y[3], buttonWidth, buttonHeight, ShowActionPanel, mainLayer.transform);
@@ -330,10 +330,11 @@ namespace QuestMmdPlayer
             CreateButton("描边开关", 0f, 148f, 204f, 62f, ToggleOutline, appearanceLayer.transform);
             CreateButton("粗一点", 224f, 148f, 204f, 62f, IncreaseOutline, appearanceLayer.transform);
             CreateButton("彩色透视", -224f, 70f, 204f, 62f, () => owner?.Passthrough?.Toggle(), appearanceLayer.transform);
-            CreateButton("重置高度", 0f, 70f, 204f, 62f, () => owner?.Placement?.ResetHeightAndPlace(), appearanceLayer.transform);
+            CreateButton("站立校准", 0f, 70f, 204f, 62f, () => owner?.Placement?.ResetHeightAndPlace(), appearanceLayer.transform);
             CreateButton("面对面放置", 224f, 70f, 204f, 62f, () => owner?.Placement?.FaceUserAndPlace(), appearanceLayer.transform);
             CreateButton("重连后端", 0f, -8f, 204f, 62f, ReconnectBackend, appearanceLayer.transform);
-            CreateButton("画质", 224f, -8f, 204f, 62f, ShowQualityPanel, appearanceLayer.transform);
+            CreateButton("\u626b\u63cf\u623f\u95f4", -224f, -8f, 204f, 62f, () => owner?.RoomUnderstanding?.RequestSceneCapture(), appearanceLayer.transform);
+            CreateButton("\u753b\u8d28", 224f, -8f, 204f, 62f, ShowQualityPanel, appearanceLayer.transform);
 
             outlineStatusText = CreateText("", appearanceLayer.transform, new Vector2(0f, -96f), new Vector2(650f, 92f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
             CreateButton("返回主菜单", -112f, -182f, 204f, 62f, ShowMainPanel, appearanceLayer.transform);
@@ -368,7 +369,8 @@ namespace QuestMmdPlayer
             var outline = owner?.Outline == null ? "描边控制不可用" : owner.Outline.Status;
             var placement = owner?.Placement == null ? "定位不可用" : LocalizePlacementStatus(owner.Placement.Status);
             var bridge = owner?.AstrBot == null ? "后端不可用" : LocalizeBridgeStatus(owner.AstrBot.Status);
-            outlineStatusText.text = outline + "\n定位 " + placement + "\n后端 " + bridge;
+            var room = owner?.RoomUnderstanding == null ? "房间识别不可用" : owner.RoomUnderstanding.ContextSummary;
+            outlineStatusText.text = outline + "\n\u5b9a\u4f4d " + placement + "\n" + room + "\n\u540e\u7aef " + bridge;
         }
         private void PlayPresetAction(string action)
         {
@@ -953,7 +955,7 @@ namespace QuestMmdPlayer
             var microphone = microphoneStatus == "REC" ? "录音中" : microphoneStatus == "READY" ? "就绪" : "关闭";
             var backend = owner.Conversation != null && owner.Conversation.IsRealBackendConnected ? "在线" : "本地模式";
             var height = owner.Placement != null && owner.Placement.HasHeightCalibration ? $"{owner.Placement.EstimatedUserHeight:F2}m" : "未定位";
-            statusText.text = $"{action}   |   彩透 {passthrough}   |   角色 {avatar}   |   {placement}\n身高估算 {height}   |   麦克风 {microphone}   |   后端 {backend}";
+            statusText.text = $"{action}   |   彩透 {passthrough}   |   角色 {avatar}   |   {placement}\n站立身高估算 {height}   |   麦克风 {microphone}   |   后端 {backend}";
         }
 
         private void ClearHoverVisuals()

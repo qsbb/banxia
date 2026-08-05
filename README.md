@@ -49,7 +49,7 @@
 
 ## 构建 Quest APK
 
-执行菜单 Quest MMD Player > Build Android APK，产物为 Builds/QuestMmdPlayer.apk。当前构建使用 ARM64、IL2CPP、Vulkan，最低 Android API 29。
+执行菜单 Quest MMD Player > Build Android APK，产物为 Builds/Banxia.apk。当前构建使用 ARM64、IL2CPP、Vulkan，最低 Android API 29。
 
 设备上仍需人工确认：APK 安装、Quest 视野中的模型显示、真实房间 Passthrough、手势/手柄输入、帧率和发热。设备离线或低电量时只运行编辑器和构建检查。
 

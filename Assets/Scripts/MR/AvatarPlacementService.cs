@@ -193,7 +193,7 @@ namespace QuestMmdPlayer
             planeManager = planeManager != null
                 ? planeManager
                 : xrOrigin.GetComponent<ARPlaneManager>() ?? xrOrigin.gameObject.AddComponent<ARPlaneManager>();
-            planeManager.requestedDetectionMode = PlaneDetectionMode.Horizontal;
+            planeManager.requestedDetectionMode = PlaneDetectionMode.Horizontal | PlaneDetectionMode.Vertical;
             raycastManager = raycastManager != null
                 ? raycastManager
                 : xrOrigin.GetComponent<ARRaycastManager>() ?? xrOrigin.gameObject.AddComponent<ARRaycastManager>();
@@ -243,7 +243,14 @@ namespace QuestMmdPlayer
                     continue;
                 }
 
-                ApplyPlacement(hit.pose.position, true, hit.trackable as ARPlane);
+                var trackedPlane = hit.trackable as ARPlane;
+                if (trackedPlane != null && trackedPlane.classification != PlaneClassification.Floor &&
+                    trackedPlane.classification != PlaneClassification.None)
+                {
+                    continue;
+                }
+
+                ApplyPlacement(hit.pose.position, true, trackedPlane);
                 return true;
             }
 
@@ -329,7 +336,7 @@ namespace QuestMmdPlayer
             if (planeManager != null)
             {
                 planeManager.enabled = true;
-                planeManager.requestedDetectionMode = PlaneDetectionMode.Horizontal;
+                planeManager.requestedDetectionMode = PlaneDetectionMode.Horizontal | PlaneDetectionMode.Vertical;
             }
 
             if (raycastManager != null)
@@ -345,10 +352,8 @@ namespace QuestMmdPlayer
                 raycastManager.enabled = false;
             }
 
-            if (planeManager != null)
-            {
-                planeManager.enabled = false;
-            }
+            // Keep semantic room planes alive after placement. Meta OpenXR reads
+            // these from Space Setup, and RoomUnderstandingService reuses them.
         }
 
         private float ResolveFloorHeight()
@@ -395,6 +400,12 @@ namespace QuestMmdPlayer
                 {
                     var hit = RaycastHits[hitIndex];
                     if (!IsHorizontalUpPose(hit.pose, minimumUpDot))
+                    {
+                        continue;
+                    }
+                    var trackedPlane = hit.trackable as ARPlane;
+                    if (trackedPlane != null && trackedPlane.classification != PlaneClassification.Floor &&
+                        trackedPlane.classification != PlaneClassification.None)
                     {
                         continue;
                     }

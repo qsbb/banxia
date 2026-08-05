@@ -33,10 +33,10 @@ Quest MMD Player > Render Human Interaction Previews 会生成三种交互的多
 
 ## 3. Quest 3 设备检查
 
-APK 位于 Builds/QuestMmdPlayer.apk。只需在设备上确认以下项目：
+APK 位于 Builds/Banxia.apk。只需在设备上确认以下项目：
 
 1. 通过 Meta Quest Developer Hub 或 adb 安装 APK。
-2. 启动 Quest MMD Player Prototype。
+2. 启动伴夏。
 3. 确认模型能加载、贴图正常、没有黑屏或崩溃。
 4. 放下控制器并确认系统显示双手，然后验证握手、摸头和捏脸。
 5. 记录是否出现明显卡顿、发热、刚体抖动、误触或纹理缺失。
@@ -66,9 +66,9 @@ await loader.LoadFromFileAsync(pmxPath, textureDirectory);
 | Unity 项目和 UMT 包解析 | 已完成 | Packages/com.candidumgames.unitymmdtools/package.json |
 | 运行时 PMX 导入 | 已完成 | RuntimeMmdModelLoader.cs、PMX 冒烟测试 |
 | 桌面端预览 | 已完成 | Builds/ForestBerryPreview.png |
-| Quest APK 构建 | 已完成 | Builds/QuestMmdPlayer.apk |
+| Quest APK 构建 | 已完成 | Builds/Banxia.apk |
 | XR Hands/控制器输入 | 已完成，待真机体验确认 | AvatarHumanInteraction.cs、AvatarTouchInteraction.cs |
-| 握手/摸头/捏脸传感 | 已完成；反应由后端意图驱动 | HUD 模拟、Mock avatar.intent、编辑器测试 |
+| 握手/摸头/捏脸传感 | 已完成；默认本地即时反应，语义上报显式开启 | HUD 模拟、Mock avatar.intent、编辑器测试 |
 | 真 Passthrough | 已配置，待真机验收 | Meta OpenXR provider 与 AR Camera |
 | Mock 可打断对话、PCM 流播放 | 已完成第一切片 | ConversationController、ConversationStateMachine |
 | 音量驱动嘴型和对话注视 | 已完成降级实现 | AvatarConversationPresenter |

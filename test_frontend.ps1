@@ -41,6 +41,7 @@ $requiredFiles = @(
     "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs",
     "Assets/Scripts/MMD/VmdActionLibrary.cs",
     "Assets/Scripts/MR/PassthroughFacade.cs",
+    "Assets/Scripts/MR/RoomUnderstandingService.cs",
     "Assets/Scripts/Backend/AstrBotBridge.cs",
     "Assets/Scripts/Backend/BackendPairingController.cs",
     "Assets/Scripts/Backend/BackendPairingProtocol.cs",
@@ -68,6 +69,7 @@ $requiredFiles = @(
     "Assets/Tests/Editor/BackendDrivenInteractionTests.cs",
     "Assets/Tests/Editor/BackendPairingTests.cs",
     "Assets/Tests/Editor/VmdActionLibraryTests.cs",
+    "Assets/Tests/Editor/RoomUnderstandingServiceTests.cs",
     "README.md",
     "TESTING.md",
     "QUICK_TEST.md",
@@ -148,18 +150,18 @@ $sourceChecks = @{
     "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("LoadFromFileAsync", "PMXImporter.BuildUnityObjectsAsync", "streamingAssetsPath", "textureBaseDirectory", "PreserveOriginalNames")
     "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VmdActionFilePolicy", "SearchOption.TopDirectoryOnly", "VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "DefaultExecutionOrder(11000)", "bakePhysicsToFK = true", "BeginPhysicsArbitration", "StopAndReturnToIdle")
     "Assets/Scripts/Core/QuestQualitySettings.cs" = @("XRSettings.eyeTextureResolutionScale", "XRSettings.renderViewportScale", "QuestQualityPreset.Clear", "UniversalRenderPipelineAsset", "PlayerPrefs.Save")
-    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = `"伴夏`"", "PlayerSettings.SetApplicationIdentifier", "com.QuestMMDPlayer.QuestMMDPlayerPrototype")
+    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = `"伴夏`"", "PlayerSettings.SetApplicationIdentifier", "com.QuestMMDPlayer.QuestMMDPlayerPrototype", "Builds/Banxia.apk")
     "Assets/Editor/QuestPrivateLanManifestPostprocessor.cs" = @("usesCleartextTraffic", "horizonos.permission.HAND_TRACKING", "EnsurePermission")
     "Assets/Editor/QuestMmdPlayerRuntimeSmokeTest.cs" = @("PMXImporter.Import", "applyRenames = false", "Runtime PMX Smoke Test")
     "Assets/Editor/QuestMmdPlayerMenu.cs" = @("RuntimeMmdModelLoader", "bundled PMX sample")
     "Assets/Scripts/Backend/AstrBotBridge.cs" = @("TryIngestCommandJson", "JsonUtility.FromJson", "CommandReceived", "ReloadConfiguration", "ConfiguredBaseUrl")
     "Assets/Scripts/Backend/BackendPairingProtocol.cs" = @("TryBuildExchangeEndpoint", "TryParseQrPayload", "TryWriteSettingsAtomically", "File.Replace", "https")
     "Assets/Scripts/Backend/BackendPairingController.cs" = @("IPairingCodeScanner", "PairWithCode", "PairWithQrPayload", "PairingServerEndpoint", "ReloadConfiguration")
-    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("PAIR BACKEND", "SCAN QR", "SET HTTPS SERVER", "TouchScreenKeyboard", "RefreshExternalActions", "PlaySelectedExternalAction")
+    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("PAIR BACKEND", "SCAN QR", "SET HTTPS SERVER", "TouchScreenKeyboard", "RefreshExternalActions", "PlaySelectedExternalAction", "RoomUnderstanding")
     "Assets/Scripts/MR/PassthroughFacade.cs" = @("IPassthroughProvider", "EditorPassthroughProvider", "StateChanged")
     "Assets/Scripts/Core/AvatarController.cs" = @("Move", "Rotate", "Scale", "PlayAction", "TogglePlayback", "CaptureActionPose", "rightUpperArm", "ApplyWave", "ApplyBow")
     "Assets/Scripts/Core/AvatarTouchInteraction.cs" = @("InputDevices.GetDeviceAtXRNode", "TouchStateChanged", "ApplyDualGrab", "primaryButton", "triggerButton", "XRHandJointID.IndexTip", "SetSemanticInteractionLock")
-    "Assets/Scripts/Core/QuestMmdPlayerBootstrap.cs" = @("AvatarTouchInteraction", "AvatarHumanInteraction", "ConversationController", "QuestMicrophoneInput", "BindInteractions", "handshake", "head_pat", "cheek_pinch")
+    "Assets/Scripts/Core/QuestMmdPlayerBootstrap.cs" = @("AvatarTouchInteraction", "AvatarHumanInteraction", "ConversationController", "QuestMicrophoneInput", "RoomUnderstandingService", "BindInteractions", "handshake", "head_pat", "cheek_pinch")
     "Assets/Scripts/Core/AvatarHumanInteraction.cs" = @("XRHandSubsystem", "XRHandJointID.Palm", "HumanInteractionKind.Handshake", "HumanInteractionKind.HeadPat", "HumanInteractionKind.CheekPinch", "SimulateInteraction", "SetLocalReactionsEnabled", "PlayReaction", "SetSemanticInteractionLock")
     "Assets/Tests/Editor/AvatarCommandTests.cs" = @("JsonCommandIsAcceptedByBridge", "InvalidJsonIsRejected")
     "Assets/Tests/Editor/AvatarHumanInteractionTests.cs" = @("BindFindsMmdBonesAndSimulationChangesState", "HumanInteractionKind.Handshake", "HumanInteractionKind.HeadPat", "HumanInteractionKind.CheekPinch")

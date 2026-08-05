@@ -96,7 +96,7 @@ namespace QuestMmdPlayer.Tests
 
             Assert.AreEqual(ConversationState.Listening, controller.State);
             Assert.AreEqual(0, transport.InterruptCount);
-            Assert.AreEqual("head_pat", transport.LastInteractionName);
+            Assert.IsEmpty(transport.LastInteractionName);
         }
 
         [Test]
@@ -153,6 +153,34 @@ namespace QuestMmdPlayer.Tests
                 "DSP output still owns the final audible buffer.");
             player.StopAndClear();
             Assert.IsTrue(player.IsDrained);
+        }
+
+        [Test]
+        public void AudioUploadBatchCombinesCaptureChunksWithoutExceedingLimit()
+        {
+            var chunks = new System.Collections.Generic.Queue<byte[]>();
+            for (var index = 0; index < 7; index++)
+            {
+                chunks.Enqueue(new byte[2560]);
+            }
+
+            var batch = AstrBotBridge.DequeueAudioBatch(chunks, 16000);
+
+            Assert.That(batch.Length, Is.EqualTo(15360));
+            Assert.That(chunks.Count, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void SilenceTimeoutWaitsForSpeechThenUsesTrailingSilence()
+        {
+            Assert.That(QuestMicrophoneInput.ShouldStopForSilence(
+                false, 1.2f, 1.2f, .45f, 1.15f, 4f), Is.False);
+            Assert.That(QuestMicrophoneInput.ShouldStopForSilence(
+                false, 4.1f, 4.1f, .45f, 1.15f, 4f), Is.True);
+            Assert.That(QuestMicrophoneInput.ShouldStopForSilence(
+                true, 2f, .8f, .45f, 1.15f, 4f), Is.False);
+            Assert.That(QuestMicrophoneInput.ShouldStopForSilence(
+                true, 2.4f, 1.2f, .45f, 1.15f, 4f), Is.True);
         }
 
         private sealed class RecordingVoiceTransport : MonoBehaviour, IConversationTransport

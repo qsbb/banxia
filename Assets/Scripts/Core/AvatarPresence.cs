@@ -22,7 +22,7 @@ namespace QuestMmdPlayer
         [SerializeField, Range(15f, 180f)] private float bodyTurnSpeed = 78f;
         [SerializeField] private bool avatarFacesNegativeZ = false;
         [SerializeField] private float attentionSpeed = 5f;
-        [SerializeField] private float breathAmplitude = .012f;
+        [SerializeField, Range(.05f, 1f)] private float breathPitchDegrees = .28f;
         [SerializeField] private float breathCyclesPerMinute = 12f;
 
         private AvatarController avatar;
@@ -30,7 +30,7 @@ namespace QuestMmdPlayer
         private Transform head;
         private Transform chest;
         private Quaternion headRestRotation;
-        private Vector3 chestRestPosition;
+        private Quaternion chestRestRotation;
         private readonly List<BlinkShape> blinkShapes = new List<BlinkShape>();
         private float nextBlinkTime;
         private float blinkUntil;
@@ -63,7 +63,7 @@ namespace QuestMmdPlayer
             head = FindBone(bones, "head", "head", "头");
             chest = FindBone(bones, "upperbody", "chest", "上半身");
             if (head != null) headRestRotation = head.localRotation;
-            if (chest != null) chestRestPosition = chest.localPosition;
+            if (chest != null) chestRestRotation = chest.localRotation;
             CacheBlinkShapes();
             ScheduleBlink(Time.unscaledTime);
             Status = $"Presence ready | head:{(head == null ? "no" : "yes")} blink:{blinkShapes.Count}";
@@ -139,6 +139,11 @@ namespace QuestMmdPlayer
         }
         private void ApplyAttention()
         {
+            if ((avatar != null && IsActionTurnBlocked(avatar.CurrentAction)) ||
+                (humanInteraction != null && humanInteraction.HasSemanticContact))
+            {
+                return;
+            }
             if (!attentionEnabled || head == null || Camera.main == null)
             {
                 if (head != null) head.localRotation = Quaternion.Slerp(head.localRotation, headRestRotation, Time.unscaledDeltaTime * attentionSpeed);
@@ -161,15 +166,21 @@ namespace QuestMmdPlayer
 
         private void ApplyBreathing()
         {
-            if (chest == null) return;
+            if (chest == null ||
+                (avatar != null && IsActionTurnBlocked(avatar.CurrentAction)) ||
+                (humanInteraction != null && humanInteraction.HasSemanticContact))
+            {
+                return;
+            }
             if (!breathingEnabled)
             {
-                chest.localPosition = Vector3.Lerp(chest.localPosition, chestRestPosition, Time.unscaledDeltaTime * attentionSpeed);
+                chest.localRotation = Quaternion.Slerp(chest.localRotation, chestRestRotation, Time.unscaledDeltaTime * attentionSpeed);
                 return;
             }
 
             var phase = Time.unscaledTime * breathCyclesPerMinute / 60f * Mathf.PI * 2f;
-            chest.localPosition = chestRestPosition + Vector3.up * (Mathf.Sin(phase) * breathAmplitude);
+            var target = chestRestRotation * Quaternion.Euler(Mathf.Sin(phase) * breathPitchDegrees, 0f, 0f);
+            chest.localRotation = Quaternion.Slerp(chest.localRotation, target, Time.unscaledDeltaTime * attentionSpeed);
         }
 
         private void ApplyBlink()
@@ -234,7 +245,7 @@ namespace QuestMmdPlayer
         private void Restore()
         {
             if (head != null) head.localRotation = headRestRotation;
-            if (chest != null) chest.localPosition = chestRestPosition;
+            if (chest != null) chest.localRotation = chestRestRotation;
             for (var i = 0; i < blinkShapes.Count; i++)
             {
                 var shape = blinkShapes[i];

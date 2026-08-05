@@ -40,7 +40,8 @@ namespace QuestMmdPlayer
         private bool audioEndRequested;
         private int audioSequence;
         private int queuedInputAudioBytes;
-        private const int MaxQueuedInputAudioBytes = 320000;
+        private const int AudioUploadBatchBytes = 16000;
+        private const int MaxQueuedInputAudioBytes = 960000;
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
@@ -416,7 +417,7 @@ namespace QuestMmdPlayer
             {
                 if (outgoingAudioChunks.Count > 0)
                 {
-                    var pcm16 = outgoingAudioChunks.Dequeue();
+                    var pcm16 = DequeueAudioBatch(outgoingAudioChunks, AudioUploadBatchBytes);
                     queuedInputAudioBytes = Mathf.Max(0, queuedInputAudioBytes - pcm16.Length);
                     var chunk = new AudioChunkRequest
                     {
@@ -489,6 +490,41 @@ namespace QuestMmdPlayer
                 }
                 completed?.Invoke(succeeded);
             }
+        }
+
+        public static byte[] DequeueAudioBatch(Queue<byte[]> chunks, int maximumBytes)
+        {
+            if (chunks == null || chunks.Count == 0)
+            {
+                return Array.Empty<byte>();
+            }
+
+            var limit = Mathf.Max(2, maximumBytes) & ~1;
+            var selected = new List<byte[]>();
+            var total = 0;
+            while (chunks.Count > 0)
+            {
+                var next = chunks.Peek();
+                if (selected.Count > 0 && total + next.Length > limit)
+                {
+                    break;
+                }
+                selected.Add(chunks.Dequeue());
+                total += next.Length;
+                if (total >= limit)
+                {
+                    break;
+                }
+            }
+
+            var merged = new byte[total];
+            var offset = 0;
+            foreach (var chunk in selected)
+            {
+                Buffer.BlockCopy(chunk, 0, merged, offset, chunk.Length);
+                offset += chunk.Length;
+            }
+            return merged;
         }
 
         private void CancelAudioUpload()
