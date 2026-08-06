@@ -49,7 +49,7 @@
 
 ## 构建 Quest APK
 
-执行菜单 Quest MMD Player > Build Android APK，产物为 Builds/Banxia.apk。当前构建使用 ARM64、IL2CPP、Vulkan，最低 Android API 29。
+执行菜单 Quest MMD Player > Build Android APK，产物为 Builds/Banxia.apk，Android 包名为 com.lingxi.banxia。当前构建使用 ARM64、IL2CPP、Vulkan，最低 Android API 29。
 
 设备上仍需人工确认：APK 安装、Quest 视野中的模型显示、真实房间 Passthrough、手势/手柄输入、帧率和发热。设备离线或低电量时只运行编辑器和构建检查。
 
@@ -61,11 +61,11 @@
 await loader.LoadFromFileAsync(pmxPath, textureDirectory);
 ~~~
 
-pmxPath 必须是本地可读的 .pmx 文件，textureDirectory 通常就是 PMX 所在目录。PMX 引用的 PNG、JPG、TGA、BMP 等贴图应保留在该目录或其子目录。当前尚未接入 Quest 文件选择器 UI，第一阶段先用这个稳定的运行时 API 验证不同模型。
+pmxPath 必须是本地可读的 .pmx 文件，textureDirectory 通常就是 PMX 所在目录。PMX 引用的 PNG、JPG、TGA、BMP 等贴图应保留在该目录或其子目录。头显内可从中文菜单“动作 -> 导入文件”打开 Android 文件选择器，支持一次选择 PMX 与贴图；应用会把选中文件复制到自身持久化目录后再导入。
 
 ## 导入本地 VMD 动作
 
-把许可明确的 `.vmd` 放入 `Application.persistentDataPath/Motions` 顶层目录，然后在头显中文菜单的“动作”页点击“刷新外部动作”。动作 ID 来自文件名；应用不接受 AstrBot 传入任意路径，也不递归扫描子目录。
+把许可明确的 `.vmd` 放入 `Application.persistentDataPath/Motions` 顶层目录，也可以在头显中文菜单的“动作”页点击“导入文件”，选择单个 VMD 或包含 PMX/VMD 的 ZIP；导入完成后点击“刷新外部动作”。动作 ID 来自文件名；应用不接受 AstrBot 传入任意路径，也不递归扫描子目录。
 
 单文件上限 16 MiB、100000 个关键帧、120 秒。文件会在 UMT 解析分配前校验完整段结构；不合规文件被忽略，内置待机、挥手和鞠躬继续可用。
 

@@ -37,6 +37,7 @@ namespace QuestMmdPlayer
         public BackendPairingController Pairing { get; private set; }
         public VmdActionLibrary VmdActions { get; private set; }
         public QuestQualitySettings Quality { get; private set; }
+        public QuestFileImportService FileImport { get; private set; }
 
         private RuntimeMmdModelLoader runtimeMmdLoader;
         private AvatarController fallbackAvatar;
@@ -84,6 +85,8 @@ namespace QuestMmdPlayer
             runtimeMmdLoader = GetComponent<RuntimeMmdModelLoader>();
             VmdActions = gameObject.GetComponent<VmdActionLibrary>() ?? gameObject.AddComponent<VmdActionLibrary>();
             _ = VmdActions.RefreshAsync();
+            FileImport = gameObject.GetComponent<QuestFileImportService>() ?? gameObject.AddComponent<QuestFileImportService>();
+            FileImport.Initialize(runtimeMmdLoader, VmdActions);
 
             Avatar = FindObjectOfType<AvatarController>();
             if (Avatar == null && runtimeMmdLoader == null && createFallbackAvatar)

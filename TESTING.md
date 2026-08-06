@@ -33,7 +33,7 @@ Quest MMD Player > Render Human Interaction Previews 会生成三种交互的多
 
 ## 3. Quest 3 设备检查
 
-APK 位于 Builds/Banxia.apk。只需在设备上确认以下项目：
+APK 位于 Builds/Banxia.apk，包名为 com.lingxi.banxia。只需在设备上确认以下项目：
 
 1. 通过 Meta Quest Developer Hub 或 adb 安装 APK。
 2. 启动伴夏。
@@ -51,7 +51,7 @@ APK 位于 Builds/Banxia.apk。只需在设备上确认以下项目：
 await loader.LoadFromFileAsync(pmxPath, textureDirectory);
 ~~~
 
-验收标准：模型根节点生成、网格和材质数量大于零、贴图无缺失、骨骼和 MMD 物理组件存在。文件选择器尚未接入；本地 VMD 可放入 `Application.persistentDataPath/Motions` 顶层目录，在中文动作页刷新、选择、播放和停止。AstrBot 不能传入任意本地路径。
+验收标准：模型根节点生成、网格和材质数量大于零、贴图无缺失、骨骼和 MMD 物理组件存在。头显中文菜单“动作 -> 导入文件”可选择 PMX 与贴图、单个 VMD 或 ZIP；本地 VMD 也可放入 `Application.persistentDataPath/Motions` 顶层目录，在中文动作页刷新、选择、播放和停止。AstrBot 不能传入任意本地路径。
 
 ## VMD 动作与真机门禁
 

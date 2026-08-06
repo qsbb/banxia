@@ -1,0 +1,522 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
+namespace QuestMmdPlayer
+{
+    /// <summary>
+    /// Imports PMX/VMD content through the Quest system picker without exposing
+    /// arbitrary filesystem paths to AstrBot. PMX imports may include several
+    /// selected texture files; ZIP packages are extracted with path validation.
+    /// </summary>
+    [DisallowMultipleComponent]
+    public sealed class QuestFileImportService : MonoBehaviour
+    {
+        private const long MaximumExpandedArchiveBytes = 512L * 1024L * 1024L;
+        private const int MaximumArchiveEntries = 2048;
+
+        private RuntimeMmdModelLoader modelLoader;
+        private VmdActionLibrary actionLibrary;
+        private string pendingImportPath = string.Empty;
+
+        public event Action<string> StatusChanged;
+        public bool IsBusy { get; private set; }
+        public string Status { get; private set; } = "文件导入就绪";
+
+        public void Initialize(RuntimeMmdModelLoader nextModelLoader, VmdActionLibrary nextActionLibrary)
+        {
+            modelLoader = nextModelLoader;
+            actionLibrary = nextActionLibrary;
+            SetStatus("文件导入就绪");
+        }
+
+        public bool OpenPicker()
+        {
+            if (IsBusy)
+            {
+                SetStatus("正在处理上一个导入");
+                return false;
+            }
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var picker = new AndroidJavaClass("com.lingxi.banxia.filepicker.BanxiaFilePicker"))
+                {
+                    picker.CallStatic(
+                        "open",
+                        activity,
+                        gameObject.name,
+                        nameof(OnAndroidFileImported));
+                }
+                SetStatus("等待选择文件");
+                return true;
+            }
+            catch (Exception exception)
+            {
+                SetStatus("无法打开文件选择器：" + exception.Message);
+                return false;
+            }
+#elif UNITY_EDITOR
+            var selected = EditorUtility.OpenFilePanelWithFilters(
+                "导入伴夏文件",
+                string.Empty,
+                new[] { "PMX、VMD 或 ZIP", "pmx,vmd,zip" });
+            if (string.IsNullOrWhiteSpace(selected))
+            {
+                SetStatus("已取消文件选择");
+                return false;
+            }
+
+            _ = ImportPathAsync(selected);
+            return true;
+#else
+            SetStatus("当前平台没有文件选择器");
+            return false;
+#endif
+        }
+
+        public void OnAndroidFileImported(string payload)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                SetStatus("文件选择器没有返回结果");
+                return;
+            }
+
+            var separator = payload.IndexOf(':');
+            if (separator <= 0)
+            {
+                SetStatus("文件选择结果无效");
+                return;
+            }
+
+            var state = payload.Substring(0, separator);
+            var encoded = payload.Substring(separator + 1);
+            if (string.Equals(state, "cancel", StringComparison.Ordinal))
+            {
+                SetStatus("已取消文件选择");
+                return;
+            }
+
+            if (!string.Equals(state, "ok", StringComparison.Ordinal))
+            {
+                SetStatus("文件选择失败：" + DecodePayload(encoded));
+                return;
+            }
+
+            var path = DecodePayload(encoded);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                SetStatus("未找到选中的文件");
+                return;
+            }
+
+            _ = ImportPathAsync(path);
+        }
+
+        public static string SanitizeImportedName(string value, string fallback = "Imported")
+        {
+            var source = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+            var invalid = new HashSet<char>(Path.GetInvalidFileNameChars());
+            var builder = new StringBuilder(Math.Min(source.Length, 80));
+            foreach (var character in source)
+            {
+                if (char.IsControl(character) || character == '/' || character == '\\' ||
+                    invalid.Contains(character))
+                {
+                    builder.Append('_');
+                }
+                else
+                {
+                    builder.Append(character);
+                }
+
+                if (builder.Length >= 80)
+                {
+                    break;
+                }
+            }
+
+            var result = builder.ToString().Trim().TrimEnd('.');
+            return string.IsNullOrWhiteSpace(result) || result == "." || result == ".."
+                ? fallback
+                : result;
+        }
+
+        public static bool IsSupportedImportExtension(string extension)
+        {
+            return string.Equals(extension, ".pmx", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(extension, ".vmd", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task ImportPathAsync(string path)
+        {
+            if (IsBusy)
+            {
+                return;
+            }
+
+            IsBusy = true;
+            pendingImportPath = path;
+            string stagingDirectory = string.Empty;
+            var selectionDirectory = IsManagedSelectionDirectory(path) ? path : string.Empty;
+            try
+            {
+                SetStatus("检查导入文件");
+                var sourceRoot = path;
+                var sourceIsDirectory = Directory.Exists(path);
+                if (!sourceIsDirectory && !File.Exists(path))
+                {
+                    throw new FileNotFoundException("导入文件不存在。", path);
+                }
+
+                if (!sourceIsDirectory &&
+                    string.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    stagingDirectory = Path.Combine(
+                        Application.persistentDataPath,
+                        "Imports",
+                        "Zip_" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(stagingDirectory);
+                    ExtractArchiveSafely(path, stagingDirectory);
+                    sourceRoot = stagingDirectory;
+                    sourceIsDirectory = true;
+                }
+
+                var files = sourceIsDirectory
+                    ? Directory.GetFiles(sourceRoot, "*", SearchOption.AllDirectories)
+                    : new[] { path };
+                var pmxFiles = FilesWithExtension(files, ".pmx");
+                var vmdFiles = FilesWithExtension(files, ".vmd");
+
+                if (pmxFiles.Length == 0 && vmdFiles.Length == 0 &&
+                    string.IsNullOrEmpty(stagingDirectory))
+                {
+                    var archives = FilesWithExtension(files, ".zip");
+                    if (archives.Length > 1)
+                    {
+                        throw new InvalidDataException("一次只能导入一个 ZIP 文件。");
+                    }
+
+                    if (archives.Length == 1)
+                    {
+                        stagingDirectory = Path.Combine(
+                            Application.persistentDataPath,
+                            "Imports",
+                            "Zip_" + Guid.NewGuid().ToString("N"));
+                        Directory.CreateDirectory(stagingDirectory);
+                        ExtractArchiveSafely(archives[0], stagingDirectory);
+                        sourceRoot = stagingDirectory;
+                        sourceIsDirectory = true;
+                        files = Directory.GetFiles(sourceRoot, "*", SearchOption.AllDirectories);
+                        pmxFiles = FilesWithExtension(files, ".pmx");
+                        vmdFiles = FilesWithExtension(files, ".vmd");
+                    }
+                }
+
+                if (pmxFiles.Length > 1)
+                {
+                    throw new InvalidDataException("一次只能导入一个 PMX 模型。");
+                }
+
+                if (pmxFiles.Length == 1)
+                {
+                    await ImportPmxAsync(sourceRoot, sourceIsDirectory, pmxFiles[0]);
+                }
+                else if (vmdFiles.Length > 0)
+                {
+                    await ImportVmdAsync(sourceRoot, sourceIsDirectory, vmdFiles);
+                }
+                else
+                {
+                    throw new InvalidDataException("没有找到 PMX 或 VMD 文件。");
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[FileImport] " + exception.Message, this);
+                SetStatus("导入失败：" + exception.Message);
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(stagingDirectory))
+                {
+                    TryDeleteDirectory(stagingDirectory);
+                }
+                if (!string.IsNullOrEmpty(selectionDirectory) &&
+                    !string.Equals(selectionDirectory, stagingDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    TryDeleteDirectory(selectionDirectory);
+                }
+
+                pendingImportPath = string.Empty;
+                IsBusy = false;
+            }
+        }
+
+        private async Task ImportPmxAsync(string sourceRoot, bool sourceIsDirectory, string sourcePmx)
+        {
+            if (modelLoader == null)
+            {
+                throw new InvalidOperationException("模型加载器尚未就绪。");
+            }
+
+            var modelName = SanitizeImportedName(Path.GetFileNameWithoutExtension(sourcePmx), "ImportedModel");
+            var targetRoot = CreateUniqueDirectory(
+                Path.Combine(Application.persistentDataPath, "MmdModels", "Imported"),
+                modelName);
+            string targetPmx;
+            if (sourceIsDirectory)
+            {
+                CopyDirectory(sourceRoot, targetRoot);
+                var relative = GetRelativePath(sourceRoot, sourcePmx);
+                targetPmx = Path.Combine(targetRoot, relative);
+            }
+            else
+            {
+                targetPmx = Path.Combine(targetRoot, Path.GetFileName(sourcePmx));
+                CopyFile(sourcePmx, targetPmx);
+            }
+
+            SetStatus("正在加载角色：" + modelName);
+            await modelLoader.LoadFromFileAsync(targetPmx, targetRoot);
+            SetStatus("角色导入完成：" + modelName);
+        }
+
+        private async Task ImportVmdAsync(string sourceRoot, bool sourceIsDirectory, string[] vmdFiles)
+        {
+            if (actionLibrary == null)
+            {
+                throw new InvalidOperationException("动作库尚未就绪。");
+            }
+
+            Directory.CreateDirectory(actionLibrary.MotionsDirectory);
+            if (vmdFiles.Length == 1)
+            {
+                var actionName = SanitizeImportedName(
+                    Path.GetFileNameWithoutExtension(vmdFiles[0]),
+                    "ImportedMotion");
+                if (!VmdActionFilePolicy.TryResolveActionPath(
+                    actionLibrary.MotionsDirectory,
+                    actionName,
+                    out var destination))
+                {
+                    throw new InvalidDataException("VMD 文件名不安全。");
+                }
+
+                VmdActionFilePolicy.Inspect(vmdFiles[0], actionName);
+                CopyFile(vmdFiles[0], destination);
+                await actionLibrary.RefreshAsync();
+                SetStatus("动作导入完成：" + actionName);
+                return;
+            }
+
+            var motion = vmdFiles.FirstOrDefault(file =>
+                string.Equals(Path.GetFileName(file), "motion.vmd", StringComparison.OrdinalIgnoreCase));
+            motion ??= vmdFiles[0];
+            var facial = vmdFiles.FirstOrDefault(file =>
+                string.Equals(Path.GetFileName(file), "facial.vmd", StringComparison.OrdinalIgnoreCase));
+            var packageName = "Imported_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+            if (!VmdActionFilePolicy.TryResolvePackagePaths(
+                actionLibrary.MotionsDirectory,
+                packageName,
+                out _,
+                out _))
+            {
+                var packageDirectory = Path.Combine(actionLibrary.MotionsDirectory, packageName);
+                Directory.CreateDirectory(packageDirectory);
+            }
+
+            var packageDirectoryPath = Path.Combine(actionLibrary.MotionsDirectory, packageName);
+            Directory.CreateDirectory(packageDirectoryPath);
+            var motionDestination = Path.Combine(packageDirectoryPath, "motion.vmd");
+            VmdActionFilePolicy.Inspect(motion, packageName);
+            CopyFile(motion, motionDestination);
+            if (!string.IsNullOrEmpty(facial))
+            {
+                VmdActionFilePolicy.Inspect(facial, packageName);
+                CopyFile(facial, Path.Combine(packageDirectoryPath, "facial.vmd"));
+            }
+
+            await actionLibrary.RefreshAsync();
+            SetStatus("动作包导入完成：" + packageName);
+        }
+
+        private static string[] FilesWithExtension(IEnumerable<string> files, string extension)
+        {
+            return files
+                .Where(file => string.Equals(
+                    Path.GetExtension(file),
+                    extension,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        }
+
+        private static bool IsManagedSelectionDirectory(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            {
+                return false;
+            }
+
+            var batchRoot = Path.Combine(Application.persistentDataPath, "Imports", "Batches");
+            return IsWithinDirectory(batchRoot, path);
+        }
+
+        private static void ExtractArchiveSafely(string archivePath, string targetDirectory)
+        {
+            long expandedBytes = 0;
+            var entryCount = 0;
+            using (var archive = ZipFile.OpenRead(archivePath))
+            {
+                foreach (var entry in archive.Entries)
+                {
+                    entryCount++;
+                    if (entryCount > MaximumArchiveEntries)
+                    {
+                        throw new InvalidDataException("ZIP 文件条目过多。");
+                    }
+
+                    var destination = Path.GetFullPath(Path.Combine(targetDirectory, entry.FullName));
+                    if (!IsWithinDirectory(targetDirectory, destination))
+                    {
+                        throw new InvalidDataException("ZIP 文件包含越界路径。");
+                    }
+
+                    if (string.IsNullOrEmpty(entry.Name))
+                    {
+                        Directory.CreateDirectory(destination);
+                        continue;
+                    }
+
+                    expandedBytes = checked(expandedBytes + entry.Length);
+                    if (expandedBytes > MaximumExpandedArchiveBytes)
+                    {
+                        throw new InvalidDataException("ZIP 解压内容超过 512 MiB 限制。");
+                    }
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                    using (var input = entry.Open())
+                    using (var output = File.Create(destination))
+                    {
+                        input.CopyTo(output);
+                    }
+                }
+            }
+        }
+
+        private static void CopyDirectory(string sourceDirectory, string targetDirectory)
+        {
+            foreach (var file in Directory.GetFiles(sourceDirectory, "*", SearchOption.AllDirectories))
+            {
+                var relative = GetRelativePath(sourceDirectory, file);
+                var destination = Path.Combine(targetDirectory, relative);
+                if (!IsWithinDirectory(sourceDirectory, file) || !IsWithinDirectory(targetDirectory, destination))
+                {
+                    throw new InvalidDataException("导入目录包含越界路径。");
+                }
+
+                CopyFile(file, destination);
+            }
+        }
+
+        private static void CopyFile(string source, string destination)
+        {
+            var parent = Path.GetDirectoryName(destination);
+            if (string.IsNullOrEmpty(parent))
+            {
+                throw new InvalidDataException("导入目标目录无效。");
+            }
+
+            Directory.CreateDirectory(parent);
+            File.Copy(source, destination, true);
+        }
+
+        private static string CreateUniqueDirectory(string parent, string name)
+        {
+            Directory.CreateDirectory(parent);
+            var candidate = Path.Combine(parent, name);
+            var suffix = 2;
+            while (Directory.Exists(candidate))
+            {
+                candidate = Path.Combine(parent, name + "_" + suffix++);
+            }
+
+            Directory.CreateDirectory(candidate);
+            return candidate;
+        }
+
+        private static string GetRelativePath(string root, string path)
+        {
+            var fullRoot = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                Path.DirectorySeparatorChar;
+            var fullPath = Path.GetFullPath(path);
+            if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("导入文件不在选择目录内。");
+            }
+
+            return fullPath.Substring(fullRoot.Length);
+        }
+
+        private static bool IsWithinDirectory(string root, string path)
+        {
+            var fullRoot = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                Path.DirectorySeparatorChar;
+            var fullPath = Path.GetFullPath(path);
+            return fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string DecodePayload(string value)
+        {
+            try
+            {
+                return Encoding.UTF8.GetString(Convert.FromBase64String(value ?? string.Empty));
+            }
+            catch (FormatException)
+            {
+                return value ?? string.Empty;
+            }
+        }
+
+        private void SetStatus(string value)
+        {
+            Status = value ?? string.Empty;
+            StatusChanged?.Invoke(Status);
+        }
+
+        private static void TryDeleteDirectory(string path)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, true);
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[FileImport] Temporary cleanup failed: " + exception.Message);
+            }
+        }
+
+        private void OnDestroy()
+        {
+            pendingImportPath = string.Empty;
+        }
+    }
+}

@@ -70,7 +70,15 @@ namespace QuestMmdPlayer
 
         public void Initialize(QuestMmdPlayerBootstrap bootstrap)
         {
+            if (owner?.FileImport != null)
+            {
+                owner.FileImport.StatusChanged -= HandleFileImportStatusChanged;
+            }
             owner = bootstrap;
+            if (owner?.FileImport != null)
+            {
+                owner.FileImport.StatusChanged += HandleFileImportStatusChanged;
+            }
             if (menuRoot == null)
             {
                 BuildMenu();
@@ -314,9 +322,32 @@ namespace QuestMmdPlayer
             CreateButton("上一个", 0f, -6f, 204f, 62f, () => SelectExternalAction(-1), actionLayer.transform);
             CreateButton("下一个", 224f, -6f, 204f, 62f, () => SelectExternalAction(1), actionLayer.transform);
             externalActionText = CreateText("外部动作 0 个", actionLayer.transform, new Vector2(0f, -67f), new Vector2(650f, 38f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
-            CreateButton("播放选中", -112f, -132f, 204f, 62f, PlaySelectedExternalAction, actionLayer.transform);
-            CreateButton("返回主菜单", 112f, -132f, 204f, 62f, ShowMainPanel, actionLayer.transform);
+            CreateButton("导入文件", -224f, -132f, 204f, 62f, ImportFile, actionLayer.transform);
+            CreateButton("播放选中", 0f, -132f, 204f, 62f, PlaySelectedExternalAction, actionLayer.transform);
+            CreateButton("返回主菜单", 224f, -132f, 204f, 62f, ShowMainPanel, actionLayer.transform);
             actionLayer.SetActive(false);
+        }
+
+        private void ImportFile()
+        {
+            var importer = owner?.FileImport;
+            if (importer == null)
+            {
+                SetTransientStatus("文件导入不可用", 3f);
+                return;
+            }
+
+            importer.OpenPicker();
+            HandleFileImportStatusChanged(importer.Status);
+        }
+
+        private void HandleFileImportStatusChanged(string message)
+        {
+            if (externalActionText != null && actionLayer != null && actionLayer.activeSelf)
+            {
+                externalActionText.text = message;
+            }
+            Status = message ?? string.Empty;
         }
 
         private void BuildAppearancePanel()
@@ -1131,6 +1162,10 @@ namespace QuestMmdPlayer
 
         private void OnDestroy()
         {
+            if (owner?.FileImport != null)
+            {
+                owner.FileImport.StatusChanged -= HandleFileImportStatusChanged;
+            }
             if (pendingAvatarAction != null)
             {
                 StopCoroutine(pendingAvatarAction);

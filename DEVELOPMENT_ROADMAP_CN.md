@@ -30,8 +30,8 @@
 
 - AstrBot HTTP/SSE、Quest 麦克风 PCM16、流式 TTS、打断和 `avatar.intent` 已接入；真实文本闭环仍需管理员先选择 Chat Completion Provider。
 - 语义接触、自然待机、面对面放置、身高定位和本地 VMD 动作导入已实现；连续 Two Bone IK、动作混合和更细的注视仍在后续阶段。
-- Meta Passthrough provider 已配置；房间遮挡、空间锚点、彩透画面和性能仍需 Quest 真机验收。
-- Quest 文件选择器、模型兼容性扫描和 VRM provider 仍是后续工作。
+- Meta Passthrough provider 已配置；房间遮挡、空间锚点、彩透画面和性能仍需 Quest 真机验收。Quest 文件选择器初版已接入，支持 PMX、VMD 和 ZIP 导入。
+- 模型兼容性扫描、导入预览、VRM provider 和更细的资源管理仍是后续工作。
 ## 3. 总体技术架构
 
 ```text
@@ -299,7 +299,7 @@ Meta NorthStar 为固定台词预烘焙嘴型，适合 Timeline；AstrBot 的回
 当前待完成：
 
 1. Quest 重新在线且电量足够后，进行一次受控实机验收：手追菜单、控制器菜单键、描边、彩色 Passthrough、高度重置、面对面放置、持续注视/转身、后端配对、麦克风 PCM16、流式 TTS、打断、动作抽动/穿模和三档画质。结束时只 force-stop 应用，不关闭或重启头显。
-2. 增加 Quest 文件选择器/导入器，让用户可以把本地 PMX、VMD 和动作包复制到持久化目录，而不是依赖 ADB 手工放置。
+2. 在真机验收 Quest 文件选择器：从菜单导入 PMX+贴图、VMD 和 ZIP，并验证导入失败时的清理与错误提示。
 3. 在真机记录 72 Hz 下的 CPU/GPU 帧时、内存和追踪丢失情况，再调整描边壳层和动作采样预算。
 4. 继续完善自然待机和动作混合：将头部注视、呼吸、手臂 IK 与 VMD 局部轨道按优先级混合，避免整身动作期间出现僵硬。
 5. 完成真实后端模型已选择、关系候选已绑定时的 Quest 对话回归；未绑定时继续保持本地物理交互降级。
@@ -308,7 +308,7 @@ Meta NorthStar 为固定台词预烘焙嘴型，适合 Timeline；AstrBot 的回
 真机前置：
 
 - 设备离线或充电不足时不安装、不启动、不截图、不重启；只在 adb devices -l 确认在线后测试。
-- 测试完成执行 adb shell am force-stop com.qsbb.banxia，不执行关机、重启或 USB 断开命令。
+- 测试完成执行 adb shell am force-stop com.lingxi.banxia，不执行关机、重启或 USB 断开命令。
 ## 10. 2026-08-05 Quest 3 实机首轮记录
 
 - 最新 APK 已安装成功，应用冷启动成功，前台 Unity Activity 正常运行。
@@ -330,7 +330,7 @@ Meta NorthStar 为固定台词预烘焙嘴型，适合 Timeline；AstrBot 的回
 - 呼吸不再平移胸骨或上下移动整个模型，改为 0.28 度胸部旋转，脚保持落地。
 - 新增 Quest Space Setup 房间语义读取和“扫描房间”，统计地面、座位、桌子、墙、门、窗；地面放置排除 Table 与 Seat。
 - “高度定位”改名为“站立校准”，明确其测量前提；高度仍由头显眼高、真实 Floor 和 0.11 m 眼顶估算得到。
-- APK 输出名改为 Builds/Banxia.apk，应用标签为“伴夏”。Android ID 已切换为 com.qsbb.banxia；这是全新应用身份，首次启动需要重新绑定。
+- APK 输出名改为 Builds/Banxia.apk，应用标签为“伴夏”。Android ID 已切换为 com.lingxi.banxia；这是全新应用身份，首次启动需要重新绑定。
 - 严格静态门禁通过，Unity EditMode 83/83 通过，Android/IL2CPP 构建成功并通过 APK v2 签名校验。
 
 下一阶段按以下顺序进行：

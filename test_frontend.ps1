@@ -42,6 +42,10 @@ $requiredFiles = @(
     "Assets/Scripts/MMD/VmdActionLibrary.cs",
     "Assets/Scripts/MR/PassthroughFacade.cs",
     "Assets/Scripts/MR/RoomUnderstandingService.cs",
+    "Assets/Scripts/MR/QuestFileImportService.cs",
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/AndroidManifest.xml",
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/com/lingxi/banxia/filepicker/BanxiaFilePicker.java",
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/com/lingxi/banxia/filepicker/BanxiaFilePickerActivity.java",
     "Assets/Scripts/Backend/AstrBotBridge.cs",
     "Assets/Scripts/Backend/BackendPairingController.cs",
     "Assets/Scripts/Backend/BackendPairingProtocol.cs",
@@ -70,6 +74,7 @@ $requiredFiles = @(
     "Assets/Tests/Editor/BackendPairingTests.cs",
     "Assets/Tests/Editor/VmdActionLibraryTests.cs",
     "Assets/Tests/Editor/RoomUnderstandingServiceTests.cs",
+    "Assets/Tests/Editor/QuestFileImportServiceTests.cs",
     "README.md",
     "TESTING.md",
     "QUICK_TEST.md",
@@ -150,18 +155,21 @@ $sourceChecks = @{
     "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("LoadFromFileAsync", "PMXImporter.BuildUnityObjectsAsync", "streamingAssetsPath", "textureBaseDirectory", "PreserveOriginalNames")
     "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VmdActionFilePolicy", "SearchOption.TopDirectoryOnly", "VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "DefaultExecutionOrder(11000)", "bakePhysicsToFK = true", "BeginPhysicsArbitration", "StopAndReturnToIdle")
     "Assets/Scripts/Core/QuestQualitySettings.cs" = @("XRSettings.eyeTextureResolutionScale", "XRSettings.renderViewportScale", "QuestQualityPreset.Clear", "UniversalRenderPipelineAsset", "PlayerPrefs.Save")
-    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = `"伴夏`"", "PlayerSettings.SetApplicationIdentifier", "com.qsbb.banxia", "Builds/Banxia.apk")
-    "Assets/Editor/QuestPrivateLanManifestPostprocessor.cs" = @("usesCleartextTraffic", "horizonos.permission.HAND_TRACKING", "EnsurePermission")
+    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = `"伴夏`"", "PlayerSettings.SetApplicationIdentifier", "com.lingxi.banxia", "Builds/Banxia.apk")
+    "Assets/Editor/QuestPrivateLanManifestPostprocessor.cs" = @("usesCleartextTraffic", "horizonos.permission.HAND_TRACKING", "EnsurePermission", "ConfigureFilePickerModule", "buildConfig = false")
     "Assets/Editor/QuestMmdPlayerRuntimeSmokeTest.cs" = @("PMXImporter.Import", "applyRenames = false", "Runtime PMX Smoke Test")
     "Assets/Editor/QuestMmdPlayerMenu.cs" = @("RuntimeMmdModelLoader", "bundled PMX sample")
     "Assets/Scripts/Backend/AstrBotBridge.cs" = @("TryIngestCommandJson", "JsonUtility.FromJson", "CommandReceived", "ReloadConfiguration", "ConfiguredBaseUrl")
     "Assets/Scripts/Backend/BackendPairingProtocol.cs" = @("TryBuildExchangeEndpoint", "TryParseQrPayload", "TryWriteSettingsAtomically", "File.Replace", "https")
     "Assets/Scripts/Backend/BackendPairingController.cs" = @("IPairingCodeScanner", "PairWithCode", "PairWithQrPayload", "PairingServerEndpoint", "ReloadConfiguration")
-    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("PAIR BACKEND", "SCAN QR", "SET HTTPS SERVER", "TouchScreenKeyboard", "RefreshExternalActions", "PlaySelectedExternalAction", "RoomUnderstanding")
+    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("PAIR BACKEND", "SCAN QR", "SET HTTPS SERVER", "TouchScreenKeyboard", "RefreshExternalActions", "PlaySelectedExternalAction", "ImportFile", "导入文件", "RoomUnderstanding")
     "Assets/Scripts/MR/PassthroughFacade.cs" = @("IPassthroughProvider", "EditorPassthroughProvider", "StateChanged")
+    "Assets/Scripts/MR/QuestFileImportService.cs" = @("OpenPicker", "OnAndroidFileImported", "ExtractArchiveSafely", "MaximumExpandedArchiveBytes", "RuntimeMmdModelLoader", "VmdActionFilePolicy")
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/com/lingxi/banxia/filepicker/BanxiaFilePicker.java" = @("Intent", "BanxiaFilePickerActivity.class", "startActivity")
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/com/lingxi/banxia/filepicker/BanxiaFilePickerActivity.java" = @("Intent.ACTION_OPEN_DOCUMENT", "Intent.EXTRA_ALLOW_MULTIPLE", "copyUris", "replaceAll", "Imports/Batches")
     "Assets/Scripts/Core/AvatarController.cs" = @("Move", "Rotate", "Scale", "PlayAction", "TogglePlayback", "CaptureActionPose", "rightUpperArm", "ApplyWave", "ApplyBow")
     "Assets/Scripts/Core/AvatarTouchInteraction.cs" = @("InputDevices.GetDeviceAtXRNode", "TouchStateChanged", "ApplyDualGrab", "primaryButton", "triggerButton", "XRHandJointID.IndexTip", "SetSemanticInteractionLock")
-    "Assets/Scripts/Core/QuestMmdPlayerBootstrap.cs" = @("AvatarTouchInteraction", "AvatarHumanInteraction", "ConversationController", "QuestMicrophoneInput", "RoomUnderstandingService", "BindInteractions", "handshake", "head_pat", "cheek_pinch")
+    "Assets/Scripts/Core/QuestMmdPlayerBootstrap.cs" = @("AvatarTouchInteraction", "AvatarHumanInteraction", "ConversationController", "QuestMicrophoneInput", "RoomUnderstandingService", "QuestFileImportService", "FileImport.Initialize", "BindInteractions", "handshake", "head_pat", "cheek_pinch")
     "Assets/Scripts/Core/AvatarHumanInteraction.cs" = @("XRHandSubsystem", "XRHandJointID.Palm", "HumanInteractionKind.Handshake", "HumanInteractionKind.HeadPat", "HumanInteractionKind.CheekPinch", "SimulateInteraction", "SetLocalReactionsEnabled", "PlayReaction", "SetSemanticInteractionLock")
     "Assets/Tests/Editor/AvatarCommandTests.cs" = @("JsonCommandIsAcceptedByBridge", "InvalidJsonIsRejected")
     "Assets/Tests/Editor/AvatarHumanInteractionTests.cs" = @("BindFindsMmdBonesAndSimulationChangesState", "HumanInteractionKind.Handshake", "HumanInteractionKind.HeadPat", "HumanInteractionKind.CheekPinch")
@@ -178,6 +186,7 @@ $sourceChecks = @{
     "Assets/Tests/Editor/Pcm16CaptureUtilityTests.cs" = @("FloatSamplesEncodeAsLittleEndianPcm16", "EightyMillisecondsAtFortyEightKhzBecomesValidSixteenKhzChunk")
     "Assets/Tests/Editor/VoiceConversationControllerTests.cs" = @("VoiceTurnUsesOneTurnIdAndForwardsPcmBeforeEnd", "DisconnectedTransportCannotStartVoiceTurn")
     "Assets/Tests/Editor/BackendDrivenInteractionTests.cs" = @("SensorEventAndBackendReactionAreSeparate", "SetLocalReactionsEnabled", "PlayReaction")
+    "Assets/Tests/Editor/QuestFileImportServiceTests.cs" = @("SupportedExtensionsAreRestrictedToModelAndMotionFormats", "ImportedNamesAreBoundedAndCannotEscapeDirectory", "SanitizeImportedName")
 }
 
 foreach ($entry in $sourceChecks.GetEnumerator()) {

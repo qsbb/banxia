@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System.IO;
+using System.Text;
 using System.Xml;
 using UnityEditor.Android;
 using UnityEngine;
@@ -32,9 +33,59 @@ namespace QuestMmdPlayer.Editor
             application.SetAttribute("usesCleartextTraffic", AndroidNamespace, "true");
             EnsurePermission(document, "horizonos.permission.HAND_TRACKING");
             document.Save(manifestPath);
+            ConfigureFilePickerModule(path);
             Debug.Log("[QuestBuild] Enabled private-LAN HTTP and Horizon OS hand tracking permission.");
         }
 
+        private static void ConfigureFilePickerModule(string unityLibraryPath)
+        {
+            var gradlePath = Path.Combine(
+                unityLibraryPath,
+                "BanxiaFilePicker.androidlib",
+                "build.gradle");
+            if (!File.Exists(gradlePath))
+            {
+                throw new FileNotFoundException(
+                    "Generated Banxia file picker Gradle module was not found.",
+                    gradlePath);
+            }
+
+            var source = File.ReadAllText(gradlePath);
+            const string applicationNamespace = "namespace \"com.lingxi.banxia\"";
+            const string libraryNamespace = "namespace \"com.lingxi.banxia.filepicker\"";
+            if (source.Contains(applicationNamespace))
+            {
+                source = source.Replace(applicationNamespace, libraryNamespace);
+            }
+            else if (!source.Contains(libraryNamespace))
+            {
+                throw new InvalidDataException("Unexpected Banxia file picker Gradle namespace.");
+            }
+
+            const string buildConfigSetting = "buildConfig = false";
+            if (!source.Contains(buildConfigSetting))
+            {
+                const string androidBlock = "android {";
+                var first = source.IndexOf(androidBlock, System.StringComparison.Ordinal);
+                var second = first < 0
+                    ? -1
+                    : source.IndexOf(
+                        androidBlock,
+                        first + androidBlock.Length,
+                        System.StringComparison.Ordinal);
+                if (first < 0 || second >= 0)
+                {
+                    throw new InvalidDataException("Unexpected Banxia file picker Gradle structure.");
+                }
+
+                var insertion = androidBlock + System.Environment.NewLine +
+                    "    buildFeatures { buildConfig = false }";
+                source = source.Substring(0, first) +
+                    source.Substring(first).Replace(androidBlock, insertion);
+            }
+
+            File.WriteAllText(gradlePath, source, new UTF8Encoding(false));
+        }
         private static void EnsurePermission(XmlDocument document, string permissionName)
         {
             var manifest = document.DocumentElement;
