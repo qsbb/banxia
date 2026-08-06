@@ -15,14 +15,14 @@
 设备重新连接后，覆盖安装 APK，再显式授予麦克风权限：
 
 ```powershell
-adb -s 2G0YC5ZHBF00R0 install -r -d Builds\QuestMmdPlayer.apk
-adb -s 2G0YC5ZHBF00R0 shell pm grant com.QuestMMDPlayer.QuestMMDPlayerPrototype android.permission.RECORD_AUDIO
+adb -s 2G0YC5ZHBF00R0 install -r -d Builds\Banxia.apk
+adb -s 2G0YC5ZHBF00R0 shell pm grant com.qsbb.banxia android.permission.RECORD_AUDIO
 ```
 
 应用内不会包含 AstrBot 密钥。配置仍放在：
 
 ```text
-/sdcard/Android/data/com.QuestMMDPlayer.QuestMMDPlayerPrototype/files/quest_avatar_bridge.json
+/sdcard/Android/data/com.qsbb.banxia/files/quest_avatar_bridge.json
 ```
 
 Quest Android 构建要求后端使用 HTTPS。

@@ -21,7 +21,7 @@ namespace QuestMmdPlayer.Editor
     {
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
         private const string OutputPath = "Builds/Banxia.apk";
-        private const string AndroidApplicationIdentifier = "com.QuestMMDPlayer.QuestMMDPlayerPrototype";
+        private const string AndroidApplicationIdentifier = "com.qsbb.banxia";
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
         private static readonly string[] RuntimeShaderNames =

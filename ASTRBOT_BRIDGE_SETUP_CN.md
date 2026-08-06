@@ -4,10 +4,10 @@ Unity 客户端实现 Quest Avatar Bridge 协议 `1.0`，使用 HTTP POST 上行
 
 ## 配置位置
 
-Quest 包名为 `com.QuestMMDPlayer.QuestMMDPlayerPrototype`。配置文件路径：
+Quest 包名为 `com.qsbb.banxia`。配置文件路径：
 
 ```text
-/sdcard/Android/data/com.QuestMMDPlayer.QuestMMDPlayerPrototype/files/quest_avatar_bridge.json
+/sdcard/Android/data/com.qsbb.banxia/files/quest_avatar_bridge.json
 ```
 
 模板位于 `Builds/quest_avatar_bridge.example.json`。完整 `base_url` 必须包含插件路径：
@@ -19,7 +19,7 @@ https://<astrbot-host>/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bri
 通过 ADB 安装配置：
 
 ```powershell
-adb -s 2G0YC5ZHBF00R0 push quest_avatar_bridge.json /sdcard/Android/data/com.QuestMMDPlayer.QuestMMDPlayerPrototype/files/quest_avatar_bridge.json
+adb -s 2G0YC5ZHBF00R0 push quest_avatar_bridge.json /sdcard/Android/data/com.qsbb.banxia/files/quest_avatar_bridge.json
 ```
 
 重启应用后，`AstrBotBridge` 会执行 `health -> session/start -> events/<session_id>`。SSE 断开时复用现有会话重连；服务端返回 `404` 时创建新会话。

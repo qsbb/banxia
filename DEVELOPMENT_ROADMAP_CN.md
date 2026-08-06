@@ -308,7 +308,7 @@ Meta NorthStar 为固定台词预烘焙嘴型，适合 Timeline；AstrBot 的回
 真机前置：
 
 - 设备离线或充电不足时不安装、不启动、不截图、不重启；只在 adb devices -l 确认在线后测试。
-- 测试完成执行 adb shell am force-stop com.QuestMMDPlayer.QuestMMDPlayerPrototype，不执行关机、重启或 USB 断开命令。
+- 测试完成执行 adb shell am force-stop com.qsbb.banxia，不执行关机、重启或 USB 断开命令。
 ## 10. 2026-08-05 Quest 3 实机首轮记录
 
 - 最新 APK 已安装成功，应用冷启动成功，前台 Unity Activity 正常运行。
@@ -330,7 +330,7 @@ Meta NorthStar 为固定台词预烘焙嘴型，适合 Timeline；AstrBot 的回
 - 呼吸不再平移胸骨或上下移动整个模型，改为 0.28 度胸部旋转，脚保持落地。
 - 新增 Quest Space Setup 房间语义读取和“扫描房间”，统计地面、座位、桌子、墙、门、窗；地面放置排除 Table 与 Seat。
 - “高度定位”改名为“站立校准”，明确其测量前提；高度仍由头显眼高、真实 Floor 和 0.11 m 眼顶估算得到。
-- APK 输出名改为 Builds/Banxia.apk，应用标签为“伴夏”。Android ID 是否从旧原型 ID 切换为 com.qsbb.banxia，等待用户明确接受新应用身份与重新绑定。
+- APK 输出名改为 Builds/Banxia.apk，应用标签为“伴夏”。Android ID 已切换为 com.qsbb.banxia；这是全新应用身份，首次启动需要重新绑定。
 - 严格静态门禁通过，Unity EditMode 83/83 通过，Android/IL2CPP 构建成功并通过 APK v2 签名校验。
 
 下一阶段按以下顺序进行：

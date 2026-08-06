@@ -11,7 +11,7 @@ powershell -ExecutionPolicy Bypass -File .\test_frontend.ps1 -Strict
 1. 打开 Unity 项目 quest_mmd_player。
 2. 执行 Quest MMD Player > Run Runtime PMX Smoke Test。
 3. Console 出现 [Runtime PMX Smoke Test] PASS 即表示 PMX、贴图、骨骼和刚体已经在电脑上真实构建过。
-4. 执行 Quest MMD Player > Build Android APK 生成 Builds/QuestMmdPlayer.apk。
+4. 执行 Quest MMD Player > Build Android APK 生成 Builds/Banxia.apk。
 
 只有下面几项必须戴 Quest 3 才能确认：
 
