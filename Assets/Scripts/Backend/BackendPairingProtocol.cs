@@ -111,6 +111,25 @@ namespace QuestMmdPlayer
             return true;
         }
 
+        public static string GetServerEntry(string endpoint)
+        {
+            if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ||
+                string.IsNullOrEmpty(uri.Host))
+            {
+                return endpoint ?? string.Empty;
+            }
+
+            var host = uri.HostNameType == UriHostNameType.IPv6
+                ? "[" + uri.Host + "]"
+                : uri.Host;
+            var authority = uri.IsDefaultPort ? host : host + ":" + uri.Port;
+            if (uri.Scheme == Uri.UriSchemeHttps && AstrBotProtocol.IsPrivateNetworkHost(uri.Host))
+            {
+                return Uri.UriSchemeHttps + "://" + authority;
+            }
+
+            return authority;
+        }
         public static bool TryParseQrPayload(
             string json,
             out string exchangeEndpoint,

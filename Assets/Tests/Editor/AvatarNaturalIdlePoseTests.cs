@@ -40,6 +40,33 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void FormalIdleKeepsBothForearmsOutsideTheTorso()
+        {
+            avatarObject = new GameObject("DirectionalIdleAvatar");
+            var leftUpper = CreateBone("LeftUpper", "\u5de6\u8155", avatarObject.transform, new Vector3(-.16f, 1.4f, 0f));
+            var leftLower = CreateBone("LeftLower", "\u5de6\u3072\u3058", leftUpper, new Vector3(-.28f, 0f, 0f));
+            var leftHand = CreateBone("LeftHand", "\u5de6\u624b\u9996", leftLower, new Vector3(-.25f, 0f, 0f));
+            var rightUpper = CreateBone("RightUpper", "\u53f3\u8155", avatarObject.transform, new Vector3(.16f, 1.4f, 0f));
+            var rightLower = CreateBone("RightLower", "\u53f3\u3072\u3058", rightUpper, new Vector3(.28f, 0f, 0f));
+            var rightHand = CreateBone("RightHand", "\u53f3\u624b\u9996", rightLower, new Vector3(.25f, 0f, 0f));
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+
+            serviceObject = new GameObject("DirectionalIdleService");
+            var idlePose = serviceObject.AddComponent<AvatarNaturalIdlePose>();
+            idlePose.SetPreset(AvatarIdlePreset.Formal);
+            idlePose.Bind(controller);
+
+            var leftForearm = (leftHand.position - leftLower.position).normalized;
+            var rightForearm = (rightHand.position - rightLower.position).normalized;
+            Assert.That(leftForearm.x, Is.LessThan(0f));
+            Assert.That(rightForearm.x, Is.GreaterThan(0f));
+            Assert.That(leftForearm.y, Is.LessThan(-.95f));
+            Assert.That(rightForearm.y, Is.LessThan(-.95f));
+            Assert.That(leftHand.position.x, Is.LessThan(leftLower.position.x));
+            Assert.That(rightHand.position.x, Is.GreaterThan(rightLower.position.x));
+        }
+        [Test]
         public void TouchDistanceUsesNearestAvatarSurface()
         {
             var bounds = new Bounds(Vector3.zero, Vector3.one * 2f);
@@ -72,6 +99,7 @@ namespace QuestMmdPlayer.Tests
             Assert.That(Quaternion.Angle(armRotation, upper.localRotation), Is.GreaterThan(20f));
 
             controller.PlayAction("idle");
+            EvaluateAction(controller, 1f);
             Assert.That(Quaternion.Angle(armRotation, upper.localRotation), Is.LessThan(.01f));
         }
 
@@ -123,9 +151,23 @@ namespace QuestMmdPlayer.Tests
         {
             var type = typeof(AvatarController);
             type.GetField("actionClock", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(controller, clock);
+            type.GetField("actionTransitionClock", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(controller, clock);
             type.GetMethod("LateUpdate", BindingFlags.Instance | BindingFlags.NonPublic)?.Invoke(controller, null);
         }
 
+        private Transform CreateBone(
+            string objectName,
+            string mmdName,
+            Transform parent,
+            Vector3 localPosition)
+        {
+            var boneObject = new GameObject(objectName);
+            boneObject.transform.SetParent(parent, false);
+            boneObject.transform.localPosition = localPosition;
+            var bone = boneObject.AddComponent<MMDBoneTransform>();
+            bone.boneName = mmdName;
+            return boneObject.transform;
+        }
         private Transform CreateBone(string objectName, string mmdName)
         {
             var boneObject = new GameObject(objectName);

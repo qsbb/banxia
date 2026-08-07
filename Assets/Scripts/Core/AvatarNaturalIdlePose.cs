@@ -4,6 +4,13 @@ using UnityEngine;
 
 namespace QuestMmdPlayer
 {
+    public enum AvatarIdlePreset
+    {
+        Relaxed = 0,
+        Casual = 1,
+        Formal = 2
+    }
+
     /// <summary>
     /// Gives a runtime-loaded MMD avatar a calm standing pose before the human
     /// interaction system captures its reaction baseline. MMD imports often
@@ -17,6 +24,9 @@ namespace QuestMmdPlayer
         [SerializeField, Range(0f, 55f)] private float armDropDegrees = 32f;
         [SerializeField, Range(0f, 25f)] private float elbowBendDegrees = 10f;
         [SerializeField, Range(0f, 15f)] private float handRelaxDegrees = 5f;
+        [SerializeField] private AvatarIdlePreset preset = AvatarIdlePreset.Formal;
+        [SerializeField, Range(1f, 20f)] private float poseBlendSpeed = 8f;
+        private const string PresetPreferenceKey = "banxia.avatar.idle_preset_v2";
 
         private AvatarController avatar;
         private Transform leftUpper;
@@ -31,10 +41,55 @@ namespace QuestMmdPlayer
         private Quaternion rightUpperBase;
         private Quaternion rightLowerBase;
         private Quaternion rightHandBase;
+        private Quaternion leftUpperRelaxed;
+        private Quaternion leftLowerRelaxed;
+        private Quaternion rightUpperRelaxed;
+        private Quaternion rightLowerRelaxed;
+        private bool hasLeftDirectionalPose;
+        private bool hasRightDirectionalPose;
 
 
         public AvatarController Avatar => avatar;
         public bool IsBound => avatar != null;
+        public AvatarIdlePreset Preset => preset;
+        public string PresetDisplayName => GetPresetDisplayName(preset);
+
+        private void Awake()
+        {
+            preset = (AvatarIdlePreset)Mathf.Clamp(
+                PlayerPrefs.GetInt(PresetPreferenceKey, (int)AvatarIdlePreset.Formal),
+                (int)AvatarIdlePreset.Relaxed,
+                (int)AvatarIdlePreset.Formal);
+        }
+
+        public void SetPreset(AvatarIdlePreset next)
+        {
+            preset = next;
+            PlayerPrefs.SetInt(PresetPreferenceKey, (int)preset);
+            PlayerPrefs.Save();
+            if (avatar != null)
+            {
+                BuildDirectionalRelaxedPose();
+            }
+        }
+
+        public void CyclePreset(int direction = 1)
+        {
+            var count = 3;
+            var next = ((int)preset + direction) % count;
+            if (next < 0) next += count;
+            SetPreset((AvatarIdlePreset)next);
+        }
+
+        private static string GetPresetDisplayName(AvatarIdlePreset value)
+        {
+            switch (value)
+            {
+                case AvatarIdlePreset.Casual: return "随意站姿";
+                case AvatarIdlePreset.Formal: return "稳重站姿";
+                default: return "自然放松";
+            }
+        }
 
         public void Bind(AvatarController target)
         {
@@ -59,7 +114,8 @@ namespace QuestMmdPlayer
             rightHand = Find(all, "righthand", "hand_r", "右手首");
 
             CaptureBases();
-            ApplyRelaxedArms();
+            BuildDirectionalRelaxedPose();
+            ApplyRelaxedArms(true);
             Debug.Log($"[IdlePose] Bound natural stance; arms={(leftUpper != null ? 1 : 0) + (rightUpper != null ? 1 : 0)}/2, hands={(leftHand != null ? 1 : 0) + (rightHand != null ? 1 : 0)}/2.", this);
         }
 
@@ -88,19 +144,176 @@ namespace QuestMmdPlayer
             rightHandBase = rightHand == null ? Quaternion.identity : rightHand.localRotation;
         }
 
-        private void ApplyRelaxedArms()
+        private void ApplyRelaxedArms(bool immediate = false)
         {
-            if (leftUpper != null) leftUpper.localRotation = leftUpperBase * Quaternion.Euler(0f, 0f, armDropDegrees);
-            if (leftLower != null) leftLower.localRotation = leftLowerBase * Quaternion.Euler(0f, 0f, elbowBendDegrees);
-            if (leftHand != null) leftHand.localRotation = leftHandBase * Quaternion.Euler(0f, 0f, handRelaxDegrees);
-            if (rightUpper != null) rightUpper.localRotation = rightUpperBase * Quaternion.Euler(0f, 0f, -armDropDegrees);
-            if (rightLower != null) rightLower.localRotation = rightLowerBase * Quaternion.Euler(0f, 0f, -elbowBendDegrees);
-            if (rightHand != null) rightHand.localRotation = rightHandBase * Quaternion.Euler(0f, 0f, -handRelaxDegrees);
+            var blend = immediate
+                ? 1f
+                : 1f - Mathf.Exp(-Mathf.Max(1f, poseBlendSpeed) * Time.unscaledDeltaTime);
+            var leftUpperTarget = hasLeftDirectionalPose
+                ? leftUpperRelaxed
+                : leftUpperBase * Quaternion.Euler(0f, 0f, armDropDegrees);
+            var leftLowerTarget = hasLeftDirectionalPose
+                ? leftLowerRelaxed
+                : leftLowerBase * Quaternion.Euler(0f, 0f, elbowBendDegrees);
+            var rightUpperTarget = hasRightDirectionalPose
+                ? rightUpperRelaxed
+                : rightUpperBase * Quaternion.Euler(0f, 0f, -armDropDegrees);
+            var rightLowerTarget = hasRightDirectionalPose
+                ? rightLowerRelaxed
+                : rightLowerBase * Quaternion.Euler(0f, 0f, -elbowBendDegrees);
+
+            if (leftUpper != null) leftUpper.localRotation = Quaternion.Slerp(leftUpper.localRotation, leftUpperTarget, blend);
+            if (leftLower != null) leftLower.localRotation = Quaternion.Slerp(leftLower.localRotation, leftLowerTarget, blend);
+            if (leftHand != null) leftHand.localRotation = Quaternion.Slerp(
+                leftHand.localRotation,
+                leftHandBase * Quaternion.Euler(0f, 0f, handRelaxDegrees),
+                blend);
+            if (rightUpper != null) rightUpper.localRotation = Quaternion.Slerp(rightUpper.localRotation, rightUpperTarget, blend);
+            if (rightLower != null) rightLower.localRotation = Quaternion.Slerp(rightLower.localRotation, rightLowerTarget, blend);
+            if (rightHand != null) rightHand.localRotation = Quaternion.Slerp(
+                rightHand.localRotation,
+                rightHandBase * Quaternion.Euler(0f, 0f, -handRelaxDegrees),
+                blend);
+        }
+
+        private void BuildDirectionalRelaxedPose()
+        {
+            hasLeftDirectionalPose = leftUpper != null && leftLower != null && leftHand != null;
+            hasRightDirectionalPose = rightUpper != null && rightLower != null && rightHand != null;
+            if (hasLeftDirectionalPose)
+            {
+                BuildArmPose(
+                    leftUpper,
+                    leftLower,
+                    leftHand,
+                    avatar.transform.TransformDirection(GetLeftUpperDirection()),
+                    avatar.transform.TransformDirection(GetLeftLowerDirection()),
+                    leftUpperBase,
+                    leftLowerBase,
+                    out leftUpperRelaxed,
+                    out leftLowerRelaxed);
+            }
+            if (hasRightDirectionalPose)
+            {
+                BuildArmPose(
+                    rightUpper,
+                    rightLower,
+                    rightHand,
+                    avatar.transform.TransformDirection(GetRightUpperDirection()),
+                    avatar.transform.TransformDirection(GetRightLowerDirection()),
+                    rightUpperBase,
+                    rightLowerBase,
+                    out rightUpperRelaxed,
+                    out rightLowerRelaxed);
+            }
+        }
+
+        private static void BuildArmPose(
+            Transform upper,
+            Transform lower,
+            Transform hand,
+            Vector3 desiredUpperDirection,
+            Vector3 desiredLowerDirection,
+            Quaternion upperBase,
+            Quaternion lowerBase,
+            out Quaternion upperTarget,
+            out Quaternion lowerTarget)
+        {
+            var originalUpper = upper.localRotation;
+            var originalLower = lower.localRotation;
+            try
+            {
+                upper.localRotation = upperBase;
+                lower.localRotation = lowerBase;
+                upperTarget = CalculateAlignedLocalRotation(
+                    upper,
+                    lower,
+                    desiredUpperDirection,
+                    upperBase);
+
+                // Solve the child after the upper arm has moved. Calculating both
+                // targets from the original chain can fold an MMD forearm through
+                // the torso when the upper-arm correction is large.
+                upper.localRotation = upperTarget;
+                lowerTarget = CalculateAlignedLocalRotation(
+                    lower,
+                    hand,
+                    desiredLowerDirection,
+                    lowerBase);
+            }
+            finally
+            {
+                upper.localRotation = originalUpper;
+                lower.localRotation = originalLower;
+            }
+        }
+        private Vector3 GetLeftUpperDirection()
+        {
+            switch (preset)
+            {
+                case AvatarIdlePreset.Casual: return new Vector3(-.22f, -.97f, .03f);
+                case AvatarIdlePreset.Formal: return new Vector3(-.09f, -.995f, .01f);
+                default: return new Vector3(-.16f, -.98f, .04f);
+            }
+        }
+
+        private Vector3 GetLeftLowerDirection()
+        {
+            switch (preset)
+            {
+                case AvatarIdlePreset.Casual: return new Vector3(-.06f, -.995f, .05f);
+                case AvatarIdlePreset.Formal: return new Vector3(-.02f, -.999f, .02f);
+                default: return new Vector3(-.04f, -.996f, .04f);
+            }
+        }
+        private Vector3 GetRightUpperDirection()
+        {
+            switch (preset)
+            {
+                case AvatarIdlePreset.Casual: return new Vector3(.22f, -.97f, .03f);
+                case AvatarIdlePreset.Formal: return new Vector3(.09f, -.995f, .01f);
+                default: return new Vector3(.16f, -.98f, .04f);
+            }
+        }
+
+        private Vector3 GetRightLowerDirection()
+        {
+            switch (preset)
+            {
+                case AvatarIdlePreset.Casual: return new Vector3(.06f, -.995f, .05f);
+                case AvatarIdlePreset.Formal: return new Vector3(.02f, -.999f, .02f);
+                default: return new Vector3(.04f, -.996f, .04f);
+            }
+        }
+        private static Quaternion CalculateAlignedLocalRotation(
+            Transform bone,
+            Transform child,
+            Vector3 desiredWorldDirection,
+            Quaternion fallback)
+        {
+            if (bone == null || child == null || desiredWorldDirection.sqrMagnitude < .000001f)
+            {
+                return fallback;
+            }
+
+            var currentDirection = child.position - bone.position;
+            if (currentDirection.sqrMagnitude < .000001f)
+            {
+                return fallback;
+            }
+
+            var targetWorld = Quaternion.FromToRotation(
+                currentDirection.normalized,
+                desiredWorldDirection.normalized) * bone.rotation;
+            return bone.parent == null
+                ? targetWorld
+                : Quaternion.Inverse(bone.parent.rotation) * targetWorld;
         }
 
         private void ClearBones()
         {
             leftUpper = leftLower = leftHand = rightUpper = rightLower = rightHand = null;
+            hasLeftDirectionalPose = hasRightDirectionalPose = false;
 
         }
 

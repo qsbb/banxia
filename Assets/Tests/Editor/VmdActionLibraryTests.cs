@@ -139,6 +139,15 @@ namespace QuestMmdPlayer.Tests
             }
         }
 
+        [Test]
+        public void ReturnToIdleBlendUsesSmoothBoundedProgress()
+        {
+            Assert.That(VmdActionLibrary.SmoothReturnProgress(0f), Is.Zero);
+            Assert.That(VmdActionLibrary.SmoothReturnProgress(.5f), Is.EqualTo(.5f).Within(.0001f));
+            Assert.That(VmdActionLibrary.SmoothReturnProgress(1f), Is.EqualTo(1f).Within(.0001f));
+            Assert.That(VmdActionLibrary.SmoothReturnProgress(2f), Is.EqualTo(1f).Within(.0001f));
+        }
+
         private static void WriteVmd(string path, uint[] boneFrames, uint[] morphFrames)
         {
             using var stream = File.Create(path);

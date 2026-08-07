@@ -64,6 +64,7 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                Debug.LogWarning("[FileImport] Unable to open Android document picker: " + exception, this);
                 SetStatus("无法打开文件选择器：" + exception.Message);
                 return false;
             }
@@ -161,6 +162,20 @@ namespace QuestMmdPlayer
                 string.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase);
         }
 
+        public static bool IsArchiveMetadataPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return true;
+            }
+
+            var normalized = path.Replace('\\', '/');
+            var fileName = Path.GetFileName(normalized);
+            return normalized.Split('/').Any(part => string.Equals(part, "__MACOSX", StringComparison.OrdinalIgnoreCase)) ||
+                fileName.StartsWith("._", StringComparison.Ordinal) ||
+                string.Equals(fileName, ".DS_Store", StringComparison.OrdinalIgnoreCase);
+        }
+
         private async Task ImportPathAsync(string path)
         {
             if (IsBusy)
@@ -172,6 +187,7 @@ namespace QuestMmdPlayer
             pendingImportPath = path;
             string stagingDirectory = string.Empty;
             var selectionDirectory = IsManagedSelectionDirectory(path) ? path : string.Empty;
+            var originalArchivePath = string.Empty;
             try
             {
                 SetStatus("检查导入文件");
@@ -185,6 +201,7 @@ namespace QuestMmdPlayer
                 if (!sourceIsDirectory &&
                     string.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase))
                 {
+                    originalArchivePath = path;
                     stagingDirectory = Path.Combine(
                         Application.persistentDataPath,
                         "Imports",
@@ -212,6 +229,7 @@ namespace QuestMmdPlayer
 
                     if (archives.Length == 1)
                     {
+                        originalArchivePath = archives[0];
                         stagingDirectory = Path.Combine(
                             Application.persistentDataPath,
                             "Imports",
@@ -237,7 +255,22 @@ namespace QuestMmdPlayer
                 }
                 else if (vmdFiles.Length > 0)
                 {
-                    await ImportVmdAsync(sourceRoot, sourceIsDirectory, vmdFiles);
+                    var playableVmdFiles = new List<string>();
+                    foreach (var vmdFile in vmdFiles)
+                    {
+                        if (VmdActionFilePolicy.ContainsModelTracks(vmdFile))
+                        {
+                            playableVmdFiles.Add(vmdFile);
+                        }
+                    }
+
+                    if (playableVmdFiles.Count == 0)
+                    {
+                        PreserveReferenceImport(originalArchivePath, sourceRoot, sourceIsDirectory, path);
+                        return;
+                    }
+
+                    await ImportVmdAsync(sourceRoot, sourceIsDirectory, playableVmdFiles.ToArray());
                 }
                 else
                 {
@@ -308,6 +341,7 @@ namespace QuestMmdPlayer
                 var actionName = SanitizeImportedName(
                     Path.GetFileNameWithoutExtension(vmdFiles[0]),
                     "ImportedMotion");
+                actionName = CreateUniqueActionName(actionLibrary.MotionsDirectory, actionName);
                 if (!VmdActionFilePolicy.TryResolveActionPath(
                     actionLibrary.MotionsDirectory,
                     actionName,
@@ -357,11 +391,55 @@ namespace QuestMmdPlayer
         private static string[] FilesWithExtension(IEnumerable<string> files, string extension)
         {
             return files
+                .Where(file => !IsArchiveMetadataPath(file))
                 .Where(file => string.Equals(
                     Path.GetExtension(file),
                     extension,
                     StringComparison.OrdinalIgnoreCase))
                 .ToArray();
+        }
+
+        private static string CreateUniqueActionName(string motionsDirectory, string baseName)
+        {
+            var candidate = SanitizeImportedName(baseName, "ImportedMotion");
+            var suffix = 2;
+            while (VmdActionFilePolicy.TryResolveActionPath(motionsDirectory, candidate, out var path) &&
+                (File.Exists(path) || Directory.Exists(Path.Combine(motionsDirectory, candidate))))
+            {
+                candidate = SanitizeImportedName(baseName, "ImportedMotion") + "_" + suffix++;
+            }
+
+            return candidate;
+        }
+
+        private void PreserveReferenceImport(
+            string originalArchivePath,
+            string sourceRoot,
+            bool sourceIsDirectory,
+            string fallbackSourcePath)
+        {
+            var sourceName = !string.IsNullOrWhiteSpace(originalArchivePath)
+                ? Path.GetFileNameWithoutExtension(originalArchivePath)
+                : sourceIsDirectory
+                    ? "ImportedReference"
+                    : Path.GetFileNameWithoutExtension(fallbackSourcePath);
+            var referenceRoot = Path.Combine(Application.persistentDataPath, "Imports", "References");
+            var target = CreateUniqueDirectory(referenceRoot, SanitizeImportedName(sourceName, "ImportedReference"));
+
+            if (!string.IsNullOrWhiteSpace(originalArchivePath) && File.Exists(originalArchivePath))
+            {
+                CopyFile(originalArchivePath, Path.Combine(target, Path.GetFileName(originalArchivePath)));
+            }
+            else if (sourceIsDirectory)
+            {
+                CopyDirectory(sourceRoot, target);
+            }
+            else if (File.Exists(fallbackSourcePath))
+            {
+                CopyFile(fallbackSourcePath, Path.Combine(target, Path.GetFileName(fallbackSourcePath)));
+            }
+
+            SetStatus("参考资源已保存，未加入角色动作列表：" + Path.GetFileName(target));
         }
 
         private static bool IsManagedSelectionDirectory(string path)

@@ -44,6 +44,9 @@ namespace QuestMmdPlayer
         bool localReactionsEnabled = true;
         HumanInteractionKind backendReactionKind;
         float backendReactionUntil;
+        HumanInteractionKind trackedContactKind;
+        float trackedContactUntil;
+        Vector3 trackedContactTarget;
         HandData handshakeUserHand;
         bool handshakeUsesRightArm;
         bool hasHandshakeArm;
@@ -150,6 +153,9 @@ namespace QuestMmdPlayer
             scaleChanged = false;
             backendReactionKind = HumanInteractionKind.None;
             backendReactionUntil = 0f;
+            trackedContactKind = HumanInteractionKind.None;
+            trackedContactUntil = 0f;
+            trackedContactTarget = Vector3.zero;
             handshakeUserHand = null;
             hasHandshakeArm = false;
             hasSmoothedHandshakeTarget = false;
@@ -234,7 +240,9 @@ namespace QuestMmdPlayer
             trackingSpace = QuestXrInputUtility.ResolveTrackingSpace(trackingSpace);
             Read(left);
             Read(right);
-            var detected = simulationUntil > Time.unscaledTime ? simulationKind : Detect();
+            var proxyContact = trackedContactUntil > Time.unscaledTime ? trackedContactKind : HumanInteractionKind.None;
+            var detected = simulationUntil > Time.unscaledTime ? simulationKind : proxyContact != HumanInteractionKind.None ? proxyContact : Detect();
+            if (proxyContact != HumanInteractionKind.None) target = trackedContactTarget;
             if (detected != current) stateTime += Time.unscaledDeltaTime;
             else stateTime = 0f;
             if (detected == HumanInteractionKind.None && current != HumanInteractionKind.None)
@@ -401,6 +409,15 @@ namespace QuestMmdPlayer
             return true;
         }
 
+        public void ReportTrackedHandContact(AvatarContactRegion region, bool pinching, Vector3 point)
+        {
+            var kind = ClassifyPhysicalContact(region, pinching);
+            if (kind == HumanInteractionKind.None) return;
+            trackedContactKind = kind;
+            trackedContactTarget = point;
+            trackedContactUntil = Time.unscaledTime + .14f;
+        }
+
         public static HumanInteractionKind ClassifyPhysicalContact(
             AvatarContactRegion region,
             bool pinching)
@@ -412,6 +429,10 @@ namespace QuestMmdPlayer
             if (region == AvatarContactRegion.Head && !pinching)
             {
                 return HumanInteractionKind.HeadPat;
+            }
+            if (region == AvatarContactRegion.Hand)
+            {
+                return HumanInteractionKind.Handshake;
             }
             return HumanInteractionKind.None;
         }

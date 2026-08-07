@@ -25,7 +25,8 @@ namespace QuestMmdPlayer
         private int dspBufferLength = 1024;
         private int dspBufferCount = 4;
         private double audibleUntilDspTime;
-        [SerializeField, Range(.02f, .5f)] private float outputTailSafetySeconds = .08f;
+        private bool streamCompleted = true;
+        [SerializeField, Range(.02f, .5f)] private float outputTailSafetySeconds = .22f;
 
         public bool IsDrained
         {
@@ -37,6 +38,8 @@ namespace QuestMmdPlayer
                 }
             }
         }
+
+        public bool StreamCompleted => streamCompleted;
 
         public float BufferedSeconds
         {
@@ -67,13 +70,23 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
-            if (audioSource != null && audioSource.isPlaying && IsDrained)
+            if (audioSource != null && audioSource.isPlaying && streamCompleted && IsDrained)
             {
                 audioSource.Stop();
                 lock (gate) latestRms = 0f;
             }
         }
 
+        public void BeginStream()
+        {
+            StopAndClear();
+            streamCompleted = false;
+        }
+
+        public void MarkStreamCompleted()
+        {
+            streamCompleted = true;
+        }
         public void Enqueue(short[] pcm16, int sourceSampleRate)
         {
             if (pcm16 == null || pcm16.Length == 0 || sourceSampleRate <= 0)
@@ -113,17 +126,31 @@ namespace QuestMmdPlayer
                 queuedSamples = 0;
                 latestRms = 0f;
                 audibleUntilDspTime = 0d;
+                streamCompleted = true;
             }
         }
 
         private void EnsureStream(int sourceSampleRate)
         {
+            if (audioSource == null)
+            {
+                audioSource = GetComponent<AudioSource>();
+                if (audioSource == null)
+                {
+                    audioSource = gameObject.AddComponent<AudioSource>();
+                }
+                audioSource.playOnAwake = false;
+                audioSource.loop = true;
+                audioSource.spatialBlend = 0f;
+            }
             if (streamClip != null && sampleRate == sourceSampleRate)
             {
                 return;
             }
 
+            var wasCompleted = streamCompleted;
             StopAndClear();
+            streamCompleted = wasCompleted;
             if (streamClip != null)
             {
                 Destroy(streamClip);

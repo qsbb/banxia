@@ -18,7 +18,7 @@ namespace QuestMmdPlayer
         [SerializeField] private bool placeAutomatically = true;
         [SerializeField] private bool createSpatialAnchor = false;
         [SerializeField] private bool importedAvatarFacesNegativeZ = false;
-        [SerializeField, Min(0.5f)] private float placementDistance = 2.2f;
+        [SerializeField, Min(0.5f)] private float placementDistance = 1.35f;
         [SerializeField, Min(0f)] private float planeWaitSeconds = 4f;
         [SerializeField, Range(0f, 1f)] private float minimumUpDot = 0.85f;
         [SerializeField, Min(0.5f)] private float minimumUserHeight = 0.9f;
@@ -76,7 +76,18 @@ namespace QuestMmdPlayer
 
             if (placementRequested && Time.unscaledTime >= placementDeadline)
             {
-                PlaceAtFallbackPose();
+                if (!HasPlacement)
+                {
+                    PlaceAtFallbackPose();
+                }
+                else
+                {
+                    placementRequested = false;
+                    PausePlaneDetection();
+                    Status = hasHeightCalibration
+                        ? $"Placed in front | height {estimatedUserHeight:F2}m"
+                        : "Placed in front";
+                }
             }
         }
 
@@ -138,14 +149,6 @@ namespace QuestMmdPlayer
             }
             CaptureHeightCalibration(floor);
             RequestPlacement();
-
-            // A height reset must be visibly immediate. Plane placement is still
-            // preferred, but a stable tracking-floor pose is used in this frame
-            // when AR plane data is not ready yet.
-            if (!TryPlaceOnTrackedFloor())
-            {
-                PlaceAtFallbackPose();
-            }
         }
 
         public void FaceUserAndPlace()
@@ -171,6 +174,24 @@ namespace QuestMmdPlayer
                 ? $"Searching for a tracked floor | height {estimatedUserHeight:F2}m"
                 : "Searching for a tracked floor";
             Debug.Log("[AvatarPlacement] Placement requested.", this);
+
+            // Never leave a freshly loaded model at its import transform while
+            // room planes warm up. Prefer a tracked floor immediately, otherwise
+            // show the stable tracking-floor pose and keep refining in the background.
+            if (TryPlaceOnTrackedFloor())
+            {
+                return;
+            }
+
+            PlaceAtFallbackPose();
+            placementRequested = true;
+            usingFallback = true;
+            placementDeadline = Time.unscaledTime + planeWaitSeconds;
+            nextPlaneAttemptTime = Time.unscaledTime + PlacementRetrySeconds;
+            ResumePlaneDetection();
+            Status = hasHeightCalibration
+                ? $"Placed in front | checking floor | height {estimatedUserHeight:F2}m"
+                : "Placed in front | checking floor";
         }
 
         private void ResolveDependencies()

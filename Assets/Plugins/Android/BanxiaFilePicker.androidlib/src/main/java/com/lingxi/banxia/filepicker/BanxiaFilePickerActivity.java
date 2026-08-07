@@ -10,8 +10,6 @@ import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 
-import com.unity3d.player.UnityPlayer;
-
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -194,7 +192,16 @@ public final class BanxiaFilePickerActivity extends Activity {
             String encoded = Base64.encodeToString(
                 (value == null ? "" : value).getBytes(StandardCharsets.UTF_8),
                 Base64.NO_WRAP);
-            UnityPlayer.UnitySendMessage(target, method, state + ":" + encoded);
+            try
+            {
+                Class<?> unityPlayer = Class.forName("com.unity3d.player.UnityPlayer");
+                unityPlayer.getMethod("UnitySendMessage", String.class, String.class, String.class)
+                    .invoke(null, target, method, state + ":" + encoded);
+            }
+            catch (Exception ignored)
+            {
+                // The Unity runtime may already be shutting down; finish the picker safely.
+            }
         }
         finish();
     }

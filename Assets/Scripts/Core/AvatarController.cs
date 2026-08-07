@@ -34,6 +34,14 @@ namespace QuestMmdPlayer
         private Quaternion rightLowerArmBase;
         private Quaternion rightHandBase;
         private bool actionPoseCaptured;
+        private bool actionTransitionActive;
+        private float actionTransitionClock;
+        private const float ActionTransitionSeconds = .32f;
+        private Quaternion transitionUpperBody;
+        private Quaternion transitionHead;
+        private Quaternion transitionRightUpperArm;
+        private Quaternion transitionRightLowerArm;
+        private Quaternion transitionRightHand;
 
         private const float WaveDuration = 3.1f;
         private const float BowDuration = 2.2f;
@@ -82,6 +90,7 @@ namespace QuestMmdPlayer
             }
 
             actionClock += Time.deltaTime;
+            if (actionTransitionActive) actionTransitionClock += Time.unscaledDeltaTime;
             if (currentAction == "wave")
             {
                 ApplyWave();
@@ -114,6 +123,13 @@ namespace QuestMmdPlayer
                     PlayAction("idle");
                 }
             }
+            else if (currentAction == "idle")
+            {
+                // Idle is the captured natural pose. Applying it before the
+                // transition lets an action return smoothly without a bind-pose pop.
+                RestoreActionPose();
+            }
+            ApplyActionTransition();
         }
 
         public void CaptureActionPose()
@@ -222,6 +238,46 @@ namespace QuestMmdPlayer
             SetRotation(head, headBase, Quaternion.Euler(0f, -phase * 1.5f, -phase * 1.8f), blend);
         }
 
+        private void CaptureTransitionPose()
+        {
+            if (!actionPoseCaptured)
+            {
+                CaptureActionPose();
+            }
+            transitionUpperBody = RotationOf(upperBody);
+            transitionHead = RotationOf(head);
+            transitionRightUpperArm = RotationOf(rightUpperArm);
+            transitionRightLowerArm = RotationOf(rightLowerArm);
+            transitionRightHand = RotationOf(rightHand);
+            actionTransitionClock = 0f;
+            actionTransitionActive = true;
+        }
+
+        private void ApplyActionTransition()
+        {
+            if (!actionTransitionActive)
+            {
+                return;
+            }
+            var amount = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(actionTransitionClock / ActionTransitionSeconds));
+            BlendRotation(upperBody, transitionUpperBody, amount);
+            BlendRotation(head, transitionHead, amount);
+            BlendRotation(rightUpperArm, transitionRightUpperArm, amount);
+            BlendRotation(rightLowerArm, transitionRightLowerArm, amount);
+            BlendRotation(rightHand, transitionRightHand, amount);
+            if (actionTransitionClock >= ActionTransitionSeconds)
+            {
+                actionTransitionActive = false;
+            }
+        }
+
+        private static void BlendRotation(Transform bone, Quaternion from, float amount)
+        {
+            if (bone != null)
+            {
+                bone.localRotation = Quaternion.Slerp(from, bone.localRotation, amount);
+            }
+        }
         private static float ActionBlend(float clock, float duration, float transition)
         {
             var enter = Mathf.Clamp01(clock / transition);
@@ -364,7 +420,7 @@ namespace QuestMmdPlayer
 
         public void PlayAction(string actionName)
         {
-            RestoreActionPose();
+            CaptureTransitionPose();
             currentAction = string.IsNullOrWhiteSpace(actionName) ? "idle" : actionName.ToLowerInvariant();
             actionClock = 0f;
             isPlaying = true;

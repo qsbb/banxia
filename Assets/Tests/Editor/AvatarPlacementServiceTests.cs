@@ -158,7 +158,7 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(service.HasPlacement, Is.True);
                 Assert.That(service.EstimatedUserHeight, Is.EqualTo(1.66f).Within(.001f));
                 Assert.That(avatar.transform.position.y, Is.EqualTo(.15f).Within(.001f));
-                Assert.That(avatar.transform.position.z, Is.GreaterThan(2f));
+                Assert.That(avatar.transform.position.z, Is.GreaterThan(1.2f));
             }
             finally
             {

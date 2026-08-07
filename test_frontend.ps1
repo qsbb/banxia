@@ -44,8 +44,8 @@ $requiredFiles = @(
     "Assets/Scripts/MR/RoomUnderstandingService.cs",
     "Assets/Scripts/MR/QuestFileImportService.cs",
     "Assets/Plugins/Android/BanxiaFilePicker.androidlib/AndroidManifest.xml",
-    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/com/lingxi/banxia/filepicker/BanxiaFilePicker.java",
-    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/com/lingxi/banxia/filepicker/BanxiaFilePickerActivity.java",
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/main/java/com/lingxi/banxia/filepicker/BanxiaFilePicker.java",
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/main/java/com/lingxi/banxia/filepicker/BanxiaFilePickerActivity.java",
     "Assets/Scripts/Backend/AstrBotBridge.cs",
     "Assets/Scripts/Backend/BackendPairingController.cs",
     "Assets/Scripts/Backend/BackendPairingProtocol.cs",
@@ -162,11 +162,11 @@ $sourceChecks = @{
     "Assets/Scripts/Backend/AstrBotBridge.cs" = @("TryIngestCommandJson", "JsonUtility.FromJson", "CommandReceived", "ReloadConfiguration", "ConfiguredBaseUrl")
     "Assets/Scripts/Backend/BackendPairingProtocol.cs" = @("TryBuildExchangeEndpoint", "TryParseQrPayload", "TryWriteSettingsAtomically", "File.Replace", "https")
     "Assets/Scripts/Backend/BackendPairingController.cs" = @("IPairingCodeScanner", "PairWithCode", "PairWithQrPayload", "PairingServerEndpoint", "ReloadConfiguration")
-    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("PAIR BACKEND", "SCAN QR", "SET HTTPS SERVER", "TouchScreenKeyboard", "RefreshExternalActions", "PlaySelectedExternalAction", "ImportFile", "导入文件", "RoomUnderstanding")
+    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("PAIR BACKEND", "SET HOST PORT", "AUTO COMPLETE PATH", "TouchScreenKeyboard", "RefreshExternalActions", "PlaySelectedExternalAction", "ImportFile", "导入文件", "RoomUnderstanding")
     "Assets/Scripts/MR/PassthroughFacade.cs" = @("IPassthroughProvider", "EditorPassthroughProvider", "StateChanged")
     "Assets/Scripts/MR/QuestFileImportService.cs" = @("OpenPicker", "OnAndroidFileImported", "ExtractArchiveSafely", "MaximumExpandedArchiveBytes", "RuntimeMmdModelLoader", "VmdActionFilePolicy")
-    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/com/lingxi/banxia/filepicker/BanxiaFilePicker.java" = @("Intent", "BanxiaFilePickerActivity.class", "startActivity")
-    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/com/lingxi/banxia/filepicker/BanxiaFilePickerActivity.java" = @("Intent.ACTION_OPEN_DOCUMENT", "Intent.EXTRA_ALLOW_MULTIPLE", "copyUris", "replaceAll", "Imports/Batches")
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/main/java/com/lingxi/banxia/filepicker/BanxiaFilePicker.java" = @("Intent", "BanxiaFilePickerActivity.class", "startActivity")
+    "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/main/java/com/lingxi/banxia/filepicker/BanxiaFilePickerActivity.java" = @("Intent.ACTION_OPEN_DOCUMENT", "Intent.EXTRA_ALLOW_MULTIPLE", "copyUris", "replaceAll", "Imports/Batches", "Class.forName", "UnitySendMessage")
     "Assets/Scripts/Core/AvatarController.cs" = @("Move", "Rotate", "Scale", "PlayAction", "TogglePlayback", "CaptureActionPose", "rightUpperArm", "ApplyWave", "ApplyBow")
     "Assets/Scripts/Core/AvatarTouchInteraction.cs" = @("InputDevices.GetDeviceAtXRNode", "TouchStateChanged", "ApplyDualGrab", "primaryButton", "triggerButton", "XRHandJointID.IndexTip", "SetSemanticInteractionLock")
     "Assets/Scripts/Core/QuestMmdPlayerBootstrap.cs" = @("AvatarTouchInteraction", "AvatarHumanInteraction", "ConversationController", "QuestMicrophoneInput", "RoomUnderstandingService", "QuestFileImportService", "FileImport.Initialize", "BindInteractions", "handshake", "head_pat", "cheek_pinch")

@@ -132,6 +132,13 @@ namespace QuestMmdPlayer.Tests
             Assert.IsTrue(solved);
             Assert.That(Vector3.Distance(upperObject.transform.position, handObject.transform.position), Is.LessThanOrEqualTo(1.801f));
         }
+        [Test]
+        public void TrackedHandContactMapsToHandshake()
+        {
+            Assert.AreEqual(
+                HumanInteractionKind.Handshake,
+                AvatarHumanInteraction.ClassifyPhysicalContact(AvatarContactRegion.Hand, false));
+        }
         private void CreateBone(string objectName, string mmdName)
         {
             var boneObject = new GameObject(objectName);

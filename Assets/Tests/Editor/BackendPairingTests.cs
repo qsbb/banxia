@@ -19,6 +19,12 @@ namespace QuestMmdPlayer.Tests
             Assert.That(endpoint, Is.EqualTo(expected));
         }
 
+        [TestCase("https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange", "bot.example.com:7443")]
+        [TestCase("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange", "192.168.5.88:8520")]
+        public void PairingServerEntryHidesTheGeneratedPluginPath(string endpoint, string expected)
+        {
+            Assert.That(BackendPairingProtocol.GetServerEntry(endpoint), Is.EqualTo(expected));
+        }
         [TestCase("http://bot.example.com")]
         [TestCase("https://user:pass@bot.example.com")]
         [TestCase("https://bot.example.com/dashboard")]

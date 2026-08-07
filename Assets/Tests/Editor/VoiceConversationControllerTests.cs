@@ -183,6 +183,43 @@ namespace QuestMmdPlayer.Tests
                 true, 2.4f, 1.2f, .45f, 1.15f, 4f), Is.True);
         }
 
+        [Test]
+        public void PcmStreamWaitsForExplicitReplyEndBeforeStopping()
+        {
+            owner = new GameObject("PCM stream completion test");
+            var player = owner.AddComponent<Pcm16StreamAudioPlayer>();
+            player.BeginStream();
+            player.Enqueue(new short[480], 24000);
+            Assert.IsFalse(player.StreamCompleted);
+            player.MarkStreamCompleted();
+            Assert.IsTrue(player.StreamCompleted);
+        }
+        [Test]
+        public void VoiceActivationRmsSeparatesSpeechFromSilence()
+        {
+            var silence = new System.Collections.Generic.List<float> { 0f, .001f, -.001f, 0f };
+            var speech = new System.Collections.Generic.List<float> { .1f, -.1f, .1f, -.1f };
+
+            Assert.That(QuestMicrophoneInput.CalculateRms(silence, silence.Count), Is.LessThan(.008f));
+            Assert.That(QuestMicrophoneInput.CalculateRms(speech, speech.Count), Is.GreaterThan(.08f));
+        }
+
+        [Test]
+        public void ExpressionMappingIsEmotionSpecificAndBounded()
+        {
+            Assert.That(
+                AvatarConversationPresenter.GetExpressionWeight("smile", "happy", .5f),
+                Is.EqualTo(31f).Within(.001f));
+            Assert.That(
+                AvatarConversationPresenter.GetExpressionWeight("smile", "sad", 1f),
+                Is.EqualTo(0f));
+            Assert.That(
+                AvatarConversationPresenter.GetExpressionWeight("照れ", "shy", 2f),
+                Is.EqualTo(43.4f).Within(.001f));
+            Assert.That(
+                AvatarConversationPresenter.GetExpressionWeight("笑い", "happy", 1f),
+                Is.EqualTo(62f).Within(.001f));
+        }
         private sealed class RecordingVoiceTransport : MonoBehaviour, IConversationTransport
         {
             public event Action<ConversationEvent> EventReceived;

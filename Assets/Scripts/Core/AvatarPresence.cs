@@ -20,6 +20,11 @@ namespace QuestMmdPlayer
         [SerializeField] private bool bodyTurnEnabled = true;
         [SerializeField, Range(25f, 100f)] private float bodyTurnThreshold = 58f;
         [SerializeField, Range(15f, 180f)] private float bodyTurnSpeed = 78f;
+        [SerializeField, Range(35f, 70f)] private float bodyTurnMinimumStep = 35f;
+        [SerializeField, Range(40f, 70f)] private float bodyTurnMaximumStep = 58f;
+        [SerializeField, Range(0f, 35f)] private float headTurnResidualDegrees = 22f;
+        [SerializeField, Range(.35f, 1.2f)] private float bodyTurnMinimumDuration = .48f;
+        [SerializeField, Range(.5f, 1.5f)] private float bodyTurnMaximumDuration = .9f;
         [SerializeField] private bool avatarFacesNegativeZ = false;
         [SerializeField] private float attentionSpeed = 5f;
         [SerializeField, Range(.05f, 1f)] private float breathPitchDegrees = .28f;
@@ -31,6 +36,18 @@ namespace QuestMmdPlayer
         private Transform chest;
         private Quaternion headRestRotation;
         private Quaternion chestRestRotation;
+        private Transform lowerBody;
+        private Transform leftLeg;
+        private Transform rightLeg;
+        private Quaternion lowerBodyRestRotation;
+        private Quaternion leftLegRestRotation;
+        private Quaternion rightLegRestRotation;
+        private bool bodyTurnActive;
+        private float bodyTurnClock;
+        private float bodyTurnDuration;
+        private float bodyTurnDirection;
+        private Quaternion bodyTurnStartRotation;
+        private Quaternion bodyTurnTargetRotation;
         private readonly List<BlinkShape> blinkShapes = new List<BlinkShape>();
         private float nextBlinkTime;
         private float blinkUntil;
@@ -52,6 +69,9 @@ namespace QuestMmdPlayer
             humanInteraction = avatar == null ? null : avatar.GetComponentInParent<AvatarHumanInteraction>();
             head = null;
             chest = null;
+            lowerBody = null;
+            leftLeg = null;
+            rightLeg = null;
             blinkShapes.Clear();
             if (avatar == null)
             {
@@ -62,8 +82,14 @@ namespace QuestMmdPlayer
             var bones = avatar.GetComponentsInChildren<MMDBoneTransform>(true);
             head = FindBone(bones, "head", "head", "头");
             chest = FindBone(bones, "upperbody", "chest", "上半身");
+            lowerBody = FindBone(bones, "lowerbody", "lower body", "hips", "center", "下半身");
+            leftLeg = FindBone(bones, "leftleg", "left leg", "legl", "左足");
+            rightLeg = FindBone(bones, "rightleg", "right leg", "legr", "右足");
             if (head != null) headRestRotation = head.localRotation;
             if (chest != null) chestRestRotation = chest.localRotation;
+            if (lowerBody != null) lowerBodyRestRotation = lowerBody.localRotation;
+            if (leftLeg != null) leftLegRestRotation = leftLeg.localRotation;
+            if (rightLeg != null) rightLegRestRotation = rightLeg.localRotation;
             CacheBlinkShapes();
             ScheduleBlink(Time.unscaledTime);
             Status = $"Presence ready | head:{(head == null ? "no" : "yes")} blink:{blinkShapes.Count}";
@@ -88,10 +114,26 @@ namespace QuestMmdPlayer
 
         private void ApplyBodyTurn()
         {
-            if (!bodyTurnEnabled || avatar == null || Camera.main == null ||
+            var blocked = !bodyTurnEnabled || avatar == null || Camera.main == null ||
                 (humanInteraction != null && humanInteraction.HasSemanticContact) ||
-                IsActionTurnBlocked(avatar.CurrentAction))
+                IsActionTurnBlocked(avatar.CurrentAction);
+            if (blocked)
             {
+                CancelBodyTurnPose();
+                return;
+            }
+
+            if (bodyTurnActive)
+            {
+                bodyTurnClock += Time.unscaledDeltaTime;
+                var progress = SmoothTurnProgress(Mathf.Clamp01(bodyTurnClock / bodyTurnDuration));
+                avatar.transform.rotation = Quaternion.Slerp(bodyTurnStartRotation, bodyTurnTargetRotation, progress);
+                ApplyTurnPose(progress);
+                if (bodyTurnClock >= bodyTurnDuration)
+                {
+                    avatar.transform.rotation = bodyTurnTargetRotation;
+                    CancelBodyTurnPose();
+                }
                 return;
             }
 
@@ -104,18 +146,28 @@ namespace QuestMmdPlayer
             }
 
             towardUser.Normalize();
-            var yaw = Vector3.SignedAngle(avatar.transform.forward, towardUser, Vector3.up);
-            if (!ShouldTurnBody(yaw, bodyTurnThreshold))
+            var currentFacing = avatarFacesNegativeZ ? -avatar.transform.forward : avatar.transform.forward;
+            var yaw = Vector3.SignedAngle(currentFacing, towardUser, Vector3.up);
+            var step = CalculateTurnStep(
+                yaw,
+                bodyTurnThreshold,
+                headTurnResidualDegrees,
+                bodyTurnMinimumStep,
+                bodyTurnMaximumStep);
+            if (Mathf.Abs(step) < .01f)
             {
                 return;
             }
 
-            var facingDirection = avatarFacesNegativeZ ? -towardUser : towardUser;
-            var targetRotation = Quaternion.LookRotation(facingDirection, Vector3.up);
-            avatar.transform.rotation = Quaternion.RotateTowards(
-                avatar.transform.rotation,
-                targetRotation,
-                bodyTurnSpeed * Time.unscaledDeltaTime);
+            bodyTurnActive = true;
+            bodyTurnClock = 0f;
+            bodyTurnDirection = Mathf.Sign(step);
+            bodyTurnDuration = Mathf.Clamp(
+                Mathf.Abs(step) / Mathf.Max(1f, bodyTurnSpeed),
+                bodyTurnMinimumDuration,
+                bodyTurnMaximumDuration);
+            bodyTurnStartRotation = avatar.transform.rotation;
+            bodyTurnTargetRotation = Quaternion.AngleAxis(step, Vector3.up) * bodyTurnStartRotation;
         }
 
         public static bool ShouldTurnBody(float signedYaw, float threshold)
@@ -123,6 +175,51 @@ namespace QuestMmdPlayer
             return Mathf.Abs(signedYaw) > Mathf.Max(0f, threshold);
         }
 
+        public static float CalculateTurnStep(
+            float signedYaw,
+            float threshold,
+            float headResidual,
+            float minimumStep,
+            float maximumStep)
+        {
+            if (!ShouldTurnBody(signedYaw, threshold))
+            {
+                return 0f;
+            }
+
+            var magnitude = Mathf.Abs(signedYaw) - Mathf.Max(0f, headResidual);
+            magnitude = Mathf.Clamp(
+                magnitude,
+                Mathf.Max(0f, minimumStep),
+                Mathf.Max(minimumStep, maximumStep));
+            return Mathf.Sign(signedYaw) * magnitude;
+        }
+
+        public static float SmoothTurnProgress(float normalizedTime)
+        {
+            var value = Mathf.Clamp01(normalizedTime);
+            return value * value * (3f - 2f * value);
+        }
+
+        private void ApplyTurnPose(float progress)
+        {
+            var weight = Mathf.Sin(Mathf.Clamp01(progress) * Mathf.PI);
+            if (lowerBody != null)
+            {
+                lowerBody.localRotation = lowerBodyRestRotation *
+                    Quaternion.Euler(0f, -bodyTurnDirection * 2.5f * weight, bodyTurnDirection * .8f * weight);
+            }
+            if (leftLeg != null)
+            {
+                leftLeg.localRotation = leftLegRestRotation *
+                    Quaternion.Euler(bodyTurnDirection * 3.5f * weight, 0f, 0f);
+            }
+            if (rightLeg != null)
+            {
+                rightLeg.localRotation = rightLegRestRotation *
+                    Quaternion.Euler(-bodyTurnDirection * 2.5f * weight, 0f, 0f);
+            }
+        }
         private static bool IsActionTurnBlocked(string action)
         {
             switch (action)
@@ -242,8 +339,17 @@ namespace QuestMmdPlayer
             return null;
         }
 
+        private void CancelBodyTurnPose()
+        {
+            bodyTurnActive = false;
+            bodyTurnClock = 0f;
+            if (lowerBody != null) lowerBody.localRotation = lowerBodyRestRotation;
+            if (leftLeg != null) leftLeg.localRotation = leftLegRestRotation;
+            if (rightLeg != null) rightLeg.localRotation = rightLegRestRotation;
+        }
         private void Restore()
         {
+            CancelBodyTurnPose();
             if (head != null) head.localRotation = headRestRotation;
             if (chest != null) chest.localRotation = chestRestRotation;
             for (var i = 0; i < blinkShapes.Count; i++)

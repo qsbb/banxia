@@ -57,7 +57,13 @@ await loader.LoadFromFileAsync(pmxPath, textureDirectory);
 
 .vmd 文件必须来自用户明确许可的来源；应用扫描 Motions 顶层 .vmd 或动作包目录，并对每个轨道执行 16 MiB、100000 关键帧、120 秒限制；动作包总关键帧数仍受同一上限保护。设备在线且电量足够前不安装 APK、不唤醒、不截图。
 
-动作播放期间由 VMD 独占骨骼最终写入，UMT 实时 IK/物理暂时停用，转换阶段会烘焙 IK 与物理轨道；停止或自然结束后恢复原物理设置并回到待机。Quest 菜单的“外观 -> 画质”提供性能、平衡、清晰和恢复默认四档，立即调整 XR 眼纹理比例与 URP MSAA，并保存到本机。
+动作播放期间由 VMD 独占骨骼最终写入，UMT 实时 IK/物理暂时停用，转换阶段会烘焙 IK 与物理轨道；停止或自然结束后先用约 0.65 秒将骨骼和表情混合回绑定姿势，再恢复原物理设置并回到待机。Quest 菜单的“外观 -> 画质”提供性能、平衡、清晰和恢复默认四档，立即调整 XR 眼纹理比例与 URP MSAA，并保存到本机。
+
+## 后端绑定与文件选择器验收
+
+绑定菜单输入域名/IP:端口和 6 位码，应用自动补全插件路径。当前 Unity 2022 构建不提供头显相机扫码；不要把“SDK 无法获取相机画面”作为可用入口。
+
+Android 构建后必须用 APK/Dex 分析确认 com.lingxi.banxia.filepicker.BanxiaFilePicker 与 BanxiaFilePickerActivity 均存在，并在真机点击“导入文件”确认系统 ACTION_OPEN_DOCUMENT 页面出现。
 
 ## 当前状态
 

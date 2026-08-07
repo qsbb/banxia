@@ -11,19 +11,24 @@ namespace QuestMmdPlayer
     public sealed class QuestMicrophoneInput : MonoBehaviour
     {
         private const int TargetSampleRate = 16000;
+        private const string AlwaysListeningPreferenceKey = "banxia.voice.always_listening";
 
         [SerializeField, Range(40, 100)] private int chunkMilliseconds = 80;
         [SerializeField, Range(2, 20)] private int clipBufferSeconds = 10;
         [SerializeField, Range(5, 60)] private int maxRecordingSeconds = 30;
-        [SerializeField] private bool enableTrackedVoiceGesture = true;
-        [SerializeField, Range(.2f, .8f)] private float trackedVoiceHoldSeconds = .35f;
+        [SerializeField] private bool enableTrackedVoiceGesture;
+        [SerializeField, Range(.2f, 1.2f)] private float trackedVoiceHoldSeconds = .75f;
         [SerializeField] private bool autoStopOnSilence = true;
         [SerializeField, Range(.003f, .08f)] private float voiceSilenceRms = .008f;
-        [SerializeField, Range(.4f, 2.5f)] private float voiceSilenceSeconds = 1.15f;
+        [SerializeField, Range(.4f, 3f)] private float voiceSilenceSeconds = 1.8f;
         [SerializeField, Range(.2f, 1f)] private float minimumVoiceSeconds = .45f;
         [SerializeField, Range(1.5f, 8f)] private float initialVoiceTimeoutSeconds = 4f;
+        [SerializeField] private bool alwaysListening = true;
+        [SerializeField, Range(.12f, .6f)] private float voicePreRollSeconds = .32f;
+        [SerializeField, Range(.08f, .4f)] private float voiceActivationSeconds = .16f;
 
         private readonly List<float> pendingMono = new List<float>(4096);
+        private readonly List<float> preRollMono = new List<float>(8192);
         private ConversationController conversation;
         private AudioClip recordingClip;
         private string deviceName;
@@ -39,11 +44,20 @@ namespace QuestMmdPlayer
         private bool detectedSpeech;
         private CompanionWorldMenu menu;
         private AvatarTouchInteraction touchInteraction;
+        private float activationVoiceSeconds;
+        private float nextMonitorAttemptAt;
+        private bool permissionRequested;
 
         public bool IsRecording { get; private set; }
+        public bool IsMonitoring { get; private set; }
+        public bool AlwaysListening => alwaysListening;
         public float InputLevel { get; private set; }
+        public int LastTurnPcmBytes { get; private set; }
+        public int LastTurnChunkCount { get; private set; }
+        public string DiagnosticStatus => $"{Status} | level {InputLevel:F3} | chunks {LastTurnChunkCount} | pcm {LastTurnPcmBytes} B";
         public string Status { get; private set; } = "Microphone ready";
-        public string ShortStatus => IsRecording ? "REC" : Status.StartsWith("Microphone ready") ? "READY" : "OFF";
+        public string ShortStatus => IsRecording ? "REC" : IsMonitoring && alwaysListening ? "LIVE" :
+            Status.StartsWith("Microphone ready") ? "READY" : "OFF";
 
         public void Bind(ConversationController owner)
         {
@@ -53,6 +67,9 @@ namespace QuestMmdPlayer
         private void Awake()
         {
             conversation = GetComponent<ConversationController>();
+            alwaysListening = PlayerPrefs.GetInt(
+                AlwaysListeningPreferenceKey,
+                alwaysListening ? 1 : 0) != 0;
         }
 
         private void Update()
@@ -95,12 +112,20 @@ namespace QuestMmdPlayer
             }
             previousTrackedPinch = trackedPinch;
 
+            if (alwaysListening && !IsMonitoring && Time.unscaledTime >= nextMonitorAttemptAt)
+            {
+                nextMonitorAttemptAt = Time.unscaledTime + 2f;
+                StartMonitoring();
+            }
+            if (IsMonitoring)
+            {
+                CaptureAvailableFrames();
+            }
             if (!IsRecording)
             {
                 return;
             }
 
-            CaptureAvailableFrames();
             if (Time.unscaledTime - recordingStartedAt >= maxRecordingSeconds)
             {
                 StopAndSend();
@@ -120,7 +145,7 @@ namespace QuestMmdPlayer
                 else
                 {
                     CancelRecording();
-                    Status = "No speech detected";
+                    Status = alwaysListening ? "Listening for speech" : "No speech detected";
                 }
             }
         }
@@ -129,6 +154,10 @@ namespace QuestMmdPlayer
         {
             trackedHand = false;
             if (!enableTrackedVoiceGesture)
+            {
+                return false;
+            }
+            if (!IsRecording && conversation != null && conversation.State != ConversationState.Idle)
             {
                 return false;
             }
@@ -163,9 +192,40 @@ namespace QuestMmdPlayer
             }
         }
 
-        public bool StartRecording()
+        public void ToggleAlwaysListening()
         {
-            if (IsRecording)
+            SetAlwaysListening(!alwaysListening);
+        }
+
+        public void SetAlwaysListening(bool enabled)
+        {
+            if (alwaysListening == enabled)
+            {
+                if (enabled && !IsMonitoring)
+                {
+                    StartMonitoring();
+                }
+                return;
+            }
+
+            alwaysListening = enabled;
+            PlayerPrefs.SetInt(AlwaysListeningPreferenceKey, enabled ? 1 : 0);
+            PlayerPrefs.Save();
+            if (enabled)
+            {
+                StartMonitoring();
+            }
+            else if (!IsRecording)
+            {
+                StopMicrophoneOnly();
+                Status = "Microphone ready";
+            }
+            Debug.Log($"[VoiceInput] Always listening {(enabled ? "enabled" : "disabled")}.", this);
+        }
+
+        public bool StartMonitoring()
+        {
+            if (IsMonitoring)
             {
                 return true;
             }
@@ -173,20 +233,20 @@ namespace QuestMmdPlayer
 #if UNITY_ANDROID && !UNITY_EDITOR
             if (!Permission.HasUserAuthorizedPermission(Permission.Microphone))
             {
-                Permission.RequestUserPermission(Permission.Microphone);
+                if (!permissionRequested)
+                {
+                    Permission.RequestUserPermission(Permission.Microphone);
+                    permissionRequested = true;
+                }
                 Status = "Microphone permission required";
+                Debug.LogWarning("[VoiceInput] Microphone permission is not available.", this);
                 return false;
             }
 #endif
-            conversation = conversation != null ? conversation : GetComponent<ConversationController>();
-            if (conversation == null || !conversation.CanStartVoiceInput)
-            {
-                Status = "Conversation backend offline";
-                return false;
-            }
             if (Microphone.devices == null || Microphone.devices.Length == 0)
             {
                 Status = "Microphone unavailable";
+                Debug.LogWarning("[VoiceInput] No microphone device is available.", this);
                 return false;
             }
 
@@ -195,12 +255,7 @@ namespace QuestMmdPlayer
             if (recordingClip == null)
             {
                 Status = "Microphone could not start";
-                return false;
-            }
-            if (!conversation.BeginVoiceInput())
-            {
-                StopMicrophoneOnly();
-                Status = "Conversation backend offline";
+                Debug.LogWarning("[VoiceInput] Microphone start failed.", this);
                 return false;
             }
 
@@ -208,12 +263,65 @@ namespace QuestMmdPlayer
             sourceChannels = Mathf.Max(1, recordingClip.channels);
             lastPosition = Mathf.Max(0, Microphone.GetPosition(deviceName));
             pendingMono.Clear();
+            preRollMono.Clear();
+            activationVoiceSeconds = 0f;
             InputLevel = 0f;
+            IsMonitoring = true;
+            Status = alwaysListening ? "Listening for speech" : "Microphone ready";
+            Debug.Log("[VoiceInput] Microphone monitor started.", this);
+            return true;
+        }
+
+        public bool StartRecording()
+        {
+            if (IsRecording)
+            {
+                return true;
+            }
+
+            conversation = conversation != null ? conversation : GetComponent<ConversationController>();
+            if (conversation == null || !conversation.CanStartVoiceInput)
+            {
+                Status = "Conversation backend offline";
+                Debug.LogWarning("[VoiceInput] Voice turn rejected because the backend is offline.", this);
+                return false;
+            }
+            if (!StartMonitoring())
+            {
+                return false;
+            }
+
+            pendingMono.Clear();
+            preRollMono.Clear();
+            activationVoiceSeconds = 0f;
+            return BeginActiveVoiceTurn(false);
+        }
+
+        private bool BeginActiveVoiceTurn(bool includePreRoll)
+        {
+            if (conversation == null || !conversation.CanStartVoiceInput || !conversation.BeginVoiceInput())
+            {
+                Status = "Conversation backend offline";
+                Debug.LogWarning("[VoiceInput] Backend rejected voice start.", this);
+                return false;
+            }
+
+            if (includePreRoll && preRollMono.Count > 0)
+            {
+                pendingMono.InsertRange(0, preRollMono);
+            }
+            preRollMono.Clear();
+            activationVoiceSeconds = 0f;
+            LastTurnPcmBytes = 0;
+            LastTurnChunkCount = 0;
             recordingStartedAt = Time.unscaledTime;
             lastVoiceAt = recordingStartedAt;
-            detectedSpeech = false;
+            detectedSpeech = includePreRoll;
             IsRecording = true;
             Status = "Recording voice";
+            Debug.Log(includePreRoll
+                ? "[VoiceInput] Speech detected; voice turn started."
+                : "[VoiceInput] Manual voice turn started.", this);
             return true;
         }
 
@@ -233,17 +341,22 @@ namespace QuestMmdPlayer
             {
                 CancelRecording();
                 Status = "Voice upload queue full";
+                Debug.LogWarning("[VoiceInput] PCM upload queue rejected a chunk.", this);
                 return;
             }
-            StopMicrophoneOnly();
-            if (conversation != null && conversation.EndVoiceInput())
+
+            var accepted = conversation != null && conversation.EndVoiceInput();
+            ResetActiveVoiceCapture();
+            if (accepted)
             {
-                Status = "Voice sent";
+                Status = alwaysListening ? "Waiting for reply | mic live" : "Voice sent";
+                Debug.Log("[VoiceInput] Voice end accepted; waiting for reply.", this);
             }
             else
             {
                 conversation?.CancelVoiceInput();
-                Status = "Voice send failed";
+                Status = alwaysListening ? "Listening for speech" : "Voice send failed";
+                Debug.LogWarning("[VoiceInput] Backend rejected voice end.", this);
             }
         }
 
@@ -254,14 +367,29 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            StopMicrophoneOnly();
             conversation?.CancelVoiceInput();
-            Status = "Recording cancelled";
+            ResetActiveVoiceCapture();
+            Status = alwaysListening ? "Listening for speech" : "Recording cancelled";
+            Debug.Log("[VoiceInput] Active voice turn cancelled.", this);
+        }
+
+        private void ResetActiveVoiceCapture()
+        {
+            IsRecording = false;
+            detectedSpeech = false;
+            activationVoiceSeconds = 0f;
+            pendingMono.Clear();
+            preRollMono.Clear();
+            InputLevel = 0f;
+            if (!alwaysListening)
+            {
+                StopMicrophoneOnly();
+            }
         }
 
         private void CaptureAvailableFrames()
         {
-            if (!IsRecording || recordingClip == null)
+            if (!IsMonitoring || recordingClip == null)
             {
                 return;
             }
@@ -314,15 +442,80 @@ namespace QuestMmdPlayer
         private void FlushFullChunks()
         {
             var sourceFrames = Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, chunkMilliseconds);
-            while (IsRecording && sourceFrames > 0 && pendingMono.Count >= sourceFrames)
+            var chunkSeconds = sourceSampleRate <= 0 ? 0f : sourceFrames / (float)sourceSampleRate;
+            while (IsMonitoring && sourceFrames > 0 && pendingMono.Count >= sourceFrames)
             {
-                if (!SendSourceFrames(sourceFrames))
+                if (IsRecording)
                 {
-                    CancelRecording();
-                    Status = "Voice upload queue full";
-                    return;
+                    if (!SendSourceFrames(sourceFrames))
+                    {
+                        CancelRecording();
+                        Status = "Voice upload queue full";
+                        Debug.LogWarning("[VoiceInput] PCM upload queue rejected a chunk.", this);
+                        return;
+                    }
+                    continue;
+                }
+
+                var level = CalculateRms(pendingMono, sourceFrames);
+                InputLevel = level;
+                var canActivate = alwaysListening && conversation != null &&
+                    conversation.State == ConversationState.Idle &&
+                    conversation.CanStartVoiceInput;
+                if (!canActivate)
+                {
+                    pendingMono.RemoveRange(0, sourceFrames);
+                    preRollMono.Clear();
+                    activationVoiceSeconds = 0f;
+                    Status = alwaysListening && conversation != null && conversation.State != ConversationState.Idle
+                        ? "Listening paused during reply"
+                        : alwaysListening ? "Listening | backend offline" : "Microphone ready";
+                    continue;
+                }
+
+                AppendPreRoll(sourceFrames);
+                if (level >= voiceSilenceRms)
+                {
+                    activationVoiceSeconds += chunkSeconds;
+                }
+                else
+                {
+                    activationVoiceSeconds = Mathf.Max(0f, activationVoiceSeconds - chunkSeconds * 2f);
+                }
+                Status = "Listening for speech";
+                if (activationVoiceSeconds >= voiceActivationSeconds && BeginActiveVoiceTurn(true))
+                {
+                    // The next loop iteration sends the pre-roll now inserted
+                    // into pendingMono; no silent backend turn is created.
+                    continue;
                 }
             }
+        }
+
+        private void AppendPreRoll(int frameCount)
+        {
+            preRollMono.AddRange(pendingMono.GetRange(0, frameCount));
+            pendingMono.RemoveRange(0, frameCount);
+            var maximum = Mathf.Max(frameCount, Mathf.RoundToInt(sourceSampleRate * voicePreRollSeconds));
+            if (preRollMono.Count > maximum)
+            {
+                preRollMono.RemoveRange(0, preRollMono.Count - maximum);
+            }
+        }
+
+        public static float CalculateRms(IList<float> samples, int count)
+        {
+            var usable = Mathf.Min(samples == null ? 0 : samples.Count, Mathf.Max(0, count));
+            if (usable <= 0)
+            {
+                return 0f;
+            }
+            var sumSquares = 0f;
+            for (var index = 0; index < usable; index++)
+            {
+                sumSquares += samples[index] * samples[index];
+            }
+            return Mathf.Sqrt(sumSquares / usable);
         }
 
         private bool FlushRemainder()
@@ -358,7 +551,13 @@ namespace QuestMmdPlayer
                 detectedSpeech = true;
                 lastVoiceAt = Time.unscaledTime;
             }
-            return conversation != null && conversation.PushVoiceAudio(pcm16);
+            var accepted = conversation != null && conversation.PushVoiceAudio(pcm16);
+            if (accepted)
+            {
+                LastTurnPcmBytes += pcm16.Length;
+                LastTurnChunkCount++;
+            }
+            return accepted;
         }
 
         public static bool ShouldStopForSilence(
@@ -388,13 +587,20 @@ namespace QuestMmdPlayer
             recordingClip = null;
             deviceName = null;
             pendingMono.Clear();
+            preRollMono.Clear();
+            activationVoiceSeconds = 0f;
             InputLevel = 0f;
             IsRecording = false;
+            IsMonitoring = false;
         }
 
         private void OnDisable()
         {
-            CancelRecording();
+            if (IsRecording)
+            {
+                conversation?.CancelVoiceInput();
+            }
+            StopMicrophoneOnly();
         }
     }
 }

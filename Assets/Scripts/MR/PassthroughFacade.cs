@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
 
@@ -20,6 +21,8 @@ namespace QuestMmdPlayer
         private ARSession arSession;
         private bool? lastCameraRunning;
         private float nextStatusLogTime;
+        private Coroutine restartRoutine;
+        private bool requestedEnabled;
 
         public event Action<PassthroughState> StateChanged;
         public PassthroughState State { get; private set; } = PassthroughState.Unavailable;
@@ -106,7 +109,14 @@ namespace QuestMmdPlayer
         public void SetEnabled(bool enabled)
         {
             EnsureCameraConfiguration();
-            if (arSession != null)
+            requestedEnabled = enabled;
+            if (restartRoutine != null)
+            {
+                StopCoroutine(restartRoutine);
+                restartRoutine = null;
+            }
+
+            if (arSession != null && !arSession.enabled)
             {
                 arSession.enabled = true;
             }
@@ -121,10 +131,20 @@ namespace QuestMmdPlayer
                 State = PassthroughState.Unavailable;
                 Status = provider.UnavailableReason;
             }
+            else if (!enabled)
+            {
+                provider.SetEnabled(false);
+                State = PassthroughState.Disabled;
+                Status = "Disabled";
+            }
             else
             {
-                State = provider.SetEnabled(enabled) ? PassthroughState.Enabled : PassthroughState.Disabled;
-                Status = State == PassthroughState.Enabled ? "Starting Quest camera" : "Disabled";
+                // Meta Quest can leave the passthrough stream in a stale mux state
+                // when ARCameraManager is toggled in the same frame. Restart it over
+                // two frames so the camera service receives a real stop/start pair.
+                State = PassthroughState.Enabled;
+                Status = "Restarting Quest camera";
+                restartRoutine = StartCoroutine(RestartCameraAfterToggle());
             }
 
             lastCameraRunning = null;
@@ -132,9 +152,53 @@ namespace QuestMmdPlayer
             StateChanged?.Invoke(State);
         }
 
+        private IEnumerator RestartCameraAfterToggle()
+        {
+            provider.SetEnabled(false);
+            if (cameraManager != null)
+            {
+                cameraManager.enabled = false;
+            }
+            yield return null;
+            yield return new WaitForSecondsRealtime(.06f);
+            if (!requestedEnabled)
+            {
+                restartRoutine = null;
+                yield break;
+            }
+
+            if (arSession != null)
+            {
+                arSession.enabled = false;
+            }
+            yield return null;
+            if (arSession != null)
+            {
+                arSession.enabled = true;
+            }
+            if (cameraManager != null)
+            {
+                cameraManager.enabled = true;
+            }
+            provider.SetEnabled(true);
+            Status = IsCameraSubsystemRunning ? "Enabled (Quest camera running)" : "Starting Quest camera";
+            restartRoutine = null;
+            StateChanged?.Invoke(State);
+        }
+
         public void Toggle()
         {
-            SetEnabled(State != PassthroughState.Enabled);
+            SetEnabled(State != PassthroughState.Enabled || !requestedEnabled);
+        }
+
+        private void OnDisable()
+        {
+            requestedEnabled = false;
+            if (restartRoutine != null)
+            {
+                StopCoroutine(restartRoutine);
+                restartRoutine = null;
+            }
         }
     }
 

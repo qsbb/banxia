@@ -16,6 +16,7 @@ namespace QuestMmdPlayer
         private float interactionStartedAt;
         private float nextInteractionUpdateAt;
         private float interruptedUntil;
+        private float errorUntil;
         private bool localReactionModeInitialized;
         private bool localReactionsEnabled = true;
         [SerializeField] private bool sendInteractionEvents;
@@ -29,9 +30,12 @@ namespace QuestMmdPlayer
         public string ReplyText => stateMachine.ReplyText;
         public string TransportStatus => transport == null ? "No conversation transport" : transport.Status;
         public string PresenterStatus => presenter == null ? "No avatar presenter" : presenter.Status;
+        public string LastErrorCode { get; private set; } = string.Empty;
+        public string LastErrorMessage => stateMachine.ErrorMessage;
         public float BufferedAudioSeconds => audioPlayer == null ? 0f : audioPlayer.BufferedSeconds;
         public bool CanStartVoiceInput => transport != null && transport.IsConnected;
         public bool IsRealBackendConnected => transport != null && !(transport is MockConversationTransport) && transport.IsConnected;
+        public bool IsUsingMockTransport => transport is MockConversationTransport;
         public string Status => $"{State} | {TransportStatus}";
 
         private void Awake()
@@ -84,6 +88,11 @@ namespace QuestMmdPlayer
                 stateMachine.ResetToIdle();
                 NotifyStateChanged();
             }
+            if (stateMachine.State == ConversationState.Error && Time.unscaledTime >= errorUntil)
+            {
+                stateMachine.ResetToIdle();
+                NotifyStateChanged();
+            }
             if (sendInteractionEvents && lastInteraction != HumanInteractionKind.None &&
                 Time.unscaledTime >= nextInteractionUpdateAt)
             {
@@ -123,17 +132,21 @@ namespace QuestMmdPlayer
             }
 
             CancelCurrentTurn(false);
+            audioPlayer?.BeginStream();
+            LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
             var turnId = stateMachine.Begin(string.Empty);
             NotifyStateChanged();
             if (transport.BeginAudioTurn(turnId))
             {
-                Debug.Log($"[Conversation] Voice input started: {turnId}");
+                Debug.Log("[Conversation] Voice input start accepted.", this);
                 return true;
             }
 
+            audioPlayer?.StopAndClear();
             stateMachine.ResetToIdle();
             NotifyStateChanged();
+            Debug.LogWarning("[Conversation] Voice input start rejected by transport.", this);
             return false;
         }
 
@@ -146,8 +159,12 @@ namespace QuestMmdPlayer
 
         public bool EndVoiceInput()
         {
-            return stateMachine.State == ConversationState.Listening &&
+            var accepted = stateMachine.State == ConversationState.Listening &&
                 transport != null && transport.EndAudioTurn(stateMachine.TurnId);
+            Debug.Log(accepted
+                ? "[Conversation] Voice input end accepted."
+                : "[Conversation] Voice input end rejected.", this);
+            return accepted;
         }
 
         public void CancelVoiceInput()
@@ -173,11 +190,13 @@ namespace QuestMmdPlayer
 
             var text = string.IsNullOrWhiteSpace(userText) ? "你好，能听见我吗？" : userText.Trim();
             CancelCurrentTurn(false);
+            audioPlayer?.BeginStream();
+            LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
             var turnId = stateMachine.Begin(text);
             NotifyStateChanged();
             transport.StartTurn(turnId, text);
-            Debug.Log($"[Conversation] Started {turnId}: {text}");
+            Debug.Log("[Conversation] Text turn started.", this);
         }
 
         public void Interrupt()
@@ -191,7 +210,7 @@ namespace QuestMmdPlayer
             audioPlayer?.StopAndClear();
             interruptedUntil = Time.unscaledTime + .3f;
             NotifyStateChanged();
-            Debug.Log($"[Conversation] Interrupted {stateMachine.TurnId}");
+            Debug.Log("[Conversation] Turn interrupted.", this);
         }
 
         public void SetTransport(IConversationTransport next)
@@ -212,6 +231,10 @@ namespace QuestMmdPlayer
             if (message == null)
             {
                 return;
+            }
+            if (message.Type != ConversationEventType.AudioChunk)
+            {
+                Debug.Log("[Conversation] Event received: " + message.Type, this);
             }
             if (message.Type == ConversationEventType.AvatarIntent && string.IsNullOrEmpty(message.TurnId))
             {
@@ -240,6 +263,7 @@ namespace QuestMmdPlayer
                         }
                         return;
                     }
+                    audioPlayer?.BeginStream();
                     stateMachine.BeginExternal(message.TurnId);
                     NotifyStateChanged();
                 }
@@ -256,12 +280,21 @@ namespace QuestMmdPlayer
                 case ConversationEventType.AudioChunk:
                     audioPlayer?.Enqueue(message.Pcm16, message.SampleRate);
                     break;
+                case ConversationEventType.ReplyEnd:
+                    audioPlayer?.MarkStreamCompleted();
+                    break;
                 case ConversationEventType.AvatarIntent:
                     presenter?.ApplyIntent(
                         message.Emotion, message.Gesture, message.LookAt, message.Intensity, message.DurationMs);
                     break;
                 case ConversationEventType.Error:
                     audioPlayer?.StopAndClear();
+                    LastErrorCode = string.IsNullOrWhiteSpace(message.ErrorCode)
+                        ? "conversation_error"
+                        : message.ErrorCode;
+                    errorUntil = Time.unscaledTime + 1.25f;
+                    Debug.LogWarning("[Conversation] Voice/transport error code=" + LastErrorCode +
+                        "; bridge=" + TransportStatus, this);
                     break;
             }
 
@@ -429,6 +462,7 @@ namespace QuestMmdPlayer
         {
             presenter?.SetConversationState(stateMachine.State);
             StateChanged?.Invoke(stateMachine.State);
+            Debug.Log("[Conversation] State changed: " + stateMachine.State, this);
         }
 
         private void SubscribeTransport()

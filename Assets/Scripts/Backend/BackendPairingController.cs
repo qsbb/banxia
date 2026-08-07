@@ -30,7 +30,7 @@ namespace QuestMmdPlayer
     public sealed class UnsupportedPairingCodeScanner : IPairingCodeScanner
     {
         public bool IsAvailable => false;
-        public string AvailabilityReason => "Meta OpenXR 1.0.2 cannot expose passthrough camera frames; use the 6-digit code.";
+        public string AvailabilityReason => "Camera scan requires the Unity 6 and MRUK 81+ camera stack; use host, port, and the 6-digit code.";
 
         public void BeginScan(Action<PairingScanResult> completed)
         {

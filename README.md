@@ -53,6 +53,12 @@
 
 设备上仍需人工确认：APK 安装、Quest 视野中的模型显示、真实房间 Passthrough、手势/手柄输入、帧率和发热。设备离线或低电量时只运行编辑器和构建检查。
 
+## 后端绑定
+
+在头显菜单“绑定后端”中只输入域名或 IP、端口和 6 位绑定码；应用会自动补全 `/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge`，无需输入或粘贴长路径。
+
+当前项目仍使用 Unity 2022 与 Meta OpenXR 1.x，没有可用的头显相机帧 API，因此不显示不可工作的扫码按钮。二维码相机绑定需要后续整体迁移到 Unity 6、MRUK 81+ 和 Meta Passthrough Camera API；在迁移完成前以手动短码绑定为正式流程。
+
 ## 导入任意用户 PMX
 
 调用：

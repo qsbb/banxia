@@ -17,12 +17,13 @@ namespace QuestMmdPlayer
         [SerializeField] private bool createConversationPrototype = true;
         [SerializeField] private bool createVrLocomotion = true;
         [SerializeField] private bool createAvatarPlacement = true;
-        [SerializeField] private Vector3 avatarStartPosition = new Vector3(0f, 0f, 2.2f);
+        [SerializeField] private Vector3 avatarStartPosition = new Vector3(0f, 0f, 1.35f);
 
         public AvatarController Avatar { get; private set; }
         public AvatarNaturalIdlePose IdlePose { get; private set; }
         public AvatarTouchInteraction TouchInteraction { get; private set; }
         public AvatarHumanInteraction HumanInteraction { get; private set; }
+        public QuestTrackedHandVisualizer TrackedHands { get; private set; }
         public QuestAvatarRayInteraction AvatarRayInteraction { get; private set; }
         public CompanionWorldMenu Menu { get; private set; }
         public ConversationController Conversation { get; private set; }
@@ -38,12 +39,14 @@ namespace QuestMmdPlayer
         public VmdActionLibrary VmdActions { get; private set; }
         public QuestQualitySettings Quality { get; private set; }
         public QuestFileImportService FileImport { get; private set; }
+        public RuntimeDebugLog DebugLog { get; private set; }
 
         private RuntimeMmdModelLoader runtimeMmdLoader;
         private AvatarController fallbackAvatar;
 
         private void Awake()
         {
+            DebugLog = gameObject.GetComponent<RuntimeDebugLog>() ?? gameObject.AddComponent<RuntimeDebugLog>();
             EnsureCamera();
             EnsureLight();
 
@@ -61,6 +64,7 @@ namespace QuestMmdPlayer
                 HumanInteraction = gameObject.GetComponent<AvatarHumanInteraction>() ?? gameObject.AddComponent<AvatarHumanInteraction>();
                 AvatarRayInteraction = gameObject.GetComponent<QuestAvatarRayInteraction>() ?? gameObject.AddComponent<QuestAvatarRayInteraction>();
             }
+            TrackedHands = gameObject.GetComponent<QuestTrackedHandVisualizer>() ?? gameObject.AddComponent<QuestTrackedHandVisualizer>();
             if (createConversationPrototype)
             {
                 Conversation = gameObject.GetComponent<ConversationController>() ?? gameObject.AddComponent<ConversationController>();
@@ -151,6 +155,11 @@ namespace QuestMmdPlayer
             }
 
             Avatar = avatar;
+            var avatarObject = avatar == null ? null : avatar.gameObject;
+            if (avatarObject != null)
+            {
+                avatarObject.SetActive(false);
+            }
             VmdActions?.BindModel(
                 runtimeMmdLoader == null ? null : runtimeMmdLoader.CurrentMmdModel,
                 runtimeMmdLoader == null || runtimeMmdLoader.CurrentModel == null
@@ -158,6 +167,10 @@ namespace QuestMmdPlayer
                     : runtimeMmdLoader.CurrentModel.transform,
                 avatar);
             BindInteractions();
+            if (avatarObject != null)
+            {
+                avatarObject.SetActive(true);
+            }
             Debug.Log($"[QuestMmdPlayer] PMX avatar ready: {avatar.name}");
         }
 
@@ -197,6 +210,7 @@ namespace QuestMmdPlayer
             {
                 HumanInteraction.Bind(Avatar);
             }
+            TrackedHands?.Bind(HumanInteraction);
             if (AvatarRayInteraction != null)
             {
                 AvatarRayInteraction.Bind(Avatar, HumanInteraction, Menu);

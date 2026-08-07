@@ -323,15 +323,15 @@ Meta NorthStar 为固定台词预烘焙嘴型，适合 Timeline；AstrBot 的回
 
 本轮已完成：
 
-- 语音采集初始等待改为 4 秒；只有检测到语音后才使用 1.15 秒尾静音结束，避免用户还没开口就自动结束。
-- 80 ms PCM 采集块在 HTTP 上传层合并为最多 16000 字节批次，降低请求数量；上传队列扩大到约 30 秒 PCM16。
+- 语音采集初始等待保持 4 秒；检测到语音后使用 1.8 秒尾静音结束。手追捏合默认不再启动录音，且对话非空闲时禁止手势开启新回合，避免误触发 interrupt。
+- 80 ms PCM 采集块在 HTTP 上传层合并为最多 16000 字节批次，降低请求数量；上传队列扩大到约 30 秒 PCM16。播放端新增 BeginStream/reply.end 生命周期，在明确结束前即使队列短暂耗尽也不停止 AudioSource，并保留 0.22 秒尾音安全窗口。
 - 触碰默认只做本地即时反馈，不再让 start/update/end 自动创建 LLM 回合；这切断了触碰导致“境”反复进入回复链路的前端来源。
-- VMD 播放期间暂停待机、呼吸、注视和触碰骨骼写入；物理预热提高到 1 秒。
+- VMD 播放期间暂停待机、呼吸、注视和触碰骨骼写入；物理预热提高到 1 秒。自然结束或手动停止时用 0.65 秒 smoothstep 将骨骼与表情从当前帧混合回绑定姿势，再恢复实时物理。
 - 呼吸不再平移胸骨或上下移动整个模型，改为 0.28 度胸部旋转，脚保持落地。
 - 新增 Quest Space Setup 房间语义读取和“扫描房间”，统计地面、座位、桌子、墙、门、窗；地面放置排除 Table 与 Seat。
 - “高度定位”改名为“站立校准”，明确其测量前提；高度仍由头显眼高、真实 Floor 和 0.11 m 眼顶估算得到。
-- APK 输出名改为 Builds/Banxia.apk，应用标签为“伴夏”。Android ID 已切换为 com.lingxi.banxia；这是全新应用身份，首次启动需要重新绑定。
-- 严格静态门禁通过，Unity EditMode 83/83 通过，Android/IL2CPP 构建成功并通过 APK v2 签名校验。
+- APK 输出名为 Builds/Banxia.apk，应用标签为“伴夏”，Android ID 为 com.lingxi.banxia。绑定页只收域名/IP:端口与 6 位码并自动补全插件路径；Unity 2022 当前不显示不可用的二维码相机按钮。
+- 角色面对用户改为 35–58 度的分段 turn-in-place：固定起止角度、smoothstep 缓动和轻微髋腿迈步姿态；VMD、预设动作或语义接触期间不抢骨骼。
 
 下一阶段按以下顺序进行：
 
@@ -343,3 +343,4 @@ Meta NorthStar 为固定台词预烘焙嘴型，适合 Timeline；AstrBot 的回
 6. 建立每模型 MotionCompatibilityProfile，记录动作根位移、脚底偏移、IK、物理预热、碰撞组和禁用动作；优先解决指定舞蹈穿模，再推广到其他 VMD。
 7. 如果 ARPlane 无法满足座位边界、遮挡和可行走区域，再引入 MRUK 的 Floor Zone、Scene Query、Environment Raycast 与 NavMesh 结构，不为单一功能升级整套 Unity。
 8. 在后端身份授权问题解决前，前端不自报自然人或人格；当前 protected_context_authorized=false 的根因是 trusted_platform_id_missing，与 STT 或 Unity 渲染无关。
+9. 二维码相机绑定仅在整体升级到 Unity 6、MRUK 81+、Horizon OS v74+ 与 Meta Passthrough Camera API 后实施；升级前维持手动短码绑定，不做假的相机扫码入口。

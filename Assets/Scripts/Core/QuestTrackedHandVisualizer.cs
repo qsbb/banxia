@@ -1,0 +1,356 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.XR;
+using UnityEngine.XR.Hands;
+
+namespace QuestMmdPlayer
+{
+    [DisallowMultipleComponent]
+    [DefaultExecutionOrder(10800)]
+    public sealed class QuestTrackedHandVisualizer : MonoBehaviour
+    {
+        private static readonly XRHandJointID[] JointIds =
+        {
+            XRHandJointID.Wrist, XRHandJointID.Palm,
+            XRHandJointID.ThumbMetacarpal, XRHandJointID.ThumbProximal, XRHandJointID.ThumbDistal, XRHandJointID.ThumbTip,
+            XRHandJointID.IndexMetacarpal, XRHandJointID.IndexProximal, XRHandJointID.IndexIntermediate, XRHandJointID.IndexDistal, XRHandJointID.IndexTip,
+            XRHandJointID.MiddleMetacarpal, XRHandJointID.MiddleProximal, XRHandJointID.MiddleIntermediate, XRHandJointID.MiddleDistal, XRHandJointID.MiddleTip,
+            XRHandJointID.RingMetacarpal, XRHandJointID.RingProximal, XRHandJointID.RingIntermediate, XRHandJointID.RingDistal, XRHandJointID.RingTip,
+            XRHandJointID.LittleMetacarpal, XRHandJointID.LittleProximal, XRHandJointID.LittleIntermediate, XRHandJointID.LittleDistal, XRHandJointID.LittleTip
+        };
+
+        private static readonly int[,] Segments =
+        {
+            { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 4 }, { 4, 5 },
+            { 1, 6 }, { 6, 7 }, { 7, 8 }, { 8, 9 }, { 9, 10 },
+            { 1, 11 }, { 11, 12 }, { 12, 13 }, { 13, 14 }, { 14, 15 },
+            { 1, 16 }, { 16, 17 }, { 17, 18 }, { 18, 19 }, { 19, 20 },
+            { 1, 21 }, { 21, 22 }, { 22, 23 }, { 23, 24 }, { 24, 25 }
+        };
+
+        [SerializeField] private bool showHands = true;
+        [SerializeField, Range(.006f, .035f)] private float jointRadius = .014f;
+        [SerializeField, Range(.002f, .014f)] private float lineWidth = .006f;
+        [SerializeField] private Material handMaterial;
+
+        private readonly List<XRHandSubsystem> subsystems = new List<XRHandSubsystem>();
+        private readonly HandVisual left = new HandVisual("Left", XRNode.LeftHand, new Color(.25f, .86f, .66f, .92f));
+        private readonly HandVisual right = new HandVisual("Right", XRNode.RightHand, new Color(.36f, .7f, 1f, .92f));
+        private AvatarHumanInteraction interaction;
+        private Transform trackingSpace;
+
+        public string Status { get; private set; } = "代理手等待 XR 输入";
+        public int TrackedHandCount { get; private set; }
+
+        private sealed class HandVisual
+        {
+            internal readonly string name;
+            internal readonly XRNode node;
+            internal readonly Color color;
+            internal GameObject root;
+            internal GameObject meshRoot;
+            internal GameObject[] joints;
+            internal Renderer[] proxyRenderers;
+            internal LineRenderer[] lines;
+            internal TrackedHandContactRelay[] relays;
+            internal Material runtimeMaterial;
+            internal bool ownsRuntimeMaterial;
+            internal bool visible;
+            internal bool pinching;
+
+            internal HandVisual(string name, XRNode node, Color color)
+            {
+                this.name = name;
+                this.node = node;
+                this.color = color;
+            }
+
+            internal void SetInteraction(AvatarHumanInteraction nextInteraction)
+            {
+                if (relays == null) return;
+                for (var index = 0; index < relays.Length; index++) relays[index].SetInteraction(nextInteraction);
+            }
+
+            internal void UpdateRelayState()
+            {
+                if (relays == null) return;
+                for (var index = 0; index < relays.Length; index++) relays[index].SetPinching(pinching);
+            }
+        }
+
+        public void Bind(AvatarHumanInteraction nextInteraction)
+        {
+            interaction = nextInteraction;
+            left.SetInteraction(interaction);
+            right.SetInteraction(interaction);
+        }
+
+        private void Awake()
+        {
+            BuildHand(left);
+            BuildHand(right);
+        }
+
+        private void Update()
+        {
+            trackingSpace = QuestXrInputUtility.ResolveTrackingSpace(trackingSpace);
+            var subsystem = FindRunningSubsystem();
+            var tracked = 0;
+            tracked += UpdateTrackedHand(left, subsystem == null ? default(XRHand) : subsystem.leftHand, subsystem != null);
+            tracked += UpdateTrackedHand(right, subsystem == null ? default(XRHand) : subsystem.rightHand, subsystem != null);
+            TrackedHandCount = tracked;
+            Status = tracked == 2 ? "双手追踪" : tracked == 1 ? "单手追踪" : "控制器或无 XR 输入";
+        }
+
+        private int UpdateTrackedHand(HandVisual visual, XRHand hand, bool hasSubsystem)
+        {
+            if (hasSubsystem && hand.isTracked && TryGetHandPose(hand, visual))
+            {
+                SetVisible(visual, true, visual.meshRoot != null);
+                return 1;
+            }
+
+            var device = InputDevices.GetDeviceAtXRNode(visual.node);
+            if (device.isValid && device.TryGetFeatureValue(CommonUsages.devicePosition, out var position))
+            {
+                var rotation = Quaternion.identity;
+                device.TryGetFeatureValue(CommonUsages.deviceRotation, out rotation);
+                SetControllerPose(visual, World(position), WorldRotation(rotation));
+                SetVisible(visual, true, false);
+                visual.pinching = device.TryGetFeatureValue(CommonUsages.trigger, out var trigger) && trigger > .78f;
+                visual.UpdateRelayState();
+                return 0;
+            }
+
+            SetVisible(visual, false, false);
+            return 0;
+        }
+
+        private bool TryGetHandPose(XRHand hand, HandVisual visual)
+        {
+            var found = 0;
+            for (var index = 0; index < JointIds.Length; index++)
+            {
+                if (!hand.GetJoint(JointIds[index]).TryGetPose(out var pose))
+                {
+                    continue;
+                }
+                visual.joints[index].transform.SetPositionAndRotation(World(pose.position), WorldRotation(pose.rotation));
+                found++;
+            }
+            if (found < 2)
+            {
+                return false;
+            }
+
+            var thumb = visual.joints[5].transform.position;
+            var indexTip = visual.joints[10].transform.position;
+            visual.pinching = Vector3.Distance(thumb, indexTip) <= .035f;
+            UpdateLines(visual);
+            visual.UpdateRelayState();
+            return true;
+        }
+
+        private void SetControllerPose(HandVisual visual, Vector3 palm, Quaternion rotation)
+        {
+            var forward = rotation * Vector3.forward;
+            var side = rotation * Vector3.right;
+            visual.joints[0].transform.SetPositionAndRotation(palm - forward * .035f, rotation);
+            visual.joints[1].transform.SetPositionAndRotation(palm, rotation);
+            for (var index = 2; index < visual.joints.Length; index++)
+            {
+                var finger = (index - 2) / 5;
+                var step = (index - 2) % 5;
+                var spread = (finger - 1.5f) * .022f;
+                var direction = forward + side * spread;
+                visual.joints[index].transform.SetPositionAndRotation(
+                    palm + direction.normalized * (.045f + step * .018f), rotation);
+            }
+            UpdateLines(visual);
+            visual.UpdateRelayState();
+        }
+
+        private void BuildHand(HandVisual visual)
+        {
+            visual.root = new GameObject("Tracked " + visual.name + " Proxy Hand");
+            visual.root.transform.SetParent(transform, false);
+            visual.meshRoot = LoadOfficialMesh(visual);
+            var body = visual.root.AddComponent<Rigidbody>();
+            body.isKinematic = true;
+            body.useGravity = false;
+            visual.joints = new GameObject[JointIds.Length];
+            visual.proxyRenderers = new Renderer[JointIds.Length];
+            visual.relays = new TrackedHandContactRelay[JointIds.Length];
+            visual.runtimeMaterial = handMaterial != null ? handMaterial : ResolveMaterial(visual.color);
+            visual.ownsRuntimeMaterial = handMaterial == null;
+            for (var index = 0; index < visual.joints.Length; index++)
+            {
+                var joint = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                joint.name = visual.name + " " + JointIds[index];
+                joint.transform.SetParent(visual.root.transform, false);
+                joint.transform.localScale = Vector3.one * (jointRadius * 2f);
+                var renderer = joint.GetComponent<Renderer>();
+                renderer.sharedMaterial = visual.runtimeMaterial;
+                visual.proxyRenderers[index] = renderer;
+                var collider = joint.GetComponent<SphereCollider>();
+                collider.isTrigger = true;
+                var relay = joint.AddComponent<TrackedHandContactRelay>();
+                relay.Initialize(interaction, visual.name);
+                visual.joints[index] = joint;
+                visual.relays[index] = relay;
+            }
+
+            visual.lines = new LineRenderer[Segments.GetLength(0)];
+            for (var index = 0; index < visual.lines.Length; index++)
+            {
+                var lineObject = new GameObject(visual.name + " Hand Bone " + index);
+                lineObject.transform.SetParent(visual.root.transform, false);
+                var line = lineObject.AddComponent<LineRenderer>();
+                line.useWorldSpace = true;
+                line.positionCount = 2;
+                line.startWidth = line.endWidth = lineWidth;
+                line.sharedMaterial = visual.runtimeMaterial;
+                line.enabled = false;
+                visual.lines[index] = line;
+            }
+            SetVisible(visual, false, false);
+        }
+
+        private GameObject LoadOfficialMesh(HandVisual visual)
+        {
+            var resourceName = visual.node == XRNode.LeftHand
+                ? "BanxiaHands/Prefabs/Left Hand Tracking"
+                : "BanxiaHands/Prefabs/Right Hand Tracking";
+            var prefab = Resources.Load<GameObject>(resourceName);
+            if (prefab == null)
+            {
+                Debug.LogWarning("[HandTracking] Official XR Hands mesh resource is unavailable; using proxy hand.", this);
+                return null;
+            }
+
+            var instance = Instantiate(prefab, transform);
+            instance.name = visual.name + " Official Hand Mesh";
+            instance.SetActive(false);
+            return instance;
+        }
+
+        private void UpdateOfficialMeshParent(HandVisual visual)
+        {
+            if (visual.meshRoot == null || trackingSpace == null || visual.meshRoot.transform.parent == trackingSpace)
+            {
+                return;
+            }
+            visual.meshRoot.transform.SetParent(trackingSpace, false);
+        }
+
+        private void UpdateLines(HandVisual visual)
+        {
+            for (var index = 0; index < visual.lines.Length; index++)
+            {
+                var start = visual.joints[Segments[index, 0]].transform.position;
+                var end = visual.joints[Segments[index, 1]].transform.position;
+                visual.lines[index].SetPosition(0, start);
+                visual.lines[index].SetPosition(1, end);
+            }
+        }
+
+        private void SetVisible(HandVisual visual, bool visible, bool showOfficialMesh)
+        {
+            visual.visible = visible && showHands;
+            visual.root.SetActive(visual.visible);
+            UpdateOfficialMeshParent(visual);
+            var showProxy = visual.visible && !showOfficialMesh;
+            if (visual.proxyRenderers != null)
+            {
+                for (var index = 0; index < visual.proxyRenderers.Length; index++)
+                {
+                    if (visual.proxyRenderers[index] != null)
+                    {
+                        visual.proxyRenderers[index].enabled = showProxy;
+                    }
+                }
+            }
+            if (visual.meshRoot != null)
+            {
+                visual.meshRoot.SetActive(visual.visible && showOfficialMesh);
+            }
+        }
+
+        private XRHandSubsystem FindRunningSubsystem()
+        {
+            for (var index = 0; index < subsystems.Count; index++)
+            {
+                if (subsystems[index] != null && subsystems[index].running) return subsystems[index];
+            }
+            subsystems.Clear();
+            SubsystemManager.GetSubsystems(subsystems);
+            for (var index = 0; index < subsystems.Count; index++)
+            {
+                if (subsystems[index] != null && subsystems[index].running) return subsystems[index];
+            }
+            return null;
+        }
+
+        private Vector3 World(Vector3 value)
+        {
+            return trackingSpace == null ? value : trackingSpace.TransformPoint(value);
+        }
+
+        private Quaternion WorldRotation(Quaternion value)
+        {
+            return trackingSpace == null ? value : trackingSpace.rotation * value;
+        }
+
+        private Material ResolveMaterial(Color color)
+        {
+            if (handMaterial != null) return handMaterial;
+            var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
+            var material = new Material(shader) { color = color };
+            return material;
+        }
+
+        private void OnDestroy()
+        {
+            DestroyHand(left);
+            DestroyHand(right);
+        }
+
+        private static void DestroyHand(HandVisual visual)
+        {
+            if (visual.root != null) Destroy(visual.root);
+            if (visual.meshRoot != null) Destroy(visual.meshRoot);
+            if (visual.ownsRuntimeMaterial && visual.runtimeMaterial != null) Destroy(visual.runtimeMaterial);
+        }
+    }
+
+    internal sealed class TrackedHandContactRelay : MonoBehaviour
+    {
+        private AvatarHumanInteraction interaction;
+        private string handName;
+        private bool pinching;
+
+        public void Initialize(AvatarHumanInteraction nextInteraction, string nextHandName)
+        {
+            interaction = nextInteraction;
+            handName = nextHandName;
+        }
+
+        public void SetInteraction(AvatarHumanInteraction nextInteraction)
+        {
+            interaction = nextInteraction;
+        }
+
+        public void SetPinching(bool value)
+        {
+            pinching = value;
+        }
+
+        private void OnTriggerStay(Collider other)
+        {
+            var proxy = other.GetComponent<AvatarContactProxy>();
+            if (proxy == null || interaction == null) return;
+            interaction.ReportTrackedHandContact(proxy.Region, pinching, transform.position);
+        }
+    }
+}
