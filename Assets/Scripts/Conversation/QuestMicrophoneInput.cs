@@ -44,7 +44,7 @@ namespace QuestMmdPlayer
         private bool detectedSpeech;
         private CompanionWorldMenu menu;
         private AvatarTouchInteraction touchInteraction;
-        private float activationVoiceSeconds;
+        private VoiceActivityGate activityGate;
         private float nextMonitorAttemptAt;
         private bool permissionRequested;
 
@@ -54,7 +54,10 @@ namespace QuestMmdPlayer
         public float InputLevel { get; private set; }
         public int LastTurnPcmBytes { get; private set; }
         public int LastTurnChunkCount { get; private set; }
-        public string DiagnosticStatus => $"{Status} | level {InputLevel:F3} | chunks {LastTurnChunkCount} | pcm {LastTurnPcmBytes} B";
+        public float ActivationThreshold => activityGate == null ? voiceSilenceRms : activityGate.Threshold;
+        public float LastTurnCaptureSeconds { get; private set; }
+        public string DiagnosticStatus => $"{Status} | level {InputLevel:F3}/{ActivationThreshold:F3} | " +
+            $"chunks {LastTurnChunkCount} | pcm {LastTurnPcmBytes} B | capture {LastTurnCaptureSeconds:F2}s";
         public string Status { get; private set; } = "Microphone ready";
         public string ShortStatus => IsRecording ? "REC" : IsMonitoring && alwaysListening ? "LIVE" :
             Status.StartsWith("Microphone ready") ? "READY" : "OFF";
@@ -70,6 +73,7 @@ namespace QuestMmdPlayer
             alwaysListening = PlayerPrefs.GetInt(
                 AlwaysListeningPreferenceKey,
                 alwaysListening ? 1 : 0) != 0;
+            RecreateActivityGate();
         }
 
         private void Update()
@@ -264,7 +268,7 @@ namespace QuestMmdPlayer
             lastPosition = Mathf.Max(0, Microphone.GetPosition(deviceName));
             pendingMono.Clear();
             preRollMono.Clear();
-            activationVoiceSeconds = 0f;
+            RecreateActivityGate();
             InputLevel = 0f;
             IsMonitoring = true;
             Status = alwaysListening ? "Listening for speech" : "Microphone ready";
@@ -293,7 +297,7 @@ namespace QuestMmdPlayer
 
             pendingMono.Clear();
             preRollMono.Clear();
-            activationVoiceSeconds = 0f;
+            activityGate?.ResetActivation();
             return BeginActiveVoiceTurn(false);
         }
 
@@ -311,13 +315,14 @@ namespace QuestMmdPlayer
                 pendingMono.InsertRange(0, preRollMono);
             }
             preRollMono.Clear();
-            activationVoiceSeconds = 0f;
+            activityGate?.ResetActivation();
             LastTurnPcmBytes = 0;
             LastTurnChunkCount = 0;
             recordingStartedAt = Time.unscaledTime;
             lastVoiceAt = recordingStartedAt;
             detectedSpeech = includePreRoll;
             IsRecording = true;
+            LastTurnCaptureSeconds = 0f;
             Status = "Recording voice";
             Debug.Log(includePreRoll
                 ? "[VoiceInput] Speech detected; voice turn started."
@@ -345,6 +350,7 @@ namespace QuestMmdPlayer
                 return;
             }
 
+            LastTurnCaptureSeconds = Mathf.Max(0f, Time.unscaledTime - recordingStartedAt);
             var accepted = conversation != null && conversation.EndVoiceInput();
             ResetActiveVoiceCapture();
             if (accepted)
@@ -377,7 +383,7 @@ namespace QuestMmdPlayer
         {
             IsRecording = false;
             detectedSpeech = false;
-            activationVoiceSeconds = 0f;
+            activityGate?.ResetActivation();
             pendingMono.Clear();
             preRollMono.Clear();
             InputLevel = 0f;
@@ -466,7 +472,7 @@ namespace QuestMmdPlayer
                 {
                     pendingMono.RemoveRange(0, sourceFrames);
                     preRollMono.Clear();
-                    activationVoiceSeconds = 0f;
+                    activityGate?.ResetActivation();
                     Status = alwaysListening && conversation != null && conversation.State != ConversationState.Idle
                         ? "Listening paused during reply"
                         : alwaysListening ? "Listening | backend offline" : "Microphone ready";
@@ -474,16 +480,9 @@ namespace QuestMmdPlayer
                 }
 
                 AppendPreRoll(sourceFrames);
-                if (level >= voiceSilenceRms)
-                {
-                    activationVoiceSeconds += chunkSeconds;
-                }
-                else
-                {
-                    activationVoiceSeconds = Mathf.Max(0f, activationVoiceSeconds - chunkSeconds * 2f);
-                }
+                var activate = activityGate != null && activityGate.Observe(level, chunkSeconds, true);
                 Status = "Listening for speech";
-                if (activationVoiceSeconds >= voiceActivationSeconds && BeginActiveVoiceTurn(true))
+                if (activate && BeginActiveVoiceTurn(true))
                 {
                     // The next loop iteration sends the pre-roll now inserted
                     // into pendingMono; no silent backend turn is created.
@@ -546,7 +545,7 @@ namespace QuestMmdPlayer
                 sumSquares += source[index] * source[index];
             }
             InputLevel = Mathf.Sqrt(sumSquares / source.Count);
-            if (InputLevel >= voiceSilenceRms)
+            if (activityGate == null ? InputLevel >= voiceSilenceRms : activityGate.IsSpeech(InputLevel))
             {
                 detectedSpeech = true;
                 lastVoiceAt = Time.unscaledTime;
@@ -588,10 +587,18 @@ namespace QuestMmdPlayer
             deviceName = null;
             pendingMono.Clear();
             preRollMono.Clear();
-            activationVoiceSeconds = 0f;
+            activityGate?.Reset();
             InputLevel = 0f;
             IsRecording = false;
             IsMonitoring = false;
+        }
+
+        private void RecreateActivityGate()
+        {
+            activityGate = new VoiceActivityGate(
+                voiceSilenceRms,
+                Mathf.Max(voiceSilenceRms, Mathf.Min(.024f, voiceSilenceRms * 3f)),
+                voiceActivationSeconds);
         }
 
         private void OnDisable()

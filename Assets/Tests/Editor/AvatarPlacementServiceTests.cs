@@ -1,6 +1,8 @@
 using NUnit.Framework;
+using System.Collections.Generic;
 using Unity.XR.CoreUtils;
 using UnityEngine;
+using UnityEngine.XR.ARSubsystems;
 
 namespace QuestMmdPlayer.Tests
 {
@@ -188,6 +190,129 @@ namespace QuestMmdPlayer.Tests
             {
                 Object.DestroyImmediate(avatarObject);
             }
+        }
+
+        [Test]
+        public void SavedSurfaceRestorePreservesAvatarOffsetWhenPlaneRefines()
+        {
+            var originalSurface = Surface(
+                "stable-floor",
+                PlaneClassification.Floor,
+                new Vector3(0f, 0f, 1f),
+                new Vector2(3f, 2f));
+            var avatarPose = new Pose(new Vector3(.25f, 0f, 1.5f), Quaternion.Euler(0f, 180f, 0f));
+            var origin = new Pose(Vector3.zero, Quaternion.identity);
+            var bookmark = AvatarPlacementService.CreatePlacementBookmark(originalSurface, avatarPose, origin);
+            var refinedSurface = Surface(
+                "stable-floor",
+                PlaneClassification.Floor,
+                new Vector3(.1f, .02f, 1.05f),
+                new Vector2(3.05f, 2f));
+
+            Assert.That(AvatarPlacementService.TryResolvePlacementBookmark(
+                bookmark,
+                new[] { refinedSurface },
+                origin,
+                .75f,
+                out var restored,
+                out var matched), Is.True);
+            Assert.That(matched.Id, Is.EqualTo("stable-floor"));
+            Assert.That(
+                Vector3.Distance(restored.position, new Vector3(.35f, .02f, 1.55f)),
+                Is.LessThan(.0001f));
+            Assert.That(Quaternion.Angle(restored.rotation, avatarPose.rotation), Is.LessThan(.001f));
+        }
+
+        [Test]
+        public void SavedSurfaceCanReacquireNearbyRenamedPlaneByLocalSignature()
+        {
+            var originalSurface = Surface(
+                "old-id",
+                PlaneClassification.Floor,
+                new Vector3(1f, 0f, 2f),
+                new Vector2(3f, 2f));
+            var avatarPose = new Pose(new Vector3(1.4f, 0f, 2.2f), Quaternion.identity);
+            var origin = new Pose(new Vector3(.5f, 0f, .5f), Quaternion.identity);
+            var bookmark = AvatarPlacementService.CreatePlacementBookmark(originalSurface, avatarPose, origin);
+            var renamedSurface = Surface(
+                "new-id",
+                PlaneClassification.Floor,
+                new Vector3(1.08f, 0f, 2.04f),
+                new Vector2(3.04f, 2.02f));
+
+            Assert.That(AvatarPlacementService.TryResolvePlacementBookmark(
+                bookmark,
+                new[] { renamedSurface },
+                origin,
+                .75f,
+                out _,
+                out var matched), Is.True);
+            Assert.That(matched.Id, Is.EqualTo("new-id"));
+        }
+
+        [Test]
+        public void SavedSurfaceDoesNotJumpToUnrelatedRoomPlane()
+        {
+            var originalSurface = Surface(
+                "old-id",
+                PlaneClassification.Floor,
+                Vector3.zero,
+                new Vector2(3f, 2f));
+            var bookmark = AvatarPlacementService.CreatePlacementBookmark(
+                originalSurface,
+                new Pose(new Vector3(0f, 0f, 1f), Quaternion.identity),
+                new Pose(Vector3.zero, Quaternion.identity));
+            var unrelated = new List<RoomSurfaceObservation>
+            {
+                Surface("far-floor", PlaneClassification.Floor, new Vector3(4f, 0f, 4f), new Vector2(3f, 2f)),
+                Surface("near-seat", PlaneClassification.Seat, new Vector3(0f, .45f, 0f), new Vector2(1f, .6f))
+            };
+
+            Assert.That(AvatarPlacementService.TryResolvePlacementBookmark(
+                bookmark,
+                unrelated,
+                new Pose(Vector3.zero, Quaternion.identity),
+                .75f,
+                out _,
+                out _), Is.False);
+        }
+
+        [Test]
+        public void CorruptSavedPlacementFailsClosed()
+        {
+            var bookmark = new AvatarPlacementBookmark
+            {
+                Version = 1,
+                SurfaceId = "floor",
+                SurfaceClassification = (int)PlaneClassification.Floor,
+                SurfacePositionInOrigin = new Vector3(float.NaN, 0f, 0f),
+                SurfaceRotationInOrigin = Quaternion.identity,
+                SurfaceSize = Vector2.one,
+                AvatarPositionRelativeToSurface = Vector3.zero,
+                AvatarRotationRelativeToSurface = Quaternion.identity
+            };
+
+            Assert.That(AvatarPlacementService.IsValidPlacementBookmark(bookmark), Is.False);
+            Assert.That(AvatarPlacementService.TryResolvePlacementBookmark(
+                bookmark,
+                new[] { Surface("floor", PlaneClassification.Floor, Vector3.zero, Vector2.one) },
+                new Pose(Vector3.zero, Quaternion.identity),
+                .75f,
+                out _,
+                out _), Is.False);
+        }
+
+        private static RoomSurfaceObservation Surface(
+            string id,
+            PlaneClassification classification,
+            Vector3 position,
+            Vector2 size)
+        {
+            return new RoomSurfaceObservation(
+                id,
+                classification,
+                new Pose(position, Quaternion.identity),
+                size);
         }
     }
 }

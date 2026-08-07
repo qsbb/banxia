@@ -394,6 +394,7 @@ namespace QuestMmdPlayer
     {
         [SerializeField] private VmdActionLimits limits = new VmdActionLimits();
         [SerializeField, Range(1f, 12f)] private float frameBudgetMilliseconds = 6f;
+        [SerializeField, Range(.25f, 2f)] private float endPoseHoldSeconds = 1f;
         [SerializeField, Range(.35f, 1.2f)] private float exitBlendSeconds = .65f;
         [SerializeField, Range(.05f, 1.2f)] private float physicsWarmUpDuration = .2f;
 
@@ -429,6 +430,8 @@ namespace QuestMmdPlayer
         private bool physicsArbitrationActive;
         private bool previousTransformEnabled;
         private bool previousLivePhysics;
+        private bool endPoseHoldActive;
+        private float endPoseHoldClock;
         private bool blendOutActive;
         private float blendOutClock;
 
@@ -443,6 +446,7 @@ namespace QuestMmdPlayer
         public string CurrentActionId { get; private set; } = string.Empty;
         public bool IsLoading { get; private set; }
         public bool IsPlaying { get; private set; }
+        public bool IsHoldingEndPose => endPoseHoldActive;
         public bool IsBlendingOut => blendOutActive;
         public int PreparedActionCount => preparedActions.Count;
 
@@ -828,6 +832,18 @@ namespace QuestMmdPlayer
                 UpdateBlendOut();
                 return;
             }
+            if (endPoseHoldActive)
+            {
+                // Keep writing the final frame so later animation systems cannot
+                // expose the imported MMD default pose during the hold.
+                ApplyPlaybackPose(playbackDuration);
+                endPoseHoldClock += Time.deltaTime;
+                if (IsEndPoseHoldComplete(endPoseHoldClock, endPoseHoldSeconds))
+                {
+                    BeginBlendOut();
+                }
+                return;
+            }
             if (!IsPlaying)
             {
                 return;
@@ -837,8 +853,24 @@ namespace QuestMmdPlayer
             ApplyPlaybackPose(Mathf.Min(playbackClock, playbackDuration));
             if (playbackClock >= playbackDuration)
             {
-                BeginBlendOut();
+                BeginEndPoseHold();
             }
+        }
+
+        private void BeginEndPoseHold()
+        {
+            if (endPoseHoldActive)
+            {
+                return;
+            }
+            if (!IsPlaying || (boneBindings.Length == 0 && morphBindings.Length == 0))
+            {
+                CompleteReturnToIdle();
+                return;
+            }
+
+            endPoseHoldActive = true;
+            endPoseHoldClock = 0f;
         }
 
         private void ApplyPlaybackPose(float time)
@@ -873,6 +905,8 @@ namespace QuestMmdPlayer
             {
                 return;
             }
+            endPoseHoldActive = false;
+            endPoseHoldClock = 0f;
             if (!IsPlaying || (boneBindings.Length == 0 && morphBindings.Length == 0))
             {
                 CompleteReturnToIdle();
@@ -926,6 +960,10 @@ namespace QuestMmdPlayer
             return value * value * (3f - 2f * value);
         }
 
+        public static bool IsEndPoseHoldComplete(float elapsedSeconds, float holdSeconds)
+        {
+            return elapsedSeconds >= Mathf.Max(0f, holdSeconds);
+        }
         private void CompleteReturnToIdle()
         {
             var hadPlayback = IsPlaying || blendOutActive || boneBindings.Length > 0 || morphBindings.Length > 0;
@@ -934,6 +972,8 @@ namespace QuestMmdPlayer
             morphBindings = Array.Empty<MorphBinding>();
             playbackClock = 0f;
             playbackDuration = 0f;
+            endPoseHoldClock = 0f;
+            endPoseHoldActive = false;
             blendOutClock = 0f;
             blendOutActive = false;
             CurrentActionId = string.Empty;

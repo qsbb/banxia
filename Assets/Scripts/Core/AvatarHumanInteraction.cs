@@ -77,13 +77,14 @@ namespace QuestMmdPlayer
 
         sealed class BoneSet
         {
-            public Transform head, leftUpper, leftLower, leftHand, rightUpper, rightLower, rightHand;
+            public Transform upperBody, head, leftUpper, leftLower, leftHand, rightUpper, rightLower, rightHand;
             public Vector3 headScale = Vector3.one;
-            public Quaternion headRotation, leftUpperRotation, leftLowerRotation, leftHandRotation;
+            public Quaternion upperBodyRotation, headRotation, leftUpperRotation, leftLowerRotation, leftHandRotation;
             public Quaternion rightUpperRotation, rightLowerRotation, rightHandRotation;
 
             public void CapturePose()
             {
+                if (upperBody != null) upperBodyRotation = upperBody.localRotation;
                 if (head != null) headRotation = head.localRotation;
                 if (leftUpper != null) leftUpperRotation = leftUpper.localRotation;
                 if (leftLower != null) leftLowerRotation = leftLower.localRotation;
@@ -105,6 +106,7 @@ namespace QuestMmdPlayer
 
             public void ResetPose()
             {
+                if (upperBody != null) upperBody.localRotation = upperBodyRotation;
                 if (head != null) { head.localRotation = headRotation; head.localScale = headScale; }
                 ResetArms();
             }
@@ -522,12 +524,37 @@ namespace QuestMmdPlayer
 
         void ApplyBones(HumanInteractionKind kind, float amount)
         {
+            var settle = Mathf.Sin(Time.unscaledTime * 2.15f);
+            if (bones.upperBody != null)
+            {
+                var bodyOffset = kind == HumanInteractionKind.HeadPat
+                    ? Quaternion.Euler(-1.2f, 0f, 1.4f + settle * .25f)
+                    : kind == HumanInteractionKind.CheekPinch
+                        ? Quaternion.Euler(0f, -1.8f, -1.2f)
+                        : Quaternion.identity;
+                bones.upperBody.localRotation = Quaternion.Slerp(
+                    bones.upperBodyRotation,
+                    bones.upperBodyRotation * bodyOffset,
+                    amount);
+            }
+
             if (bones.head != null)
             {
-                var offset = kind == HumanInteractionKind.HeadPat ? Quaternion.Euler(-8f, 0f, 7f) : kind == HumanInteractionKind.CheekPinch ? Quaternion.Euler(0f, -8f, -7f) : Quaternion.identity;
-                bones.head.localRotation = Quaternion.Slerp(bones.headRotation, bones.headRotation * offset, amount);
-                var squeezed = Vector3.Scale(bones.headScale, new Vector3(1.035f, .965f, 1.02f));
-                bones.head.localScale = kind == HumanInteractionKind.CheekPinch ? Vector3.Lerp(bones.headScale, squeezed, amount) : bones.headScale;
+                var offset = kind == HumanInteractionKind.HeadPat
+                    ? Quaternion.Euler(-4.5f + settle * .65f, 0f, 3.5f)
+                    : kind == HumanInteractionKind.CheekPinch
+                        ? Quaternion.Euler(0f, -4.5f, -3.5f)
+                        : Quaternion.identity;
+                bones.head.localRotation = Quaternion.Slerp(
+                    bones.headRotation,
+                    bones.headRotation * offset,
+                    amount);
+                var squeezed = Vector3.Scale(
+                    bones.headScale,
+                    new Vector3(1.015f, .985f, 1.01f));
+                bones.head.localScale = kind == HumanInteractionKind.CheekPinch
+                    ? Vector3.Lerp(bones.headScale, squeezed, amount)
+                    : bones.headScale;
                 scaleChanged = kind == HumanInteractionKind.CheekPinch && amount > .001f;
             }
 
@@ -551,7 +578,6 @@ namespace QuestMmdPlayer
             var pole = upper.position - avatar.transform.up + side * .2f;
             SolveTwoBoneIk(upper, lower, hand, smoothedHandshakeTarget, pole, maxArmStretch, amount);
         }
-
         public static bool SolveTwoBoneIk(Transform upper, Transform lower, Transform hand, Vector3 destination, Vector3 pole, float stretch = .98f, float weight = 1f)
         {
             if (upper == null || lower == null || hand == null || weight <= 0f) return false;
@@ -599,9 +625,9 @@ namespace QuestMmdPlayer
             for (var i = 0; i < morphs.Count; i++)
             {
                 var morph = morphs[i];
-                var add = kind == HumanInteractionKind.Handshake && morph.kind == 0 ? 35f :
-                    kind == HumanInteractionKind.HeadPat ? (morph.kind == 0 ? 48f : morph.kind == 1 ? 18f : 0f) :
-                    kind == HumanInteractionKind.CheekPinch ? (morph.kind == 1 ? 58f : morph.kind == 2 ? 22f : 0f) : 0f;
+                var add = kind == HumanInteractionKind.Handshake && morph.kind == 0 ? 28f :
+                    kind == HumanInteractionKind.HeadPat ? (morph.kind == 0 ? 36f : morph.kind == 1 ? 12f : morph.kind == 3 ? 38f : 0f) :
+                    kind == HumanInteractionKind.CheekPinch ? (morph.kind == 1 ? 45f : morph.kind == 2 ? 14f : morph.kind == 3 ? 16f : 0f) : 0f;
                 morph.renderer.SetBlendShapeWeight(morph.index, Mathf.Clamp(morph.baseWeight + add * amount, 0f, 100f));
             }
         }
@@ -615,6 +641,7 @@ namespace QuestMmdPlayer
         {
             var result = new BoneSet();
             var all = target.GetComponentsInChildren<MMDBoneTransform>(true);
+            result.upperBody = Find(all, "upperbody", "spine", "\u4E0A\u534A\u8EAB", "\u4E0A\u534A\u8EAB2");
             result.head = Find(all, "head", "\u982D", "\u5934");
             result.leftUpper = Find(all, "leftupperarm", "upperarm_l", "\u5DE6\u8155");
             result.leftLower = Find(all, "leftlowerarm", "lowerarm_l", "\u5DE6\u3072\u3058", "\u5DE6\u8098");
@@ -653,7 +680,8 @@ namespace QuestMmdPlayer
                     var value = Normalize(mesh.GetBlendShapeName(i));
                     var kind = value.Contains("smile") || value.Contains("happy") || value.Contains("\u7B11") || value.Contains("\u306B\u3053") ? 0 :
                         value.Contains("blush") || value.Contains("shy") || value.Contains("\u7167\u308C") || value.Contains("\u8D64\u9762") ? 1 :
-                        value.Contains("surprise") || value.Contains("shock") || value.Contains("\u9A5A") || value.Contains("\u60CA") ? 2 : -1;
+                        value.Contains("surprise") || value.Contains("shock") || value.Contains("\u9A5A") || value.Contains("\u60CA") ? 2 :
+                        value.Contains("blink") || value.Contains("eyeclose") || value.Contains("eyesclosed") || value.Contains("\u307E\u3070\u305F\u304D") || value.Contains("\u76EE\u9589") ? 3 : -1;
                     if (kind >= 0) morphs.Add(new Morph { renderer = renderers[r], index = i, kind = kind, baseWeight = renderers[r].GetBlendShapeWeight(i) });
                 }
             }

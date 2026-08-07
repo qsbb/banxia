@@ -41,7 +41,11 @@ namespace QuestMmdPlayer
         private int audioSequence;
         private int queuedInputAudioBytes;
         private const int AudioUploadBatchBytes = 16000;
-        private const int MaxQueuedInputAudioBytes = 960000;
+        private const int MaxQueuedInputAudioBytes = 1048576;
+        private int uploadedInputAudioBytes;
+        private int uploadedInputBatchCount;
+        private float audioUploadStartedAt;
+        private float audioEndRequestedAt = -1f;
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
@@ -51,6 +55,11 @@ namespace QuestMmdPlayer
         public string ConfigurationPath => Path.Combine(Application.persistentDataPath, configurationFileName);
         public string ConfiguredBaseUrl => settings == null ? string.Empty : settings.base_url ?? string.Empty;
         public string Status { get; private set; } = "AstrBot configuration not loaded";
+        public int QueuedInputAudioBytes => queuedInputAudioBytes;
+        public bool AudioUploadInProgress => !string.IsNullOrEmpty(audioUploadTurnId);
+        public string AudioUploadDiagnosticStatus => AudioUploadInProgress
+            ? $"audio queued={queuedInputAudioBytes} B uploaded={uploadedInputAudioBytes} B batches={uploadedInputBatchCount}"
+            : "audio upload idle";
 
         private void Awake()
         {
@@ -139,6 +148,10 @@ namespace QuestMmdPlayer
             audioEndRequested = false;
             audioSequence = 0;
             queuedInputAudioBytes = 0;
+            uploadedInputAudioBytes = 0;
+            uploadedInputBatchCount = 0;
+            audioUploadStartedAt = Time.unscaledTime;
+            audioEndRequestedAt = -1f;
             audioUploadRoutine = StartCoroutine(UploadAudioTurn(turnId));
             Status = "Recording voice for AstrBot";
             return true;
@@ -180,6 +193,7 @@ namespace QuestMmdPlayer
             }
 
             audioEndRequested = true;
+            audioEndRequestedAt = Time.unscaledTime;
             Status = "Uploading voice to AstrBot";
             return true;
         }
@@ -438,6 +452,8 @@ namespace QuestMmdPlayer
                         yield break;
                     }
                     audioSequence++;
+                    uploadedInputAudioBytes += pcm16.Length;
+                    uploadedInputBatchCount++;
                     continue;
                 }
 
@@ -458,6 +474,10 @@ namespace QuestMmdPlayer
                             TurnId = turnId
                         });
                         Status = "AstrBot is processing voice";
+                        var now = Time.unscaledTime;
+                        Debug.Log($"[AstrBotBridge] Voice upload complete: {uploadedInputAudioBytes} B in " +
+                            $"{uploadedInputBatchCount} batches, stream {Mathf.Max(0f, now - audioUploadStartedAt):F2}s, " +
+                            $"final flush {(audioEndRequestedAt < 0f ? 0f : Mathf.Max(0f, now - audioEndRequestedAt)):F2}s.");
                     }
                     ClearAudioUpload(turnId);
                     yield break;
@@ -544,6 +564,9 @@ namespace QuestMmdPlayer
             audioEndRequested = false;
             audioSequence = 0;
             queuedInputAudioBytes = 0;
+            uploadedInputAudioBytes = 0;
+            uploadedInputBatchCount = 0;
+            audioEndRequestedAt = -1f;
             outgoingAudioChunks.Clear();
         }
 
@@ -559,6 +582,9 @@ namespace QuestMmdPlayer
             audioEndRequested = false;
             audioSequence = 0;
             queuedInputAudioBytes = 0;
+            uploadedInputAudioBytes = 0;
+            uploadedInputBatchCount = 0;
+            audioEndRequestedAt = -1f;
             outgoingAudioChunks.Clear();
         }
 

@@ -53,6 +53,28 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void VoiceInputCannotImplicitlyInterruptAReply()
+        {
+            owner = new GameObject("No accidental barge-in test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.StartConversation("hello");
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AudioChunk,
+                TurnId = controller.TurnId,
+                Pcm16 = new short[] { 10, -10 },
+                SampleRate = 24000
+            });
+
+            Assert.AreEqual(ConversationState.Speaking, controller.State);
+            Assert.IsFalse(controller.CanStartVoiceInput);
+            Assert.IsFalse(controller.BeginVoiceInput());
+            Assert.AreEqual(0, transport.InterruptCount);
+        }
+
+        [Test]
         public void LocalTouchReactionsRemainImmediateWhenBackendConnectsOrDisconnects()
         {
             owner = new GameObject("Conversation fallback test");
@@ -193,6 +215,14 @@ namespace QuestMmdPlayer.Tests
             Assert.IsFalse(player.StreamCompleted);
             player.MarkStreamCompleted();
             Assert.IsTrue(player.StreamCompleted);
+        }
+
+        [Test]
+        public void PcmStreamUsesStartupBufferButShortCompletedRepliesCanPlay()
+        {
+            Assert.IsFalse(Pcm16StreamAudioPlayer.ShouldStartPlayback(1200, 24000, false, .12f));
+            Assert.IsTrue(Pcm16StreamAudioPlayer.ShouldStartPlayback(2880, 24000, false, .12f));
+            Assert.IsTrue(Pcm16StreamAudioPlayer.ShouldStartPlayback(1200, 24000, true, .12f));
         }
         [Test]
         public void VoiceActivationRmsSeparatesSpeechFromSilence()

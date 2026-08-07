@@ -24,6 +24,7 @@ namespace QuestMmdPlayer
         [SerializeField, Range(0f, 55f)] private float armDropDegrees = 32f;
         [SerializeField, Range(0f, 25f)] private float elbowBendDegrees = 10f;
         [SerializeField, Range(0f, 15f)] private float handRelaxDegrees = 5f;
+        [SerializeField, Range(20f, 90f)] private float maxArmCorrectionDegrees = 55f;
         [SerializeField] private AvatarIdlePreset preset = AvatarIdlePreset.Formal;
         [SerializeField, Range(1f, 20f)] private float poseBlendSpeed = 8f;
         private const string PresetPreferenceKey = "banxia.avatar.idle_preset_v2";
@@ -208,7 +209,7 @@ namespace QuestMmdPlayer
             }
         }
 
-        private static void BuildArmPose(
+        private void BuildArmPose(
             Transform upper,
             Transform lower,
             Transform hand,
@@ -229,7 +230,8 @@ namespace QuestMmdPlayer
                     upper,
                     lower,
                     desiredUpperDirection,
-                    upperBase);
+                    upperBase,
+                    maxArmCorrectionDegrees);
 
                 // Solve the child after the upper arm has moved. Calculating both
                 // targets from the original chain can fold an MMD forearm through
@@ -239,7 +241,8 @@ namespace QuestMmdPlayer
                     lower,
                     hand,
                     desiredLowerDirection,
-                    lowerBase);
+                    lowerBase,
+                    maxArmCorrectionDegrees);
             }
             finally
             {
@@ -289,7 +292,8 @@ namespace QuestMmdPlayer
             Transform bone,
             Transform child,
             Vector3 desiredWorldDirection,
-            Quaternion fallback)
+            Quaternion fallback,
+            float maxCorrectionDegrees = 90f)
         {
             if (bone == null || child == null || desiredWorldDirection.sqrMagnitude < .000001f)
             {
@@ -305,9 +309,13 @@ namespace QuestMmdPlayer
             var targetWorld = Quaternion.FromToRotation(
                 currentDirection.normalized,
                 desiredWorldDirection.normalized) * bone.rotation;
-            return bone.parent == null
+            var targetLocal = bone.parent == null
                 ? targetWorld
                 : Quaternion.Inverse(bone.parent.rotation) * targetWorld;
+            return Quaternion.RotateTowards(
+                fallback,
+                targetLocal,
+                Mathf.Clamp(maxCorrectionDegrees, 0f, 180f));
         }
 
         private void ClearBones()

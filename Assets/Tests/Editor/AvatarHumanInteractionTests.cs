@@ -82,6 +82,32 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void HeadPatReactionUsesSubtleHeadAndUpperBodyMotion()
+        {
+            avatarObject = new GameObject("HeadPatAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("UpperBody", "\u4E0A\u534A\u8EAB");
+            CreateBone("Head", "\u982D");
+            var upperBody = avatarObject.transform.Find("UpperBody");
+            var head = avatarObject.transform.Find("Head");
+
+            serviceObject = new GameObject("HeadPatInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            interaction.PlayReaction(HumanInteractionKind.HeadPat, 2f);
+            typeof(AvatarHumanInteraction)
+                .GetField("fade", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(interaction, 1f);
+            typeof(AvatarHumanInteraction)
+                .GetMethod("LateUpdate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.Invoke(interaction, null);
+
+            Assert.That(Quaternion.Angle(Quaternion.identity, head.localRotation), Is.InRange(3f, 7f));
+            Assert.That(Quaternion.Angle(Quaternion.identity, upperBody.localRotation), Is.InRange(.5f, 3f));
+        }
+        [Test]
         public void TwoBoneIkReachesTargetWithoutChangingSegmentLengths()
         {
             var upperObject = new GameObject("Upper");

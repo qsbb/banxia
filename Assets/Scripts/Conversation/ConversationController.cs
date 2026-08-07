@@ -19,6 +19,14 @@ namespace QuestMmdPlayer
         private float errorUntil;
         private bool localReactionModeInitialized;
         private bool localReactionsEnabled = true;
+        private float turnStartedAt = -1f;
+        private float firstInputChunkAt = -1f;
+        private float inputEndedAt = -1f;
+        private float firstEventAt = -1f;
+        private float firstTextAt = -1f;
+        private float firstAudioAt = -1f;
+        private float replyEndedAt = -1f;
+        private int replyAudioChunkCount;
         [SerializeField] private bool sendInteractionEvents;
         private const float InteractionUpdateInterval = 5f;
 
@@ -33,10 +41,11 @@ namespace QuestMmdPlayer
         public string LastErrorCode { get; private set; } = string.Empty;
         public string LastErrorMessage => stateMachine.ErrorMessage;
         public float BufferedAudioSeconds => audioPlayer == null ? 0f : audioPlayer.BufferedSeconds;
-        public bool CanStartVoiceInput => transport != null && transport.IsConnected;
+        public bool CanStartVoiceInput => transport != null && transport.IsConnected && stateMachine.State == ConversationState.Idle;
         public bool IsRealBackendConnected => transport != null && !(transport is MockConversationTransport) && transport.IsConnected;
         public bool IsUsingMockTransport => transport is MockConversationTransport;
         public string Status => $"{State} | {TransportStatus}";
+        public string TurnTimingStatus => BuildTimingStatus(Time.unscaledTime);
 
         private void Awake()
         {
@@ -81,6 +90,7 @@ namespace QuestMmdPlayer
             RefreshLocalReactionMode();
             if (stateMachine.TryFinishAudio(audioPlayer == null || audioPlayer.IsDrained))
             {
+                Debug.Log("[Conversation] Voice timing " + BuildTimingStatus(Time.unscaledTime), this);
                 NotifyStateChanged();
             }
             if (stateMachine.State == ConversationState.Interrupted && Time.unscaledTime >= interruptedUntil)
@@ -136,6 +146,7 @@ namespace QuestMmdPlayer
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
             var turnId = stateMachine.Begin(string.Empty);
+            ResetTurnTiming();
             NotifyStateChanged();
             if (transport.BeginAudioTurn(turnId))
             {
@@ -152,15 +163,24 @@ namespace QuestMmdPlayer
 
         public bool PushVoiceAudio(byte[] pcm16)
         {
-            return stateMachine.State == ConversationState.Listening &&
+            var accepted = stateMachine.State == ConversationState.Listening &&
                 pcm16 != null && pcm16.Length > 0 &&
                 transport != null && transport.QueueAudioChunk(stateMachine.TurnId, pcm16);
+            if (accepted && firstInputChunkAt < 0f)
+            {
+                firstInputChunkAt = Time.unscaledTime;
+            }
+            return accepted;
         }
 
         public bool EndVoiceInput()
         {
             var accepted = stateMachine.State == ConversationState.Listening &&
                 transport != null && transport.EndAudioTurn(stateMachine.TurnId);
+            if (accepted)
+            {
+                inputEndedAt = Time.unscaledTime;
+            }
             Debug.Log(accepted
                 ? "[Conversation] Voice input end accepted."
                 : "[Conversation] Voice input end rejected.", this);
@@ -194,6 +214,7 @@ namespace QuestMmdPlayer
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
             var turnId = stateMachine.Begin(text);
+            ResetTurnTiming();
             NotifyStateChanged();
             transport.StartTurn(turnId, text);
             Debug.Log("[Conversation] Text turn started.", this);
@@ -274,6 +295,7 @@ namespace QuestMmdPlayer
             {
                 return;
             }
+            RecordEventTiming(message);
 
             switch (message.Type)
             {
@@ -294,7 +316,7 @@ namespace QuestMmdPlayer
                         : message.ErrorCode;
                     errorUntil = Time.unscaledTime + 1.25f;
                     Debug.LogWarning("[Conversation] Voice/transport error code=" + LastErrorCode +
-                        "; bridge=" + TransportStatus, this);
+                        "; bridge=" + TransportStatus + "; timing=" + BuildTimingStatus(Time.unscaledTime), this);
                     break;
             }
 
@@ -463,6 +485,64 @@ namespace QuestMmdPlayer
             presenter?.SetConversationState(stateMachine.State);
             StateChanged?.Invoke(stateMachine.State);
             Debug.Log("[Conversation] State changed: " + stateMachine.State, this);
+        }
+
+        private void ResetTurnTiming()
+        {
+            turnStartedAt = Time.unscaledTime;
+            firstInputChunkAt = -1f;
+            inputEndedAt = -1f;
+            firstEventAt = -1f;
+            firstTextAt = -1f;
+            firstAudioAt = -1f;
+            replyEndedAt = -1f;
+            replyAudioChunkCount = 0;
+        }
+
+        private void RecordEventTiming(ConversationEvent message)
+        {
+            var now = Time.unscaledTime;
+            if (firstEventAt < 0f)
+            {
+                firstEventAt = now;
+            }
+            if (message.Type == ConversationEventType.ReplyTextDelta && firstTextAt < 0f)
+            {
+                firstTextAt = now;
+            }
+            if (message.Type == ConversationEventType.AudioChunk)
+            {
+                if (firstAudioAt < 0f)
+                {
+                    firstAudioAt = now;
+                }
+                replyAudioChunkCount++;
+            }
+            else if (message.Type == ConversationEventType.ReplyEnd)
+            {
+                replyEndedAt = now;
+            }
+        }
+
+        private string BuildTimingStatus(float now)
+        {
+            if (turnStartedAt < 0f)
+            {
+                return "no active timing";
+            }
+            var responseStart = inputEndedAt >= 0f ? inputEndedAt : turnStartedAt;
+            return $"firstChunk={ElapsedMs(turnStartedAt, firstInputChunkAt)}ms " +
+                $"inputEnd={ElapsedMs(turnStartedAt, inputEndedAt)}ms " +
+                $"firstEvent={ElapsedMs(responseStart, firstEventAt)}ms " +
+                $"firstText={ElapsedMs(responseStart, firstTextAt)}ms " +
+                $"firstAudio={ElapsedMs(responseStart, firstAudioAt)}ms " +
+                $"replyEnd={ElapsedMs(responseStart, replyEndedAt)}ms " +
+                $"audioDone={ElapsedMs(responseStart, now)}ms chunks={replyAudioChunkCount}";
+        }
+
+        private static string ElapsedMs(float start, float end)
+        {
+            return start < 0f || end < 0f ? "-" : Mathf.Max(0, Mathf.RoundToInt((end - start) * 1000f)).ToString();
         }
 
         private void SubscribeTransport()

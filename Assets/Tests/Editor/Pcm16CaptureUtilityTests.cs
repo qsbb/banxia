@@ -34,6 +34,27 @@ namespace QuestMmdPlayer.Tests
             Assert.AreEqual(1280 * 2, encoded.Length);
             Assert.AreEqual(0, encoded.Length & 1);
         }
+
+        [Test]
+        public void VoiceGateCalibratesThenRequiresSustainedSpeech()
+        {
+            var gate = new VoiceActivityGate(.008f, .024f, .16f, .24f);
+
+            Assert.IsFalse(gate.Observe(.004f, .08f, true));
+            Assert.IsFalse(gate.Observe(.005f, .08f, true));
+            Assert.IsFalse(gate.Observe(.004f, .08f, true));
+            Assert.IsFalse(gate.Observe(.06f, .08f, true));
+            Assert.IsTrue(gate.Observe(.06f, .08f, true));
+        }
+
+        [Test]
+        public void VoiceGateCannotActivateWhileConversationOwnsAudio()
+        {
+            var gate = new VoiceActivityGate(.008f, .024f, .16f, 0f);
+
+            Assert.IsFalse(gate.Observe(.08f, .2f, false));
+            Assert.That(gate.ActivationProgress, Is.EqualTo(0f));
+        }
     }
 }
 #endif

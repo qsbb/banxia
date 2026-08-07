@@ -36,14 +36,14 @@ namespace QuestMmdPlayer
         private bool actionPoseCaptured;
         private bool actionTransitionActive;
         private float actionTransitionClock;
-        private const float ActionTransitionSeconds = .32f;
+        private const float ActionTransitionSeconds = .42f;
         private Quaternion transitionUpperBody;
         private Quaternion transitionHead;
         private Quaternion transitionRightUpperArm;
         private Quaternion transitionRightLowerArm;
         private Quaternion transitionRightHand;
 
-        private const float WaveDuration = 3.1f;
+        private const float WaveDuration = 3.6f;
         private const float BowDuration = 2.2f;
         private const float NodDuration = 2.1f;
         private const float SwayDuration = 3.4f;
@@ -163,46 +163,59 @@ namespace QuestMmdPlayer
             {
                 CaptureActionPose();
             }
-            var blend = ActionBlend(actionClock, WaveDuration, .38f);
+
+            var blend = ActionBlend(actionClock, WaveDuration, .52f);
+            var gestureClock = Mathf.Max(0f, actionClock - .52f);
+            var wave = Mathf.Sin(gestureClock * 6.4f);
+            SetRotation(upperBody, upperBodyBase,
+                Quaternion.Euler(0f, -2.2f, -1.4f), blend);
+            SetRotation(head, headBase,
+                Quaternion.Euler(1.2f, 1.8f, 1.4f), blend);
             SetRotation(rightUpperArm, rightUpperArmBase,
-                Quaternion.Euler(-10f, -8f, 58f), blend);
+                Quaternion.Euler(-5f, -4f, 36f), blend);
             SetRotation(rightLowerArm, rightLowerArmBase,
-                Quaternion.Euler(0f, -22f, -64f), blend);
+                Quaternion.Euler(0f, -14f, -48f), blend);
 
             if (rightUpperArm != null && rightLowerArm != null && rightHand != null)
             {
                 var viewer = Camera.main;
                 var towardViewer = viewer == null
                     ? transform.forward
-                    : Vector3.ProjectOnPlane(viewer.transform.position - rightUpperArm.position, Vector3.up).normalized;
+                    : Vector3.ProjectOnPlane(
+                        viewer.transform.position - rightUpperArm.position,
+                        Vector3.up).normalized;
                 if (towardViewer.sqrMagnitude < .0001f)
                 {
                     towardViewer = transform.forward;
                 }
 
                 var side = transform.right;
-                var headPosition = head == null
-                    ? rightUpperArm.position + transform.up * .34f
-                    : head.position - transform.up * .04f;
-                var phase = Mathf.Sin(actionClock * 8.7f);
-                var target = headPosition + side * (.22f + phase * .045f) +
-                    transform.up * (Mathf.Sin(actionClock * 17.4f) * .012f) + towardViewer * .07f;
-                var pole = rightUpperArm.position + side * .26f - transform.up * .12f + towardViewer * .12f;
-                AvatarHumanInteraction.SolveTwoBoneIk(
-                    rightUpperArm,
-                    rightLowerArm,
-                    rightHand,
-                    target,
-                    pole,
-                    .96f,
-                    blend);
+                var armLength = Vector3.Distance(rightUpperArm.position, rightLowerArm.position) +
+                    Vector3.Distance(rightLowerArm.position, rightHand.position);
+                if (armLength > .04f)
+                {
+                    var target = rightUpperArm.position +
+                        transform.up * (armLength * .62f) +
+                        side * (armLength * (.42f + wave * .045f)) +
+                        towardViewer * (armLength * .12f);
+                    var pole = rightUpperArm.position +
+                        side * (armLength * .34f) -
+                        transform.up * (armLength * .08f) +
+                        towardViewer * (armLength * .24f);
+                    AvatarHumanInteraction.SolveTwoBoneIk(
+                        rightUpperArm,
+                        rightLowerArm,
+                        rightHand,
+                        target,
+                        pole,
+                        .94f,
+                        blend);
+                }
             }
 
-            var swing = Mathf.Sin(actionClock * 8.7f) * 28f;
             SetRotation(rightHand, rightHandBase,
-                Quaternion.Euler(4f, swing, 10f), blend);
+                Quaternion.Euler(3f, wave * 16f, 6f), blend);
         }
-
         private void ApplyBow()
         {
             if (!actionPoseCaptured)
@@ -220,12 +233,32 @@ namespace QuestMmdPlayer
             {
                 CaptureActionPose();
             }
-            var blend = ActionBlend(actionClock, NodDuration, .28f);
-            var pitch = Mathf.Sin(actionClock * 7.2f - .6f) * 8.5f + 3f;
+
+            var progress = Mathf.Clamp01(actionClock / NodDuration);
+            var blend = ActionBlend(actionClock, NodDuration, .32f);
+            var pitch = NaturalNodPitch(progress);
             SetRotation(head, headBase, Quaternion.Euler(pitch, 0f, 0f), blend);
-            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(pitch * .16f, 0f, 0f), blend);
+            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(pitch * .12f, 0f, 0f), blend);
         }
 
+        public static float NaturalNodPitch(float normalizedTime)
+        {
+            var progress = Mathf.Clamp01(normalizedTime);
+            var first = GesturePulse(progress, .18f, .48f) * 8.5f;
+            var second = GesturePulse(progress, .52f, .78f) * 4.5f;
+            return first + second;
+        }
+
+        private static float GesturePulse(float progress, float start, float end)
+        {
+            if (progress <= start || progress >= end)
+            {
+                return 0f;
+            }
+
+            var normalized = Mathf.InverseLerp(start, end, progress);
+            return Mathf.Sin(normalized * Mathf.PI);
+        }
         private void ApplySway()
         {
             if (!actionPoseCaptured)

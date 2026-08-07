@@ -32,6 +32,9 @@ namespace QuestMmdPlayer
         [SerializeField] private bool showHands = true;
         [SerializeField, Range(.006f, .035f)] private float jointRadius = .014f;
         [SerializeField, Range(.002f, .014f)] private float lineWidth = .006f;
+        [SerializeField, Range(.02f, .25f)] private float trackingLossVisualGrace = .10f;
+        [SerializeField, Range(.02f, .08f)] private float pinchEnterDistance = .032f;
+        [SerializeField, Range(.025f, .10f)] private float pinchReleaseDistance = .045f;
         [SerializeField] private Material handMaterial;
 
         private readonly List<XRHandSubsystem> subsystems = new List<XRHandSubsystem>();
@@ -52,12 +55,15 @@ namespace QuestMmdPlayer
             internal GameObject meshRoot;
             internal GameObject[] joints;
             internal Renderer[] proxyRenderers;
+            internal Collider[] contactColliders;
             internal LineRenderer[] lines;
             internal TrackedHandContactRelay[] relays;
+            internal bool[] jointTracked;
             internal Material runtimeMaterial;
             internal bool ownsRuntimeMaterial;
             internal bool visible;
             internal bool pinching;
+            internal float lastTrackedPoseAt = float.NegativeInfinity;
 
             internal HandVisual(string name, XRNode node, Color color)
             {
@@ -76,6 +82,18 @@ namespace QuestMmdPlayer
             {
                 if (relays == null) return;
                 for (var index = 0; index < relays.Length; index++) relays[index].SetPinching(pinching);
+            }
+
+            internal void DisableContacts()
+            {
+                pinching = false;
+                if (contactColliders == null) return;
+                for (var index = 0; index < contactColliders.Length; index++)
+                {
+                    if (contactColliders[index] != null) contactColliders[index].enabled = false;
+                    if (relays[index] != null) relays[index].SetTracked(false);
+                }
+                UpdateRelayState();
             }
         }
 
@@ -123,6 +141,12 @@ namespace QuestMmdPlayer
                 return 0;
             }
 
+            visual.DisableContacts();
+            if (IsTrackingGraceActive(Time.unscaledTime, visual.lastTrackedPoseAt, trackingLossVisualGrace))
+            {
+                SetVisible(visual, true, visual.meshRoot != null);
+                return 0;
+            }
             SetVisible(visual, false, false);
             return 0;
         }
@@ -134,19 +158,28 @@ namespace QuestMmdPlayer
             {
                 if (!hand.GetJoint(JointIds[index]).TryGetPose(out var pose))
                 {
+                    visual.jointTracked[index] = false;
+                    SetJointContactState(visual, index, false);
                     continue;
                 }
                 visual.joints[index].transform.SetPositionAndRotation(World(pose.position), WorldRotation(pose.rotation));
+                visual.jointTracked[index] = true;
+                SetJointContactState(visual, index, true);
                 found++;
             }
             if (found < 2)
             {
+                visual.DisableContacts();
                 return false;
             }
 
-            var thumb = visual.joints[5].transform.position;
-            var indexTip = visual.joints[10].transform.position;
-            visual.pinching = Vector3.Distance(thumb, indexTip) <= .035f;
+            var tipsTracked = visual.jointTracked[5] && visual.jointTracked[10];
+            visual.pinching = tipsTracked && AvatarTouchInteraction.UpdatePinchState(
+                visual.pinching,
+                Vector3.Distance(visual.joints[5].transform.position, visual.joints[10].transform.position),
+                pinchEnterDistance,
+                pinchReleaseDistance);
+            visual.lastTrackedPoseAt = Time.unscaledTime;
             UpdateLines(visual);
             visual.UpdateRelayState();
             return true;
@@ -158,6 +191,11 @@ namespace QuestMmdPlayer
             var side = rotation * Vector3.right;
             visual.joints[0].transform.SetPositionAndRotation(palm - forward * .035f, rotation);
             visual.joints[1].transform.SetPositionAndRotation(palm, rotation);
+            for (var index = 0; index < visual.jointTracked.Length; index++)
+            {
+                visual.jointTracked[index] = true;
+                SetJointContactState(visual, index, index == 1);
+            }
             for (var index = 2; index < visual.joints.Length; index++)
             {
                 var finger = (index - 2) / 5;
@@ -181,7 +219,9 @@ namespace QuestMmdPlayer
             body.useGravity = false;
             visual.joints = new GameObject[JointIds.Length];
             visual.proxyRenderers = new Renderer[JointIds.Length];
+            visual.contactColliders = new Collider[JointIds.Length];
             visual.relays = new TrackedHandContactRelay[JointIds.Length];
+            visual.jointTracked = new bool[JointIds.Length];
             visual.runtimeMaterial = handMaterial != null ? handMaterial : ResolveMaterial(visual.color);
             visual.ownsRuntimeMaterial = handMaterial == null;
             for (var index = 0; index < visual.joints.Length; index++)
@@ -189,14 +229,18 @@ namespace QuestMmdPlayer
                 var joint = GameObject.CreatePrimitive(PrimitiveType.Sphere);
                 joint.name = visual.name + " " + JointIds[index];
                 joint.transform.SetParent(visual.root.transform, false);
-                joint.transform.localScale = Vector3.one * (jointRadius * 2f);
+                var probe = ContactProbeForJoint(JointIds[index]);
+                var radius = probe == TrackedHandContactProbe.Palm ? jointRadius * 1.9f : jointRadius;
+                joint.transform.localScale = Vector3.one * (radius * 2f);
                 var renderer = joint.GetComponent<Renderer>();
                 renderer.sharedMaterial = visual.runtimeMaterial;
                 visual.proxyRenderers[index] = renderer;
                 var collider = joint.GetComponent<SphereCollider>();
                 collider.isTrigger = true;
+                collider.enabled = false;
+                visual.contactColliders[index] = collider;
                 var relay = joint.AddComponent<TrackedHandContactRelay>();
-                relay.Initialize(interaction, visual.name);
+                relay.Initialize(interaction, visual.name, probe);
                 visual.joints[index] = joint;
                 visual.relays[index] = relay;
             }
@@ -248,8 +292,13 @@ namespace QuestMmdPlayer
         {
             for (var index = 0; index < visual.lines.Length; index++)
             {
-                var start = visual.joints[Segments[index, 0]].transform.position;
-                var end = visual.joints[Segments[index, 1]].transform.position;
+                var startIndex = Segments[index, 0];
+                var endIndex = Segments[index, 1];
+                var segmentTracked = visual.jointTracked[startIndex] && visual.jointTracked[endIndex];
+                visual.lines[index].enabled = segmentTracked;
+                if (!segmentTracked) continue;
+                var start = visual.joints[startIndex].transform.position;
+                var end = visual.joints[endIndex].transform.position;
                 visual.lines[index].SetPosition(0, start);
                 visual.lines[index].SetPosition(1, end);
             }
@@ -271,6 +320,15 @@ namespace QuestMmdPlayer
                     }
                 }
             }
+            if (visual.lines != null)
+            {
+                for (var index = 0; index < visual.lines.Length; index++)
+                {
+                    visual.lines[index].enabled = showProxy &&
+                        visual.jointTracked[Segments[index, 0]] &&
+                        visual.jointTracked[Segments[index, 1]];
+                }
+            }
             if (visual.meshRoot != null)
             {
                 visual.meshRoot.SetActive(visual.visible && showOfficialMesh);
@@ -290,6 +348,43 @@ namespace QuestMmdPlayer
                 if (subsystems[index] != null && subsystems[index].running) return subsystems[index];
             }
             return null;
+        }
+
+        private static void SetJointContactState(HandVisual visual, int index, bool tracked)
+        {
+            var probe = ContactProbeForJoint(JointIds[index]);
+            var active = tracked && probe != TrackedHandContactProbe.None;
+            if (visual.contactColliders[index] != null) visual.contactColliders[index].enabled = active;
+            if (visual.relays[index] != null) visual.relays[index].SetTracked(active);
+        }
+
+        public static bool IsTrackingGraceActive(float now, float lastTrackedAt, float graceSeconds)
+        {
+            return AvatarTouchInteraction.IsTrackingGraceActive(now, lastTrackedAt, graceSeconds);
+        }
+
+        public static TrackedHandContactProbe ContactProbeForJoint(XRHandJointID joint)
+        {
+            if (joint == XRHandJointID.Palm) return TrackedHandContactProbe.Palm;
+            if (joint == XRHandJointID.ThumbTip || joint == XRHandJointID.IndexTip)
+            {
+                return TrackedHandContactProbe.PinchTip;
+            }
+            return TrackedHandContactProbe.None;
+        }
+
+        public static bool ShouldReportContact(
+            TrackedHandContactProbe probe,
+            AvatarContactRegion region,
+            bool pinching)
+        {
+            if (probe == TrackedHandContactProbe.Palm)
+            {
+                return region == AvatarContactRegion.Head || region == AvatarContactRegion.Hand;
+            }
+            return probe == TrackedHandContactProbe.PinchTip &&
+                   region == AvatarContactRegion.Face &&
+                   pinching;
         }
 
         private Vector3 World(Vector3 value)
@@ -324,16 +419,29 @@ namespace QuestMmdPlayer
         }
     }
 
+    public enum TrackedHandContactProbe
+    {
+        None,
+        Palm,
+        PinchTip
+    }
+
     internal sealed class TrackedHandContactRelay : MonoBehaviour
     {
         private AvatarHumanInteraction interaction;
         private string handName;
         private bool pinching;
+        private bool tracked;
+        private TrackedHandContactProbe probe;
 
-        public void Initialize(AvatarHumanInteraction nextInteraction, string nextHandName)
+        public void Initialize(
+            AvatarHumanInteraction nextInteraction,
+            string nextHandName,
+            TrackedHandContactProbe nextProbe)
         {
             interaction = nextInteraction;
             handName = nextHandName;
+            probe = nextProbe;
         }
 
         public void SetInteraction(AvatarHumanInteraction nextInteraction)
@@ -346,10 +454,16 @@ namespace QuestMmdPlayer
             pinching = value;
         }
 
+        public void SetTracked(bool value)
+        {
+            tracked = value;
+        }
+
         private void OnTriggerStay(Collider other)
         {
             var proxy = other.GetComponent<AvatarContactProxy>();
-            if (proxy == null || interaction == null) return;
+            if (proxy == null || interaction == null || !tracked ||
+                !QuestTrackedHandVisualizer.ShouldReportContact(probe, proxy.Region, pinching)) return;
             interaction.ReportTrackedHandContact(proxy.Region, pinching, transform.position);
         }
     }

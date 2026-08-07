@@ -3,6 +3,98 @@ using System.Collections.Generic;
 
 namespace QuestMmdPlayer
 {
+    /// <summary>
+    /// Lightweight frontend VAD gate. It does not try to replace server STT;
+    /// it only decides when a continuously monitored microphone should open a
+    /// Protocol 1.0 audio turn. Attack/release hysteresis and a bounded ambient
+    /// noise estimate avoid creating turns from isolated room noise.
+    /// </summary>
+    public sealed class VoiceActivityGate
+    {
+        private readonly float minimumThreshold;
+        private readonly float maximumThreshold;
+        private readonly float activationSeconds;
+        private readonly float calibrationSeconds;
+        private float noiseFloor;
+        private float observedSeconds;
+        private float activeSeconds;
+
+        public VoiceActivityGate(
+            float minimumThreshold,
+            float maximumThreshold,
+            float activationSeconds,
+            float calibrationSeconds = .32f)
+        {
+            this.minimumThreshold = Math.Max(.0001f, minimumThreshold);
+            this.maximumThreshold = Math.Max(this.minimumThreshold, maximumThreshold);
+            this.activationSeconds = Math.Max(.04f, activationSeconds);
+            this.calibrationSeconds = Math.Max(0f, calibrationSeconds);
+            noiseFloor = this.minimumThreshold * .5f;
+        }
+
+        public float Threshold => Math.Max(
+            minimumThreshold,
+            Math.Min(maximumThreshold, noiseFloor * 1.8f));
+
+        public float ActivationProgress => Math.Min(1f, activeSeconds / activationSeconds);
+
+        public bool Observe(float rms, float durationSeconds, bool allowActivation)
+        {
+            var duration = Math.Max(0f, durationSeconds);
+            var level = Math.Max(0f, rms);
+            if (!allowActivation)
+            {
+                activeSeconds = 0f;
+                return false;
+            }
+
+            if (observedSeconds + .0001f < calibrationSeconds)
+            {
+                AdaptNoise(level, duration, true);
+                observedSeconds += duration;
+                activeSeconds = 0f;
+                return false;
+            }
+
+            var speech = level >= Threshold;
+            if (speech)
+            {
+                activeSeconds += duration;
+            }
+            else
+            {
+                activeSeconds = Math.Max(0f, activeSeconds - duration * 2f);
+                AdaptNoise(level, duration, false);
+            }
+            return activeSeconds >= activationSeconds;
+        }
+
+        public bool IsSpeech(float rms)
+        {
+            return Math.Max(0f, rms) >= Threshold;
+        }
+
+        public void ResetActivation()
+        {
+            activeSeconds = 0f;
+        }
+
+        public void Reset()
+        {
+            noiseFloor = minimumThreshold * .5f;
+            observedSeconds = 0f;
+            activeSeconds = 0f;
+        }
+
+        private void AdaptNoise(float level, float duration, bool calibrating)
+        {
+            var bounded = Math.Min(level, maximumThreshold / 1.8f);
+            var timeConstant = calibrating ? .18f : 2.5f;
+            var alpha = duration <= 0f ? 0f : 1f - (float)Math.Exp(-duration / timeConstant);
+            noiseFloor += (bounded - noiseFloor) * alpha;
+        }
+    }
+
     public static class Pcm16CaptureUtility
     {
         public static int FramesForDuration(int sampleRate, int milliseconds)

@@ -7,13 +7,29 @@ using UnityEngine.XR.ARSubsystems;
 
 namespace QuestMmdPlayer
 {
+    [System.Serializable]
+    public struct AvatarPlacementBookmark
+    {
+        public int Version;
+        public string SurfaceId;
+        public int SurfaceClassification;
+        public Vector3 SurfacePositionInOrigin;
+        public Quaternion SurfaceRotationInOrigin;
+        public Vector2 SurfaceSize;
+        public Vector3 AvatarPositionRelativeToSurface;
+        public Quaternion AvatarRotationRelativeToSurface;
+    }
+
     /// <summary>Places the avatar on a tracked floor and keeps it in the MR world.</summary>
     [DisallowMultipleComponent]
     public sealed class AvatarPlacementService : MonoBehaviour
     {
         private const float PlacementRetrySeconds = 0.5f;
+        private const int PlacementBookmarkVersion = 1;
+        private const string PlacementBookmarkPreference = "banxia.avatar.room_placement.v1";
         private static readonly List<ARRaycastHit> RaycastHits = new List<ARRaycastHit>();
         private readonly List<XRInputSubsystem> inputSubsystems = new List<XRInputSubsystem>();
+        private readonly List<RoomSurfaceObservation> restoreSurfaces = new List<RoomSurfaceObservation>();
 
         [SerializeField] private bool placeAutomatically = true;
         [SerializeField] private bool createSpatialAnchor = false;
@@ -31,8 +47,12 @@ namespace QuestMmdPlayer
         private ARRaycastManager raycastManager;
         private ARAnchorManager anchorManager;
         private ARAnchor spatialAnchor;
+        private RoomUnderstandingService roomUnderstanding;
         private AvatarController avatar;
         private bool placementRequested;
+        private bool restoreRequested;
+        private bool hasSavedPlacementBookmark;
+        private AvatarPlacementBookmark savedPlacementBookmark;
         private bool usingFallback;
         private bool rightStickWasPressed;
         private float placementDeadline;
@@ -49,6 +69,9 @@ namespace QuestMmdPlayer
         public float CalibratedFloorHeight => calibratedFloorHeight;
         public bool HasHeightCalibration => hasHeightCalibration;
         public bool HasCalibratedFloor => hasCalibratedFloor;
+        public bool HasSavedPlacementBookmark => hasSavedPlacementBookmark;
+        public bool HasPreparedSeatTarget { get; private set; }
+        public RoomPlacementCandidate PreparedSeatTarget { get; private set; }
         private void Awake()
         {
             ResolveDependencies();
@@ -69,6 +92,18 @@ namespace QuestMmdPlayer
             }
 
             nextPlaneAttemptTime = Time.unscaledTime + PlacementRetrySeconds;
+            if (restoreRequested)
+            {
+                if (TryRestoreSavedPlacement())
+                {
+                    return;
+                }
+                if (Time.unscaledTime < placementDeadline)
+                {
+                    return;
+                }
+                restoreRequested = false;
+            }
             if (TryPlaceOnTrackedFloor())
             {
                 return;
@@ -83,6 +118,7 @@ namespace QuestMmdPlayer
                 else
                 {
                     placementRequested = false;
+                    restoreRequested = false;
                     PausePlaneDetection();
                     Status = hasHeightCalibration
                         ? $"Placed in front | height {estimatedUserHeight:F2}m"
@@ -103,6 +139,8 @@ namespace QuestMmdPlayer
             HasPlacement = false;
             usingFallback = false;
             placementRequested = false;
+            restoreRequested = false;
+            hasSavedPlacementBookmark = TryLoadPlacementBookmark(out savedPlacementBookmark);
 
             if (avatar == null)
             {
@@ -112,7 +150,7 @@ namespace QuestMmdPlayer
 
             if (placeAutomatically)
             {
-                RequestPlacement();
+                RequestPlacementInternal(hasSavedPlacementBookmark);
             }
             else
             {
@@ -158,6 +196,12 @@ namespace QuestMmdPlayer
 
         public void RequestPlacement()
         {
+            ForgetSavedPlacement();
+            RequestPlacementInternal(false);
+        }
+
+        private void RequestPlacementInternal(bool trySavedPlacement)
+        {
             if (avatar == null)
             {
                 Status = "Waiting for avatar";
@@ -167,6 +211,7 @@ namespace QuestMmdPlayer
             ResolveDependencies();
             ResumePlaneDetection();
             placementRequested = true;
+            restoreRequested = trySavedPlacement;
             usingFallback = false;
             placementDeadline = Time.unscaledTime + planeWaitSeconds;
             nextPlaneAttemptTime = 0f;
@@ -175,16 +220,23 @@ namespace QuestMmdPlayer
                 : "Searching for a tracked floor";
             Debug.Log("[AvatarPlacement] Placement requested.", this);
 
-            // Never leave a freshly loaded model at its import transform while
-            // room planes warm up. Prefer a tracked floor immediately, otherwise
-            // show the stable tracking-floor pose and keep refining in the background.
-            if (TryPlaceOnTrackedFloor())
+            if (restoreRequested && TryRestoreSavedPlacement())
             {
                 return;
             }
 
+            // Never leave a freshly loaded model at its import transform while
+            // room planes warm up. Prefer a tracked floor immediately, otherwise
+            // show the stable tracking-floor pose and keep refining in the background.
+            if (!restoreRequested && TryPlaceOnTrackedFloor())
+            {
+                return;
+            }
+
+            var keepTryingSavedPlacement = restoreRequested;
             PlaceAtFallbackPose();
             placementRequested = true;
+            restoreRequested = keepTryingSavedPlacement;
             usingFallback = true;
             placementDeadline = Time.unscaledTime + planeWaitSeconds;
             nextPlaneAttemptTime = Time.unscaledTime + PlacementRetrySeconds;
@@ -221,6 +273,9 @@ namespace QuestMmdPlayer
             anchorManager = anchorManager != null
                 ? anchorManager
                 : xrOrigin.GetComponent<ARAnchorManager>();
+            roomUnderstanding = roomUnderstanding != null
+                ? roomUnderstanding
+                : FindObjectOfType<RoomUnderstandingService>();
         }
 
         private void ReadPlacementInput()
@@ -296,30 +351,177 @@ namespace QuestMmdPlayer
 
         private void ApplyPlacement(Vector3 position, bool trackedFloor, ARPlane plane)
         {
-            ReleaseSpatialAnchor();
-            if (trackedFloor)
-            {
-                CaptureHeightCalibration(position.y);
-            }
             var rotation = ComputeFacingRotation(
                 position,
                 headCamera == null ? position - Vector3.forward : headCamera.transform.position,
                 importedAvatarFacesNegativeZ);
             var pose = new Pose(position, rotation);
+            ApplyPlacementPose(pose, trackedFloor, plane, true);
+        }
+
+        private void ApplyPlacementPose(Pose pose, bool trackedFloor, ARPlane plane, bool persistTrackedSurface)
+        {
+            ReleaseSpatialAnchor();
+            if (trackedFloor)
+            {
+                CaptureHeightCalibration(pose.position.y);
+            }
             avatar.SetPlacementPose(pose);
             var anchored = TryCreateSpatialAnchor(pose);
             PausePlaneDetection();
 
             HasPlacement = true;
             placementRequested = false;
+            restoreRequested = false;
             usingFallback = !trackedFloor;
             Status = trackedFloor
                 ? anchored ? "Placed on tracked floor with spatial anchor" : "Placed on tracked floor"
                 : anchored ? "Placed at tracking-floor fallback with spatial anchor" : "Placed at tracking-floor fallback";
             var planeId = plane == null ? "none" : plane.trackableId.ToString();
+            if (persistTrackedSurface && plane != null)
+            {
+                SavePlacementBookmark(CreateSurfaceObservation(plane), pose);
+            }
             Debug.Log(
-                $"[AvatarPlacement] {Status}; position={position:F3}; plane={planeId}; worldRoot={xrOrigin?.name ?? "none"}.",
+                $"[AvatarPlacement] {Status}; position={pose.position:F3}; plane={planeId}; worldRoot={xrOrigin?.name ?? "none"}.",
                 this);
+        }
+
+        public bool TryPrepareNearestSeatTarget()
+        {
+            ResolveDependencies();
+            HasPreparedSeatTarget = false;
+            PreparedSeatTarget = default;
+            if (roomUnderstanding == null || headCamera == null)
+            {
+                return false;
+            }
+
+            if (!roomUnderstanding.HasRoomData)
+            {
+                roomUnderstanding.RefreshNow();
+            }
+            var viewer = new Pose(headCamera.transform.position, headCamera.transform.rotation);
+            if (!roomUnderstanding.TryFindNearestSeat(viewer, out var target))
+            {
+                return false;
+            }
+
+            PreparedSeatTarget = target;
+            HasPreparedSeatTarget = true;
+            return true;
+        }
+
+        public void ForgetSavedPlacement()
+        {
+            PlayerPrefs.DeleteKey(PlacementBookmarkPreference);
+            PlayerPrefs.Save();
+            hasSavedPlacementBookmark = false;
+            savedPlacementBookmark = default;
+            restoreRequested = false;
+        }
+
+        private bool TryRestoreSavedPlacement()
+        {
+            if (!hasSavedPlacementBookmark || planeManager == null || headCamera == null ||
+                !planeManager.isActiveAndEnabled)
+            {
+                return false;
+            }
+
+            restoreSurfaces.Clear();
+            foreach (var plane in planeManager.trackables)
+            {
+                if (plane == null || plane.trackingState == TrackingState.None)
+                {
+                    continue;
+                }
+                var observation = CreateSurfaceObservation(plane);
+                if (RoomUnderstandingService.IsUsableObservation(observation))
+                {
+                    restoreSurfaces.Add(observation);
+                }
+            }
+
+            var originPose = xrOrigin == null
+                ? new Pose(Vector3.zero, Quaternion.identity)
+                : new Pose(xrOrigin.transform.position, xrOrigin.transform.rotation);
+            if (!TryResolvePlacementBookmark(
+                savedPlacementBookmark,
+                restoreSurfaces,
+                originPose,
+                .75f,
+                out var restoredPose,
+                out var matchedSurface))
+            {
+                return false;
+            }
+
+            ARPlane matchedPlane = null;
+            foreach (var plane in planeManager.trackables)
+            {
+                if (plane != null && string.Equals(
+                    plane.trackableId.ToString(),
+                    matchedSurface.Id,
+                    System.StringComparison.Ordinal))
+                {
+                    matchedPlane = plane;
+                    break;
+                }
+            }
+            var isFloor = matchedSurface.Classification == PlaneClassification.Floor;
+            ApplyPlacementPose(restoredPose, isFloor, matchedPlane, matchedPlane != null);
+            Status = isFloor
+                ? "Restored on saved room floor"
+                : "Restored on saved room surface";
+            Debug.Log($"[AvatarPlacement] {Status}; semantic surface reacquired.", this);
+            return true;
+        }
+
+        private void SavePlacementBookmark(RoomSurfaceObservation surface, Pose avatarPose)
+        {
+            var originPose = xrOrigin == null
+                ? new Pose(Vector3.zero, Quaternion.identity)
+                : new Pose(xrOrigin.transform.position, xrOrigin.transform.rotation);
+            var bookmark = CreatePlacementBookmark(surface, avatarPose, originPose);
+            if (!IsValidPlacementBookmark(bookmark))
+            {
+                return;
+            }
+            PlayerPrefs.SetString(PlacementBookmarkPreference, JsonUtility.ToJson(bookmark));
+            PlayerPrefs.Save();
+            savedPlacementBookmark = bookmark;
+            hasSavedPlacementBookmark = true;
+        }
+
+        private static bool TryLoadPlacementBookmark(out AvatarPlacementBookmark bookmark)
+        {
+            bookmark = default;
+            var json = PlayerPrefs.GetString(PlacementBookmarkPreference, string.Empty);
+            if (string.IsNullOrEmpty(json))
+            {
+                return false;
+            }
+            try
+            {
+                bookmark = JsonUtility.FromJson<AvatarPlacementBookmark>(json);
+                return IsValidPlacementBookmark(bookmark);
+            }
+            catch (System.Exception)
+            {
+                bookmark = default;
+                return false;
+            }
+        }
+
+        private static RoomSurfaceObservation CreateSurfaceObservation(ARPlane plane)
+        {
+            var center = plane.transform.TransformPoint(new Vector3(plane.center.x, 0f, plane.center.y));
+            return new RoomSurfaceObservation(
+                plane.trackableId.ToString(),
+                plane.classification,
+                new Pose(center, plane.transform.rotation),
+                plane.size);
         }
 
         private bool TryCreateSpatialAnchor(Pose pose)
@@ -494,6 +696,155 @@ namespace QuestMmdPlayer
         private void OnDestroy()
         {
             ReleaseSpatialAnchor();
+        }
+
+        public static AvatarPlacementBookmark CreatePlacementBookmark(
+            RoomSurfaceObservation surface,
+            Pose avatarPose,
+            Pose originPose)
+        {
+            var originInverse = Quaternion.Inverse(originPose.rotation);
+            var surfaceInverse = Quaternion.Inverse(surface.Pose.rotation);
+            return new AvatarPlacementBookmark
+            {
+                Version = PlacementBookmarkVersion,
+                SurfaceId = surface.Id ?? string.Empty,
+                SurfaceClassification = (int)surface.Classification,
+                SurfacePositionInOrigin = originInverse * (surface.Pose.position - originPose.position),
+                SurfaceRotationInOrigin = NormalizeQuaternion(originInverse * surface.Pose.rotation),
+                SurfaceSize = surface.Size,
+                AvatarPositionRelativeToSurface = surfaceInverse * (avatarPose.position - surface.Pose.position),
+                AvatarRotationRelativeToSurface = NormalizeQuaternion(surfaceInverse * avatarPose.rotation)
+            };
+        }
+
+        public static bool TryResolvePlacementBookmark(
+            AvatarPlacementBookmark bookmark,
+            IReadOnlyList<RoomSurfaceObservation> candidates,
+            Pose originPose,
+            float maximumFallbackCenterDistance,
+            out Pose avatarPose,
+            out RoomSurfaceObservation matchedSurface)
+        {
+            avatarPose = default;
+            matchedSurface = default;
+            if (!IsValidPlacementBookmark(bookmark) || candidates == null)
+            {
+                return false;
+            }
+
+            var inverseOrigin = Quaternion.Inverse(originPose.rotation);
+            var found = false;
+            var bestScore = float.PositiveInfinity;
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                var candidate = candidates[index];
+                if ((int)candidate.Classification != bookmark.SurfaceClassification ||
+                    !RoomUnderstandingService.IsUsableObservation(candidate))
+                {
+                    continue;
+                }
+
+                var exactId = string.Equals(
+                    candidate.Id,
+                    bookmark.SurfaceId,
+                    System.StringComparison.Ordinal);
+                var localCenter = inverseOrigin * (candidate.Pose.position - originPose.position);
+                var centerDistance = Vector3.Distance(localCenter, bookmark.SurfacePositionInOrigin);
+                var candidateLongSide = Mathf.Max(candidate.Size.x, candidate.Size.y);
+                var candidateShortSide = Mathf.Min(candidate.Size.x, candidate.Size.y);
+                var bookmarkLongSide = Mathf.Max(bookmark.SurfaceSize.x, bookmark.SurfaceSize.y);
+                var bookmarkShortSide = Mathf.Min(bookmark.SurfaceSize.x, bookmark.SurfaceSize.y);
+                var sizeDistance = Vector2.Distance(
+                    new Vector2(candidateLongSide, candidateShortSide),
+                    new Vector2(bookmarkLongSide, bookmarkShortSide));
+                if (!exactId &&
+                    (centerDistance > Mathf.Max(.1f, maximumFallbackCenterDistance) || sizeDistance > .6f))
+                {
+                    continue;
+                }
+
+                var score = exactId ? centerDistance * .01f : 100f + centerDistance + sizeDistance * .5f;
+                if (found && score > bestScore + .0001f)
+                {
+                    continue;
+                }
+                if (found && Mathf.Abs(score - bestScore) <= .0001f &&
+                    string.CompareOrdinal(candidate.Id, matchedSurface.Id) >= 0)
+                {
+                    continue;
+                }
+
+                found = true;
+                bestScore = score;
+                matchedSurface = candidate;
+            }
+
+            if (!found)
+            {
+                return false;
+            }
+
+            avatarPose = new Pose(
+                matchedSurface.Pose.position +
+                    matchedSurface.Pose.rotation * bookmark.AvatarPositionRelativeToSurface,
+                NormalizeQuaternion(
+                    matchedSurface.Pose.rotation * bookmark.AvatarRotationRelativeToSurface));
+            return IsFinitePose(avatarPose);
+        }
+
+        public static bool IsValidPlacementBookmark(AvatarPlacementBookmark bookmark)
+        {
+            return bookmark.Version == PlacementBookmarkVersion &&
+                !string.IsNullOrEmpty(bookmark.SurfaceId) && bookmark.SurfaceId.Length <= 128 &&
+                (bookmark.SurfaceClassification == (int)PlaneClassification.Floor ||
+                 bookmark.SurfaceClassification == (int)PlaneClassification.Seat) &&
+                IsFinite(bookmark.SurfacePositionInOrigin) &&
+                IsFinite(bookmark.SurfaceRotationInOrigin) &&
+                IsFinite(bookmark.SurfaceSize) && bookmark.SurfaceSize.x > 0f && bookmark.SurfaceSize.y > 0f &&
+                IsFinite(bookmark.AvatarPositionRelativeToSurface) &&
+                IsFinite(bookmark.AvatarRotationRelativeToSurface);
+        }
+
+        private static Quaternion NormalizeQuaternion(Quaternion value)
+        {
+            var magnitude = Mathf.Sqrt(
+                value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w);
+            if (magnitude < .0001f || float.IsNaN(magnitude) || float.IsInfinity(magnitude))
+            {
+                return Quaternion.identity;
+            }
+            return new Quaternion(
+                value.x / magnitude,
+                value.y / magnitude,
+                value.z / magnitude,
+                value.w / magnitude);
+        }
+
+        private static bool IsFinitePose(Pose value)
+        {
+            return IsFinite(value.position) && IsFinite(value.rotation);
+        }
+
+        private static bool IsFinite(Vector2 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y);
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static bool IsFinite(Quaternion value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z) && IsFinite(value.w) &&
+                value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w > .0001f;
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         public static float EstimateUserHeight(

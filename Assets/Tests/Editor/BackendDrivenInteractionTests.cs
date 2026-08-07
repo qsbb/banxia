@@ -57,6 +57,62 @@ namespace QuestMmdPlayer.Tests
             Assert.AreEqual(HumanInteractionKind.HeadPat, interaction.PendingBackendReaction);
             Assert.IsFalse(interaction.LocalReactionsEnabled);
         }
+
+        [Test]
+        public void BehaviorCoordinatorRejectsRepeatedOrConflictingWholeBodyGestures()
+        {
+            var behavior = new AvatarBehaviorCoordinator();
+            behavior.Reset(0f, 0f);
+
+            Assert.IsTrue(behavior.TryAcceptIntent("wave", false, false, 1f, out var wave));
+            Assert.AreEqual("wave", wave);
+            Assert.IsFalse(behavior.TryAcceptIntent("wave", false, false, 2.5f, out _));
+            Assert.IsFalse(behavior.TryAcceptIntent("bow", true, false, 8f, out _));
+            Assert.IsFalse(behavior.TryAcceptIntent("bow", false, true, 8f, out _));
+            Assert.IsFalse(behavior.TryAcceptIntent("step_back", false, false, 8f, out _));
+            Assert.IsTrue(behavior.TryAcceptIntent("talk", true, true, 8f, out var talk));
+            Assert.AreEqual("talk", talk);
+        }
+
+        [TestCase(ConversationState.Idle, false, false, "idle", true)]
+        [TestCase(ConversationState.Listening, false, false, "idle", false)]
+        [TestCase(ConversationState.Speaking, false, false, "idle", false)]
+        [TestCase(ConversationState.Idle, true, false, "idle", false)]
+        [TestCase(ConversationState.Idle, false, true, "idle", false)]
+        [TestCase(ConversationState.Idle, false, false, "wave", false)]
+        public void IdleBehaviorOnlyRunsWhenEveryHigherPriorityLayerIsIdle(
+            ConversationState state,
+            bool semanticContact,
+            bool importedMotionBusy,
+            string currentAction,
+            bool expected)
+        {
+            Assert.AreEqual(
+                expected,
+                AvatarBehaviorCoordinator.CanRunIdleBehavior(
+                    state,
+                    semanticContact,
+                    importedMotionBusy,
+                    currentAction));
+        }
+
+        [Test]
+        public void ExplicitGestureDefersTheNextAutomaticIdleMotion()
+        {
+            var behavior = new AvatarBehaviorCoordinator();
+            behavior.Reset(0f, 0f);
+
+            Assert.IsTrue(behavior.TryAcceptIntent("wave", false, false, 20f, out _));
+            Assert.That(behavior.NextIdleBehaviorAt, Is.GreaterThanOrEqualTo(38f));
+            Assert.IsFalse(behavior.TryTakeIdleBehavior(
+                ConversationState.Idle,
+                false,
+                false,
+                "idle",
+                30f,
+                0f,
+                out _));
+        }
     }
 }
 #endif

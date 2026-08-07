@@ -29,6 +29,8 @@ namespace QuestMmdPlayer
         [SerializeField] private float attentionSpeed = 5f;
         [SerializeField, Range(.05f, 1f)] private float breathPitchDegrees = .28f;
         [SerializeField] private float breathCyclesPerMinute = 12f;
+        [SerializeField, Range(0f, 1.5f)] private float idleSwayDegrees = .45f;
+        [SerializeField, Range(1f, 8f)] private float idleSwayCyclesPerMinute = 3.6f;
 
         private AvatarController avatar;
         private AvatarHumanInteraction humanInteraction;
@@ -276,8 +278,18 @@ namespace QuestMmdPlayer
             }
 
             var phase = Time.unscaledTime * breathCyclesPerMinute / 60f * Mathf.PI * 2f;
-            var target = chestRestRotation * Quaternion.Euler(Mathf.Sin(phase) * breathPitchDegrees, 0f, 0f);
-            chest.localRotation = Quaternion.Slerp(chest.localRotation, target, Time.unscaledDeltaTime * attentionSpeed);
+            var idlePhase = Time.unscaledTime * idleSwayCyclesPerMinute / 60f * Mathf.PI * 2f;
+            var idleMotion = avatar != null && avatar.CurrentAction == "idle";
+            var yaw = idleMotion ? Mathf.Sin(idlePhase) * idleSwayDegrees * .65f : 0f;
+            var roll = idleMotion ? Mathf.Sin(idlePhase * .73f + 1.1f) * idleSwayDegrees : 0f;
+            var target = chestRestRotation * Quaternion.Euler(
+                Mathf.Sin(phase) * breathPitchDegrees,
+                yaw,
+                roll);
+            chest.localRotation = Quaternion.Slerp(
+                chest.localRotation,
+                target,
+                Time.unscaledDeltaTime * attentionSpeed);
         }
 
         private void ApplyBlink()

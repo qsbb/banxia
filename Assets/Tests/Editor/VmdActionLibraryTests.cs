@@ -148,6 +148,19 @@ namespace QuestMmdPlayer.Tests
             Assert.That(VmdActionLibrary.SmoothReturnProgress(2f), Is.EqualTo(1f).Within(.0001f));
         }
 
+        [TestCase(0f, 1f, false)]
+        [TestCase(.999f, 1f, false)]
+        [TestCase(1f, 1f, true)]
+        [TestCase(1.5f, 1f, true)]
+        public void EndPoseHoldCompletesOnlyAfterConfiguredDelay(
+            float elapsedSeconds,
+            float holdSeconds,
+            bool expected)
+        {
+            Assert.That(
+                VmdActionLibrary.IsEndPoseHoldComplete(elapsedSeconds, holdSeconds),
+                Is.EqualTo(expected));
+        }
         private static void WriteVmd(string path, uint[] boneFrames, uint[] morphFrames)
         {
             using var stream = File.Create(path);

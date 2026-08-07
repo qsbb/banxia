@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using UMT;
 using UnityEngine;
 using UnityEngine.XR;
 using UnityEngine.XR.Hands;
@@ -16,8 +17,12 @@ namespace QuestMmdPlayer
         [SerializeField] private bool inputEnabled = true;
         [SerializeField] private bool enableTouchFeedback = false;
         [SerializeField] private float touchDistance = 0.07f;
+        [SerializeField, Range(1f, 2f)] private float touchReleaseDistanceMultiplier = 1.35f;
         [SerializeField] private float grabDistance = 0.16f;
         [SerializeField] private float grabThreshold = 0.65f;
+        [SerializeField, Range(.02f, .08f)] private float pinchEnterDistance = .032f;
+        [SerializeField, Range(.025f, .10f)] private float pinchReleaseDistance = .045f;
+        [SerializeField, Range(.02f, .25f)] private float trackedPoseGraceSeconds = .10f;
         [SerializeField] private Transform trackingSpace;
 
         private readonly HandState leftHand = new HandState(XRNode.LeftHand);
@@ -58,8 +63,14 @@ namespace QuestMmdPlayer
             public InputDevice device;
             public bool available;
             public bool trackedHand;
+            public bool trackingGrace;
             public Vector3 position;
             public Quaternion rotation;
+            public Vector3 indexTip;
+            public Vector3 thumbTip;
+            public bool hasIndexTip;
+            public bool hasThumbTip;
+            public float lastTrackedPoseAt = float.NegativeInfinity;
             public bool primary;
             public bool secondary;
             public bool grabHeld;
@@ -127,8 +138,25 @@ namespace QuestMmdPlayer
             {
                 leftHand.grabbing = false;
                 rightHand.grabbing = false;
+                ResetTouchState(true);
                 ClearFeedback();
                 Status = "Touch interaction disabled";
+            }
+        }
+
+        private void ResetTouchState(bool notify)
+        {
+            var wasTouched = previousTouched || leftHand.touched || rightHand.touched;
+            leftHand.touched = false;
+            rightHand.touched = false;
+            leftHand.nearGrab = false;
+            rightHand.nearGrab = false;
+            previousTouched = false;
+            TouchedSide = string.Empty;
+            IsQaContact = false;
+            if (notify && wasTouched)
+            {
+                TouchStateChanged?.Invoke(false);
             }
         }
 
@@ -163,12 +191,14 @@ namespace QuestMmdPlayer
 
         private void ReadHand(HandState hand)
         {
+            var hadTrackedPose = hand.trackedHand && hand.available;
             hand.previousPrimary = hand.primary;
             hand.previousSecondary = hand.secondary;
             hand.primary = false;
             hand.secondary = false;
             hand.grabHeld = false;
             hand.trackedHand = false;
+            hand.trackingGrace = false;
             hand.available = false;
             if (TryReadTrackedHand(hand))
             {
@@ -179,6 +209,7 @@ namespace QuestMmdPlayer
 
             if (!hand.device.isValid)
             {
+                PreserveTrackedPoseDuringGrace(hand, hadTrackedPose);
                 return;
             }
 
@@ -187,6 +218,7 @@ namespace QuestMmdPlayer
             if (!hand.device.TryGetFeatureValue(CommonUsages.devicePosition, out localPosition) ||
                 !hand.device.TryGetFeatureValue(CommonUsages.deviceRotation, out localRotation))
             {
+                PreserveTrackedPoseDuringGrace(hand, hadTrackedPose);
                 return;
             }
 
@@ -200,6 +232,22 @@ namespace QuestMmdPlayer
             hand.secondary = ReadButton(hand.device, CommonUsages.secondaryButton);
             hand.grabHeld = ReadButton(hand.device, CommonUsages.gripButton, CommonUsages.grip) ||
                              ReadButton(hand.device, CommonUsages.triggerButton, CommonUsages.trigger, grabThreshold);
+            hand.hasIndexTip = false;
+            hand.hasThumbTip = false;
+            hand.available = true;
+        }
+
+        private void PreserveTrackedPoseDuringGrace(HandState hand, bool hadTrackedPose)
+        {
+            if (!hadTrackedPose || !IsTrackingGraceActive(Time.unscaledTime, hand.lastTrackedPoseAt, trackedPoseGraceSeconds))
+            {
+                hand.hasIndexTip = false;
+                hand.hasThumbTip = false;
+                return;
+            }
+
+            hand.trackedHand = true;
+            hand.trackingGrace = true;
             hand.available = true;
         }
 
@@ -218,21 +266,56 @@ namespace QuestMmdPlayer
             }
 
             state.trackedHand = true;
+            state.trackingGrace = false;
             state.position = trackingSpace == null
                 ? palmPose.position
                 : trackingSpace.TransformPoint(palmPose.position);
             state.rotation = trackingSpace == null
                 ? palmPose.rotation
                 : trackingSpace.rotation * palmPose.rotation;
-            if (trackedHand.GetJoint(XRHandJointID.IndexTip).TryGetPose(out var indexTip) &&
-                trackedHand.GetJoint(XRHandJointID.ThumbTip).TryGetPose(out var thumbTip))
+            state.hasIndexTip = trackedHand.GetJoint(XRHandJointID.IndexTip).TryGetPose(out var indexTip);
+            state.hasThumbTip = trackedHand.GetJoint(XRHandJointID.ThumbTip).TryGetPose(out var thumbTip);
+            if (state.hasIndexTip)
             {
-                var pinch = Vector3.Distance(indexTip.position, thumbTip.position) <= .032f;
+                state.indexTip = trackingSpace == null
+                    ? indexTip.position
+                    : trackingSpace.TransformPoint(indexTip.position);
+            }
+            if (state.hasThumbTip)
+            {
+                state.thumbTip = trackingSpace == null
+                    ? thumbTip.position
+                    : trackingSpace.TransformPoint(thumbTip.position);
+            }
+            if (state.hasIndexTip && state.hasThumbTip)
+            {
+                var pinch = UpdatePinchState(
+                    state.previousPrimary,
+                    Vector3.Distance(indexTip.position, thumbTip.position),
+                    pinchEnterDistance,
+                    pinchReleaseDistance);
                 state.primary = pinch;
                 state.grabHeld = pinch;
             }
+            state.lastTrackedPoseAt = Time.unscaledTime;
             state.available = true;
             return true;
+        }
+
+        public static bool UpdatePinchState(
+            bool wasPinching,
+            float tipDistance,
+            float enterDistance = .032f,
+            float releaseDistance = .045f)
+        {
+            var enter = Mathf.Max(.001f, enterDistance);
+            var release = Mathf.Max(enter, releaseDistance);
+            return wasPinching ? tipDistance <= release : tipDistance <= enter;
+        }
+
+        public static bool IsTrackingGraceActive(float now, float lastTrackedAt, float graceSeconds)
+        {
+            return graceSeconds > 0f && now >= lastTrackedAt && now - lastTrackedAt <= graceSeconds;
         }
 
         private XRHandSubsystem FindHandSubsystem()
@@ -288,21 +371,18 @@ namespace QuestMmdPlayer
         private void UpdateTouchState(Bounds bounds)
         {
             IsQaContact = false;
-            leftHand.touched = leftHand.available && IsContact(bounds, leftHand.position, touchDistance);
-            rightHand.touched = rightHand.available && IsContact(bounds, rightHand.position, touchDistance);
+            leftHand.touched = leftHand.available && IsHandContact(
+                bounds,
+                leftHand,
+                ContactThreshold(leftHand.touched, touchDistance, touchReleaseDistanceMultiplier));
+            rightHand.touched = rightHand.available && IsHandContact(
+                bounds,
+                rightHand,
+                ContactThreshold(rightHand.touched, touchDistance, touchReleaseDistanceMultiplier));
             leftHand.nearGrab = leftHand.available && IsContact(bounds, leftHand.position, grabDistance);
             rightHand.nearGrab = rightHand.available && IsContact(bounds, rightHand.position, grabDistance);
 
             var touched = leftHand.touched || rightHand.touched;
-            if (touched != previousTouched)
-            {
-                previousTouched = touched;
-                TouchStateChanged?.Invoke(touched);
-                Debug.Log(touched
-                    ? $"[AvatarTouch] Contact began: {TouchedSide}."
-                    : "[AvatarTouch] Contact ended.", this);
-            }
-
             if (leftHand.touched && rightHand.touched)
             {
                 TouchedSide = "left + right";
@@ -319,6 +399,20 @@ namespace QuestMmdPlayer
             {
                 TouchedSide = string.Empty;
             }
+            if (touched != previousTouched)
+            {
+                previousTouched = touched;
+                TouchStateChanged?.Invoke(touched);
+                Debug.Log(touched
+                    ? $"[AvatarTouch] Contact began: {TouchedSide}."
+                    : "[AvatarTouch] Contact ended.", this);
+            }
+        }
+
+        public static float ContactThreshold(bool wasTouching, float enterDistance, float releaseMultiplier = 1.35f)
+        {
+            var enter = Mathf.Max(0f, enterDistance);
+            return wasTouching ? enter * Mathf.Max(1f, releaseMultiplier) : enter;
         }
 
         private void HandleActionButtons()
@@ -529,6 +623,18 @@ namespace QuestMmdPlayer
             return TryGetContactRegion(point, distance, out _) || IsWithinDistance(bounds, point, distance);
         }
 
+        private bool IsHandContact(Bounds bounds, HandState hand, float distance)
+        {
+            if (IsContact(bounds, hand.position, distance))
+            {
+                return true;
+            }
+
+            var fingertipDistance = Mathf.Clamp(distance * .65f, .018f, .05f);
+            return hand.hasIndexTip && IsContact(bounds, hand.indexTip, fingertipDistance) ||
+                   hand.hasThumbTip && IsContact(bounds, hand.thumbTip, fingertipDistance);
+        }
+
         public bool TryGetContactRegion(Vector3 point, float radius, out AvatarContactRegion region)
         {
             region = AvatarContactRegion.None;
@@ -572,11 +678,54 @@ namespace QuestMmdPlayer
             var bodyRadius = Mathf.Clamp(Mathf.Min(bounds.size.x, bounds.size.z) * .28f, .08f, .24f);
             CreateCapsuleProxy("Body", AvatarContactRegion.Body, bounds.center + Vector3.up * bounds.size.y * -.03f, bodyRadius, Mathf.Max(bodyRadius * 2f, bounds.size.y * .72f));
             var headRadius = Mathf.Clamp(bounds.size.y * .12f, .08f, .18f);
-            var headCenter = new Vector3(bounds.center.x, bounds.min.y + bounds.size.y * .79f, bounds.center.z);
-            CreateSphereProxy("Head", AvatarContactRegion.Head, headCenter, headRadius);
+            var headBone = FindAvatarBone("head", "\u982D", "\u5934");
+            var headCenter = headBone == null
+                ? new Vector3(bounds.center.x, bounds.min.y + bounds.size.y * .79f, bounds.center.z)
+                : headBone.position + avatar.transform.up * headRadius * .25f;
+            CreateSphereProxy("Head", AvatarContactRegion.Head, headCenter, headRadius, headBone);
             var faceCenter = headCenter + avatar.transform.forward * headRadius * .72f;
-            CreateSphereProxy("Face", AvatarContactRegion.Face, faceCenter, headRadius * .72f);
+            CreateSphereProxy("Face", AvatarContactRegion.Face, faceCenter, headRadius * .72f, headBone);
+            var handRadius = Mathf.Clamp(bounds.size.y * .035f, .035f, .075f);
+            var leftBone = FindAvatarBone("lefthand", "hand_l", "\u5DE6\u624B\u9996");
+            var rightBone = FindAvatarBone("righthand", "hand_r", "\u53F3\u624B\u9996");
+            if (leftBone != null)
+            {
+                CreateSphereProxy("Left Hand", AvatarContactRegion.Hand, leftBone.position, handRadius, leftBone);
+            }
+            if (rightBone != null)
+            {
+                CreateSphereProxy("Right Hand", AvatarContactRegion.Hand, rightBone.position, handRadius, rightBone);
+            }
             collisionGeometryReady = true;
+        }
+
+        private Transform FindAvatarBone(params string[] names)
+        {
+            var all = avatar.GetComponentsInChildren<MMDBoneTransform>(true);
+            for (var pass = 0; pass < 2; pass++)
+            {
+                for (var nameIndex = 0; nameIndex < names.Length; nameIndex++)
+                {
+                    var wanted = NormalizeBoneName(names[nameIndex]);
+                    for (var boneIndex = 0; boneIndex < all.Length; boneIndex++)
+                    {
+                        if (all[boneIndex] == null) continue;
+                        var actual = NormalizeBoneName(all[boneIndex].boneName);
+                        if (pass == 0 ? actual == wanted : actual.Contains(wanted))
+                        {
+                            return all[boneIndex].transform;
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static string NormalizeBoneName(string value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : value.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty).Replace(".", string.Empty);
         }
 
         private void CreateCapsuleProxy(string objectName, AvatarContactRegion region, Vector3 worldCenter, float radius, float height)
@@ -593,7 +742,12 @@ namespace QuestMmdPlayer
             proxy.Region = region;
         }
 
-        private void CreateSphereProxy(string objectName, AvatarContactRegion region, Vector3 worldCenter, float radius)
+        private void CreateSphereProxy(
+            string objectName,
+            AvatarContactRegion region,
+            Vector3 worldCenter,
+            float radius,
+            Transform followTarget = null)
         {
             var proxyObject = new GameObject("Avatar Contact " + objectName);
             proxyObject.transform.SetParent(collisionProxyRoot.transform, true);
@@ -603,6 +757,7 @@ namespace QuestMmdPlayer
             collider.isTrigger = true;
             var proxy = proxyObject.AddComponent<AvatarContactProxy>();
             proxy.Region = region;
+            proxy.SetFollowTarget(followTarget);
         }
 
         private void ClearCollisionProxies()
@@ -671,6 +826,7 @@ namespace QuestMmdPlayer
 
         private void OnDisable()
         {
+            ResetTouchState(true);
             ClearFeedback();
         }
 
@@ -692,5 +848,21 @@ namespace QuestMmdPlayer
     internal sealed class AvatarContactProxy : MonoBehaviour
     {
         public AvatarContactRegion Region;
+        private Transform followTarget;
+        private Vector3 followOffset;
+
+        public void SetFollowTarget(Transform target)
+        {
+            followTarget = target;
+            followOffset = target == null ? Vector3.zero : target.InverseTransformPoint(transform.position);
+        }
+
+        private void LateUpdate()
+        {
+            if (followTarget != null)
+            {
+                transform.position = followTarget.TransformPoint(followOffset);
+            }
+        }
     }
 }

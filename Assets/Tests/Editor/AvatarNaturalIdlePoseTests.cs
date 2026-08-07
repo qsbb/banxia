@@ -67,6 +67,38 @@ namespace QuestMmdPlayer.Tests
             Assert.That(rightHand.position.x, Is.GreaterThan(rightLower.position.x));
         }
         [Test]
+        public void DirectionalIdleCapsLargeBoneAxisCorrection()
+        {
+            var root = new GameObject("ArmCorrectionRoot");
+            var bone = new GameObject("ArmCorrectionBone");
+            var child = new GameObject("ArmCorrectionChild");
+            try
+            {
+                bone.transform.SetParent(root.transform, false);
+                child.transform.SetParent(bone.transform, false);
+                child.transform.localPosition = Vector3.right;
+                var method = typeof(AvatarNaturalIdlePose).GetMethod(
+                    "CalculateAlignedLocalRotation",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+
+                Assert.That(method, Is.Not.Null);
+                var result = (Quaternion)method.Invoke(null, new object[]
+                {
+                    bone.transform,
+                    child.transform,
+                    Vector3.down,
+                    Quaternion.identity,
+                    35f
+                });
+
+                Assert.That(Quaternion.Angle(Quaternion.identity, result), Is.EqualTo(35f).Within(.01f));
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+        [Test]
         public void TouchDistanceUsesNearestAvatarSurface()
         {
             var bounds = new Bounds(Vector3.zero, Vector3.one * 2f);
@@ -103,6 +135,17 @@ namespace QuestMmdPlayer.Tests
             Assert.That(Quaternion.Angle(armRotation, upper.localRotation), Is.LessThan(.01f));
         }
 
+        [Test]
+        public void NaturalNodUsesAStrongThenSoftAcknowledgement()
+        {
+            Assert.That(AvatarController.NaturalNodPitch(0f), Is.EqualTo(0f).Within(.001f));
+            Assert.That(AvatarController.NaturalNodPitch(1f), Is.EqualTo(0f).Within(.001f));
+            var primary = AvatarController.NaturalNodPitch(.33f);
+            var secondary = AvatarController.NaturalNodPitch(.65f);
+            Assert.That(primary, Is.GreaterThan(7f));
+            Assert.That(secondary, Is.GreaterThan(3f));
+            Assert.That(primary, Is.GreaterThan(secondary));
+        }
         [Test]
         public void BuiltInWaveIsNotResetByIdleHumanInteractionArbiter()
         {

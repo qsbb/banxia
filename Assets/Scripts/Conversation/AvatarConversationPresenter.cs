@@ -25,9 +25,11 @@ namespace QuestMmdPlayer
 
         private readonly List<Viseme> visemes = new List<Viseme>();
         private readonly List<ExpressionMorph> expressions = new List<ExpressionMorph>();
+        private readonly AvatarBehaviorCoordinator behavior = new AvatarBehaviorCoordinator();
         private AvatarController avatar;
         private AvatarHumanInteraction humanInteraction;
         private Pcm16StreamAudioPlayer audioPlayer;
+        private VmdActionLibrary vmdActions;
         private Transform head;
         private Transform jaw;
         private Quaternion headBaseRotation;
@@ -43,7 +45,9 @@ namespace QuestMmdPlayer
         [SerializeField, Range(1f, 12f)] private float expressionBlendSpeed = 6f;
 
         public int MatchedVisemeCount => visemes.Count;
-        public string Status => avatar == null ? "Waiting for avatar" : $"{state} | visemes:{visemes.Count} jaw:{(jaw == null ? "no" : "yes")}";
+        public string Status => avatar == null
+            ? "Waiting for avatar"
+            : $"{state} | gesture:{behavior.LastGesture} visemes:{visemes.Count} jaw:{(jaw == null ? "no" : "yes")}";
 
         public void Bind(AvatarController target, AvatarHumanInteraction human, Pcm16StreamAudioPlayer streamPlayer)
         {
@@ -54,6 +58,7 @@ namespace QuestMmdPlayer
             avatar = target;
             humanInteraction = human;
             audioPlayer = streamPlayer;
+            vmdActions = GetComponent<VmdActionLibrary>();
             head = null;
             jaw = null;
             visemes.Clear();
@@ -63,6 +68,7 @@ namespace QuestMmdPlayer
             gazeBlend = 0f;
             lookAtMode = "none";
             mouthWasActive = false;
+            behavior.Reset(Time.unscaledTime, Random.value);
 
             if (avatar == null)
             {
@@ -86,6 +92,10 @@ namespace QuestMmdPlayer
 
         public void SetConversationState(ConversationState next)
         {
+            if (state != ConversationState.Idle && next == ConversationState.Idle)
+            {
+                behavior.DeferIdle(Time.unscaledTime, Random.value);
+            }
             state = next;
         }
 
@@ -104,27 +114,32 @@ namespace QuestMmdPlayer
             targetEmotionIntensity = Mathf.Clamp01(intensity);
             lookAtMode = lookAt == "hand" ? "none" : lookAt;
             var reactionSeconds = Mathf.Clamp(durationMs <= 0 ? 2f : durationMs / 1000f, .25f, 8f);
-            if (gesture == "handshake")
+            var semanticContact = humanInteraction != null && humanInteraction.HasSemanticContact;
+            if (!behavior.TryAcceptIntent(
+                    gesture,
+                    semanticContact,
+                    IsImportedMotionBusy(),
+                    Time.unscaledTime,
+                    out var acceptedGesture))
+            {
+                return;
+            }
+
+            if (acceptedGesture == "handshake")
             {
                 humanInteraction?.PlayReaction(HumanInteractionKind.Handshake, reactionSeconds);
             }
-            else if (gesture == "head_pat")
+            else if (acceptedGesture == "head_pat")
             {
                 humanInteraction?.PlayReaction(HumanInteractionKind.HeadPat, reactionSeconds);
             }
-            else if (gesture == "cheek_pinch")
+            else if (acceptedGesture == "cheek_pinch")
             {
                 humanInteraction?.PlayReaction(HumanInteractionKind.CheekPinch, reactionSeconds);
             }
-            else if (gesture == "wave" || gesture == "bow" || gesture == "idle")
+            else if (acceptedGesture == "wave" || acceptedGesture == "bow" || acceptedGesture == "idle")
             {
-                avatar.PlayAction(gesture);
-            }
-            else
-            {
-                // talk uses the audio/mouth layer. refuse and step_back need a
-                // model capability that the current PMX adapter does not expose.
-                avatar.PlayAction("idle");
+                avatar.PlayAction(acceptedGesture);
             }
         }
 
@@ -145,6 +160,29 @@ namespace QuestMmdPlayer
             var speechLevel = state == ConversationState.Speaking && audioPlayer != null ? audioPlayer.LatestRms : 0f;
             ApplyMouth(speechLevel);
             ApplyExpressions();
+            UpdateIdleBehavior(semanticContact);
+        }
+
+        private void UpdateIdleBehavior(bool semanticContact)
+        {
+            if (behavior.TryTakeIdleBehavior(
+                    state,
+                    semanticContact,
+                    IsImportedMotionBusy(),
+                    avatar.CurrentAction,
+                    Time.unscaledTime,
+                    Random.value,
+                    out var gesture))
+            {
+                avatar.PlayAction(gesture);
+            }
+        }
+
+        private bool IsImportedMotionBusy()
+        {
+            return vmdActions != null &&
+                (vmdActions.IsLoading || vmdActions.IsPlaying ||
+                    vmdActions.IsHoldingEndPose || vmdActions.IsBlendingOut);
         }
 
         public static bool ShouldUseIdleUserGaze(ConversationState conversationState, bool semanticContact, bool enabled)

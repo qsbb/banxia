@@ -26,6 +26,9 @@ namespace QuestMmdPlayer
         private int dspBufferCount = 4;
         private double audibleUntilDspTime;
         private bool streamCompleted = true;
+        private bool playbackStarted;
+        private int underflowCount;
+        [SerializeField, Range(.04f, .4f)] private float startupBufferSeconds = .12f;
         [SerializeField, Range(.02f, .5f)] private float outputTailSafetySeconds = .22f;
 
         public bool IsDrained
@@ -40,6 +43,9 @@ namespace QuestMmdPlayer
         }
 
         public bool StreamCompleted => streamCompleted;
+        public bool PlaybackStarted => playbackStarted;
+        public int UnderflowCount => underflowCount;
+        public string DiagnosticStatus => $"buffer {BufferedSeconds:F2}s | started {playbackStarted} | underflows {underflowCount}";
 
         public float BufferedSeconds
         {
@@ -70,6 +76,7 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
+            TryStartPlayback();
             if (audioSource != null && audioSource.isPlaying && streamCompleted && IsDrained)
             {
                 audioSource.Stop();
@@ -81,11 +88,13 @@ namespace QuestMmdPlayer
         {
             StopAndClear();
             streamCompleted = false;
+            underflowCount = 0;
         }
 
         public void MarkStreamCompleted()
         {
             streamCompleted = true;
+            TryStartPlayback();
         }
         public void Enqueue(short[] pcm16, int sourceSampleRate)
         {
@@ -106,10 +115,7 @@ namespace QuestMmdPlayer
                 buffers.Enqueue(converted);
                 queuedSamples += converted.Length;
             }
-            if (!audioSource.isPlaying)
-            {
-                audioSource.Play();
-            }
+            TryStartPlayback();
         }
 
         public void StopAndClear()
@@ -127,6 +133,7 @@ namespace QuestMmdPlayer
                 latestRms = 0f;
                 audibleUntilDspTime = 0d;
                 streamCompleted = true;
+                playbackStarted = false;
             }
         }
 
@@ -196,6 +203,10 @@ namespace QuestMmdPlayer
                 {
                     data[i] = 0f;
                 }
+                if (write < data.Length && playbackStarted && !streamCompleted)
+                {
+                    underflowCount++;
+                }
                 latestRms = data.Length == 0 ? 0f : Mathf.Sqrt(sumSquares / data.Length);
                 if (write > 0 && sampleRate > 0)
                 {
@@ -206,6 +217,35 @@ namespace QuestMmdPlayer
                         AudioSettings.dspTime + callbackSeconds + outputLatencySeconds + outputTailSafetySeconds);
                 }
             }
+        }
+
+        public static bool ShouldStartPlayback(
+            int bufferedSamples,
+            int outputSampleRate,
+            bool completed,
+            float targetBufferSeconds)
+        {
+            if (bufferedSamples <= 0 || outputSampleRate <= 0)
+            {
+                return false;
+            }
+            return completed || bufferedSamples >= outputSampleRate * Mathf.Max(.02f, targetBufferSeconds);
+        }
+
+        private void TryStartPlayback()
+        {
+            if (audioSource == null || audioSource.isPlaying)
+            {
+                return;
+            }
+            int buffered;
+            lock (gate) buffered = queuedSamples;
+            if (!ShouldStartPlayback(buffered, sampleRate, streamCompleted, startupBufferSeconds))
+            {
+                return;
+            }
+            playbackStarted = true;
+            audioSource.Play();
         }
 
         private static void SetPosition(int position)
