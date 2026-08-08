@@ -29,9 +29,10 @@ namespace QuestMmdPlayer
         private readonly HandState rightHand = new HandState(XRNode.RightHand);
         private readonly List<XRHandSubsystem> handSubsystems = new List<XRHandSubsystem>();
         private MaterialPropertyBlock touchPropertyBlock;
-        private readonly Collider[] contactHits = new Collider[24];
+        private readonly List<AvatarContactProxy> contactProxies = new List<AvatarContactProxy>();
         private GameObject collisionProxyRoot;
         private bool collisionGeometryReady;
+        private int modelCollisionVolumeCount;
         private AvatarController avatar;
         private Renderer[] avatarRenderers = Array.Empty<Renderer>();
         private bool previousTouched;
@@ -56,6 +57,7 @@ namespace QuestMmdPlayer
         public string Status { get; private set; } = "No XR hand/controller";
         public string TouchedSide { get; private set; } = string.Empty;
         public bool IsQaContact { get; private set; }
+        public int ModelCollisionVolumeCount => modelCollisionVolumeCount;
 
         private sealed class HandState
         {
@@ -174,6 +176,7 @@ namespace QuestMmdPlayer
 
             var bounds = CalculateAvatarBounds();
             EnsureCollisionProxies(bounds);
+            UpdateCollisionProxyScale();
             UpdateTouchState(bounds);
             if (!semanticInteractionLock)
             {
@@ -449,8 +452,16 @@ namespace QuestMmdPlayer
             var wasLeftGrabbing = leftHand.grabbing;
             var wasRightGrabbing = rightHand.grabbing;
 
-            leftHand.grabbing = leftHand.available && leftHand.grabHeld && leftHand.nearGrab;
-            rightHand.grabbing = rightHand.available && rightHand.grabHeld && rightHand.nearGrab;
+            leftHand.grabbing = CanDragAvatar(
+                leftHand.trackedHand,
+                leftHand.available,
+                leftHand.grabHeld,
+                leftHand.nearGrab);
+            rightHand.grabbing = CanDragAvatar(
+                rightHand.trackedHand,
+                rightHand.available,
+                rightHand.grabHeld,
+                rightHand.nearGrab);
 
             if (wasLeftGrabbing != leftHand.grabbing || wasRightGrabbing != rightHand.grabbing)
             {
@@ -620,7 +631,21 @@ namespace QuestMmdPlayer
 
         private bool IsContact(Bounds bounds, Vector3 point, float distance)
         {
-            return TryGetContactRegion(point, distance, out _) || IsWithinDistance(bounds, point, distance);
+            return collisionGeometryReady
+                ? TryGetContactRegion(point, distance, out _)
+                : IsWithinDistance(bounds, point, distance);
+        }
+
+        public static bool CanDragAvatar(
+            bool trackedHand,
+            bool available,
+            bool grabHeld,
+            bool nearGrab)
+        {
+            // A hand-tracking pinch is reserved for UI selection and semantic
+            // fingertip contact. Moving the whole avatar remains a controller
+            // grip operation so pinching near the model cannot drag it.
+            return !trackedHand && available && grabHeld && nearGrab;
         }
 
         private bool IsHandContact(Bounds bounds, HandState hand, float distance)
@@ -643,19 +668,27 @@ namespace QuestMmdPlayer
                 return false;
             }
 
-            var count = Physics.OverlapSphereNonAlloc(point, Mathf.Max(.01f, radius), contactHits, ~0, QueryTriggerInteraction.Collide);
             var bestPriority = 0;
-            for (var i = 0; i < count; i++)
+            var safeRadius = Mathf.Max(.005f, radius);
+            for (var i = 0; i < contactProxies.Count; i++)
             {
-                var collider = contactHits[i];
-                if (collider == null || !collider.transform.IsChildOf(avatar.transform))
+                var proxy = contactProxies[i];
+                if (proxy == null || !proxy.isActiveAndEnabled)
                 {
                     continue;
                 }
-
-                var proxy = collider.GetComponent<AvatarContactProxy>();
-                var candidate = proxy == null ? AvatarContactRegion.Body : proxy.Region;
-                var priority = candidate == AvatarContactRegion.Face ? 4 : candidate == AvatarContactRegion.Head ? 3 : candidate == AvatarContactRegion.Hand ? 2 : 1;
+                var collider = proxy.Collider;
+                if (collider == null || !collider.enabled)
+                {
+                    continue;
+                }
+                var closest = collider.ClosestPoint(point);
+                if ((closest - point).sqrMagnitude > safeRadius * safeRadius)
+                {
+                    continue;
+                }
+                var candidate = proxy.Region;
+                var priority = ContactPriority(candidate);
                 if (priority > bestPriority)
                 {
                     bestPriority = priority;
@@ -664,6 +697,105 @@ namespace QuestMmdPlayer
             }
 
             return bestPriority > 0;
+        }
+
+        public bool TryGetContactRegionSwept(Vector3 from, Vector3 to, float radius, out AvatarContactRegion region, out Vector3 contactPoint)
+        {
+            region = AvatarContactRegion.None;
+            contactPoint = to;
+            var distance = Vector3.Distance(from, to);
+            var stepLength = Mathf.Max(.008f, Mathf.Max(.005f, radius) * .55f);
+            var steps = Mathf.Clamp(Mathf.CeilToInt(distance / stepLength), 1, 24);
+            var bestPriority = 0;
+            for (var step = 0; step <= steps; step++)
+            {
+                var sample = Vector3.Lerp(from, to, step / (float)steps);
+                if (!TryGetContactRegion(sample, radius, out var candidate))
+                {
+                    continue;
+                }
+                var priority = ContactPriority(candidate);
+                if (priority <= bestPriority)
+                {
+                    continue;
+                }
+                bestPriority = priority;
+                region = candidate;
+                contactPoint = sample;
+            }
+            return bestPriority > 0;
+        }
+
+        /// <summary>
+        /// Returns the minimum world-space translation that moves a tracked hand
+        /// collider out of the avatar proxy volumes. This is deliberately kept
+        /// separate from semantic interaction classification: a hand is blocked
+        /// by the body even when the contact should not trigger a reaction.
+        /// </summary>
+        public bool TryGetPenetrationCorrection(
+            Collider handCollider,
+            out Vector3 correction,
+            out AvatarContactRegion region)
+        {
+            correction = Vector3.zero;
+            region = AvatarContactRegion.None;
+            if (handCollider == null || contactProxies.Count == 0)
+            {
+                return false;
+            }
+
+            var bestDistance = 0f;
+            var bestPriority = 0;
+            var handPosition = handCollider.transform.position;
+            var handRotation = handCollider.transform.rotation;
+            for (var index = 0; index < contactProxies.Count; index++)
+            {
+                var proxy = contactProxies[index];
+                var other = proxy == null ? null : proxy.Collider;
+                if (other == null || !other.enabled || other == handCollider)
+                {
+                    continue;
+                }
+
+                if (!Physics.ComputePenetration(
+                        handCollider,
+                        handPosition,
+                        handRotation,
+                        other,
+                        other.transform.position,
+                        other.transform.rotation,
+                        out var direction,
+                        out var distance) ||
+                    distance <= .000001f)
+                {
+                    continue;
+                }
+
+                var priority = ContactPriority(proxy.Region);
+                if (priority < bestPriority ||
+                    priority == bestPriority && distance <= bestDistance)
+                {
+                    continue;
+                }
+                bestPriority = priority;
+                bestDistance = distance;
+                correction = direction * distance;
+                region = proxy.Region;
+            }
+
+            return bestDistance > .000001f;
+        }
+
+        private static int ContactPriority(AvatarContactRegion region)
+        {
+            switch (region)
+            {
+                case AvatarContactRegion.Face: return 5;
+                case AvatarContactRegion.Head: return 4;
+                case AvatarContactRegion.Hand: return 3;
+                case AvatarContactRegion.Body: return 2;
+                default: return 0;
+            }
         }
 
         private void EnsureCollisionProxies(Bounds bounds)
@@ -675,28 +807,202 @@ namespace QuestMmdPlayer
 
             collisionProxyRoot = new GameObject("Avatar Contact Proxies");
             collisionProxyRoot.transform.SetParent(avatar.transform, false);
+            contactProxies.Clear();
+            UpdateCollisionProxyScale();
+            modelCollisionVolumeCount = CreatePmxCollisionProxies();
+
             var bodyRadius = Mathf.Clamp(Mathf.Min(bounds.size.x, bounds.size.z) * .28f, .08f, .24f);
-            CreateCapsuleProxy("Body", AvatarContactRegion.Body, bounds.center + Vector3.up * bounds.size.y * -.03f, bodyRadius, Mathf.Max(bodyRadius * 2f, bounds.size.y * .72f));
+            if (!HasProxyRegion(AvatarContactRegion.Body))
+            {
+                CreateCapsuleProxy("Body", AvatarContactRegion.Body, bounds.center + Vector3.up * bounds.size.y * -.03f, bodyRadius, Mathf.Max(bodyRadius * 2f, bounds.size.y * .72f));
+            }
             var headRadius = Mathf.Clamp(bounds.size.y * .12f, .08f, .18f);
             var headBone = FindAvatarBone("head", "\u982D", "\u5934");
             var headCenter = headBone == null
                 ? new Vector3(bounds.center.x, bounds.min.y + bounds.size.y * .79f, bounds.center.z)
                 : headBone.position + avatar.transform.up * headRadius * .25f;
-            CreateSphereProxy("Head", AvatarContactRegion.Head, headCenter, headRadius, headBone);
+            if (!HasProxyRegion(AvatarContactRegion.Head))
+            {
+                CreateSphereProxy("Head", AvatarContactRegion.Head, headCenter, headRadius, headBone);
+            }
             var faceCenter = headCenter + avatar.transform.forward * headRadius * .72f;
             CreateSphereProxy("Face", AvatarContactRegion.Face, faceCenter, headRadius * .72f, headBone);
             var handRadius = Mathf.Clamp(bounds.size.y * .035f, .035f, .075f);
             var leftBone = FindAvatarBone("lefthand", "hand_l", "\u5DE6\u624B\u9996");
             var rightBone = FindAvatarBone("righthand", "hand_r", "\u53F3\u624B\u9996");
-            if (leftBone != null)
+            if (!HasProxyFollowing(leftBone) && leftBone != null)
             {
                 CreateSphereProxy("Left Hand", AvatarContactRegion.Hand, leftBone.position, handRadius, leftBone);
             }
-            if (rightBone != null)
+            if (!HasProxyFollowing(rightBone) && rightBone != null)
             {
                 CreateSphereProxy("Right Hand", AvatarContactRegion.Hand, rightBone.position, handRadius, rightBone);
             }
             collisionGeometryReady = true;
+            Debug.Log(
+                $"[AvatarTouch] Physical proxies ready; avatarScale={avatar.transform.lossyScale:F3}, " +
+                $"proxyScale={collisionProxyRoot.transform.lossyScale:F3}, modelVolumes={modelCollisionVolumeCount}.",
+                this);
+        }
+
+        private int CreatePmxCollisionProxies()
+        {
+            var bodies = avatar.GetComponentsInChildren<MMDRigidBody>(true);
+            var created = 0;
+            for (var index = 0; index < bodies.Length; index++)
+            {
+                var body = bodies[index];
+                var region = ClassifyPmxContactRegion(body);
+                if (region == AvatarContactRegion.None || !HasUsableShape(body))
+                {
+                    continue;
+                }
+
+                var proxyObject = new GameObject("Avatar PMX Contact " + index);
+                proxyObject.transform.SetParent(collisionProxyRoot.transform, false);
+                proxyObject.transform.SetPositionAndRotation(body.transform.position, body.transform.rotation);
+                var proxy = proxyObject.AddComponent<AvatarContactProxy>();
+                proxy.Region = region;
+                proxy.SetFollowTarget(body.transform, true, true);
+
+                switch (body.shape)
+                {
+                    case PMXRigidBody.Shape.Sphere:
+                        var sphere = proxyObject.AddComponent<SphereCollider>();
+                        sphere.radius = Mathf.Abs(body.size.x);
+                        sphere.isTrigger = true;
+                        break;
+                    case PMXRigidBody.Shape.Box:
+                        var box = proxyObject.AddComponent<BoxCollider>();
+                        box.size = new Vector3(
+                            Mathf.Abs(body.size.x) * 2f,
+                            Mathf.Abs(body.size.y) * 2f,
+                            Mathf.Abs(body.size.z) * 2f);
+                        box.isTrigger = true;
+                        break;
+                    default:
+                        var capsule = proxyObject.AddComponent<CapsuleCollider>();
+                        capsule.direction = 1;
+                        capsule.radius = Mathf.Abs(body.size.x);
+                        capsule.height = Mathf.Abs(body.size.y) + capsule.radius * 2f;
+                        capsule.isTrigger = true;
+                        break;
+                }
+                contactProxies.Add(proxy);
+                created++;
+            }
+            return created;
+        }
+
+        private static bool HasUsableShape(MMDRigidBody body)
+        {
+            if (body == null || body.relatedBone == null)
+            {
+                return false;
+            }
+            switch (body.shape)
+            {
+                case PMXRigidBody.Shape.Sphere:
+                    return Mathf.Abs(body.size.x) > .001f;
+                case PMXRigidBody.Shape.Box:
+                    return Mathf.Abs(body.size.x) > .001f &&
+                           Mathf.Abs(body.size.y) > .001f &&
+                           Mathf.Abs(body.size.z) > .001f;
+                default:
+                    return Mathf.Abs(body.size.x) > .001f && Mathf.Abs(body.size.y) > .001f;
+            }
+        }
+
+        public static AvatarContactRegion ClassifyPmxContactRegion(MMDRigidBody body)
+        {
+            if (body == null || body.relatedBone == null)
+            {
+                return AvatarContactRegion.None;
+            }
+            var value = NormalizeBoneName(
+                body.relatedBone.boneName + " " + body.originalName + " " + body.renamedName);
+            if (ContainsAny(value, "lefthand", "righthand", "handl", "handr", "\u5de6\u624b\u9996", "\u53f3\u624b\u9996"))
+            {
+                return AvatarContactRegion.Hand;
+            }
+            if (ContainsAny(value, "head", "\u982d", "\u5934"))
+            {
+                return AvatarContactRegion.Head;
+            }
+            if (ContainsAny(
+                    value,
+                    "upperbody", "lowerbody", "spine", "chest", "neck", "shoulder", "arm", "elbow",
+                    "waist", "hip", "pelvis", "leg", "thigh", "knee", "ankle", "foot",
+                    "\u4e0a\u534a\u8eab", "\u4e0b\u534a\u8eab", "\u9996", "\u80a9", "\u8155", "\u8098",
+                    "\u8170", "\u9acb", "\u8db3", "\u819d"))
+            {
+                return AvatarContactRegion.Body;
+            }
+            return AvatarContactRegion.None;
+        }
+
+        private static bool ContainsAny(string value, params string[] candidates)
+        {
+            for (var index = 0; index < candidates.Length; index++)
+            {
+                if (value.Contains(NormalizeBoneName(candidates[index])))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool HasProxyRegion(AvatarContactRegion region)
+        {
+            var proxies = collisionProxyRoot.GetComponentsInChildren<AvatarContactProxy>(true);
+            for (var index = 0; index < proxies.Length; index++)
+            {
+                if (proxies[index].Region == region)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool HasProxyFollowing(Transform target)
+        {
+            if (target == null)
+            {
+                return false;
+            }
+            var proxies = collisionProxyRoot.GetComponentsInChildren<AvatarContactProxy>(true);
+            for (var index = 0; index < proxies.Length; index++)
+            {
+                if (proxies[index].Follows(target))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void UpdateCollisionProxyScale()
+        {
+            if (collisionProxyRoot == null || avatar == null)
+            {
+                return;
+            }
+            collisionProxyRoot.transform.localScale = CalculateWorldScaleCompensation(avatar.transform.lossyScale);
+        }
+
+        public static Vector3 CalculateWorldScaleCompensation(Vector3 parentLossyScale)
+        {
+            return new Vector3(
+                SafeReciprocal(parentLossyScale.x),
+                SafeReciprocal(parentLossyScale.y),
+                SafeReciprocal(parentLossyScale.z));
+        }
+
+        private static float SafeReciprocal(float value)
+        {
+            return Mathf.Abs(value) < .0001f ? 1f : 1f / Mathf.Abs(value);
         }
 
         private Transform FindAvatarBone(params string[] names)
@@ -740,6 +1046,7 @@ namespace QuestMmdPlayer
             collider.isTrigger = true;
             var proxy = proxyObject.AddComponent<AvatarContactProxy>();
             proxy.Region = region;
+            contactProxies.Add(proxy);
         }
 
         private void CreateSphereProxy(
@@ -757,6 +1064,7 @@ namespace QuestMmdPlayer
             collider.isTrigger = true;
             var proxy = proxyObject.AddComponent<AvatarContactProxy>();
             proxy.Region = region;
+            contactProxies.Add(proxy);
             proxy.SetFollowTarget(followTarget);
         }
 
@@ -768,7 +1076,9 @@ namespace QuestMmdPlayer
                 else DestroyImmediate(collisionProxyRoot);
             }
             collisionProxyRoot = null;
+            contactProxies.Clear();
             collisionGeometryReady = false;
+            modelCollisionVolumeCount = 0;
         }
 
         private void UpdateFeedback()
@@ -850,19 +1160,66 @@ namespace QuestMmdPlayer
         public AvatarContactRegion Region;
         private Transform followTarget;
         private Vector3 followOffset;
+        private Quaternion followRotationOffset = Quaternion.identity;
+        private bool followRotation;
+        private bool followScale;
 
-        public void SetFollowTarget(Transform target)
+        private Collider cachedCollider;
+        public Collider Collider => cachedCollider != null
+            ? cachedCollider
+            : cachedCollider = GetComponent<Collider>();
+
+        private void Awake()
+        {
+            cachedCollider = GetComponent<Collider>();
+        }
+
+        public void SetFollowTarget(Transform target, bool rotation = false, bool scale = false)
         {
             followTarget = target;
             followOffset = target == null ? Vector3.zero : target.InverseTransformPoint(transform.position);
+            followRotationOffset = target == null ? Quaternion.identity : Quaternion.Inverse(target.rotation) * transform.rotation;
+            followRotation = rotation;
+            followScale = scale;
+            ApplyFollowTarget();
+        }
+
+        public bool Follows(Transform target)
+        {
+            return followTarget == target ||
+                   (followTarget != null && target != null && followTarget.IsChildOf(target));
         }
 
         private void LateUpdate()
         {
-            if (followTarget != null)
+            ApplyFollowTarget();
+        }
+
+        private void ApplyFollowTarget()
+        {
+            if (followTarget == null)
             {
-                transform.position = followTarget.TransformPoint(followOffset);
+                return;
             }
+            transform.position = followTarget.TransformPoint(followOffset);
+            if (followRotation)
+            {
+                transform.rotation = followTarget.rotation * followRotationOffset;
+            }
+            if (followScale)
+            {
+                var parentScale = transform.parent == null ? Vector3.one : transform.parent.lossyScale;
+                var targetScale = followTarget.lossyScale;
+                transform.localScale = new Vector3(
+                    ScaleRatio(targetScale.x, parentScale.x),
+                    ScaleRatio(targetScale.y, parentScale.y),
+                    ScaleRatio(targetScale.z, parentScale.z));
+            }
+        }
+
+        private static float ScaleRatio(float target, float parent)
+        {
+            return Mathf.Abs(parent) < .0001f ? 1f : Mathf.Abs(target / parent);
         }
     }
 }

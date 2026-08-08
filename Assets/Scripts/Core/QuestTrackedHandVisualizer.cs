@@ -42,6 +42,8 @@ namespace QuestMmdPlayer
         private readonly HandVisual right = new HandVisual("Right", XRNode.RightHand, new Color(.36f, .7f, 1f, .92f));
         private AvatarHumanInteraction interaction;
         private Transform trackingSpace;
+        private AvatarContactRegion lastPhysicalContact;
+        private float lastPhysicalContactLogAt = float.NegativeInfinity;
 
         public string Status { get; private set; } = "代理手等待 XR 输入";
         public int TrackedHandCount { get; private set; }
@@ -59,10 +61,13 @@ namespace QuestMmdPlayer
             internal LineRenderer[] lines;
             internal TrackedHandContactRelay[] relays;
             internal bool[] jointTracked;
+            internal Vector3[] previousJointPositions;
+            internal bool[] previousJointTracked;
             internal Material runtimeMaterial;
             internal bool ownsRuntimeMaterial;
             internal bool visible;
             internal bool pinching;
+            internal Vector3 collisionCorrection;
             internal float lastTrackedPoseAt = float.NegativeInfinity;
 
             internal HandVisual(string name, XRNode node, Color color)
@@ -92,6 +97,7 @@ namespace QuestMmdPlayer
                 {
                     if (contactColliders[index] != null) contactColliders[index].enabled = false;
                     if (relays[index] != null) relays[index].SetTracked(false);
+                    if (previousJointTracked != null) previousJointTracked[index] = false;
                 }
                 UpdateRelayState();
             }
@@ -119,6 +125,123 @@ namespace QuestMmdPlayer
             tracked += UpdateTrackedHand(right, subsystem == null ? default(XRHand) : subsystem.rightHand, subsystem != null);
             TrackedHandCount = tracked;
             Status = tracked == 2 ? "双手追踪" : tracked == 1 ? "单手追踪" : "控制器或无 XR 输入";
+        }
+
+        private void FixedUpdate()
+        {
+            EvaluatePhysicalContacts(left);
+            EvaluatePhysicalContacts(right);
+        }
+
+        private void EvaluatePhysicalContacts(HandVisual visual)
+        {
+            if (interaction == null || visual.root == null || !visual.root.activeInHierarchy ||
+                visual.contactColliders == null)
+            {
+                return;
+            }
+
+            var correctionTarget = Vector3.zero;
+            var hasPalmCorrection = false;
+            for (var index = 0; index < visual.contactColliders.Length; index++)
+            {
+                if (!(visual.contactColliders[index] is SphereCollider sphere) || !sphere.enabled)
+                {
+                    continue;
+                }
+                var probe = ContactProbeForJoint(JointIds[index]);
+                if (probe == TrackedHandContactProbe.None)
+                {
+                    continue;
+                }
+                var center = sphere.transform.TransformPoint(sphere.center);
+                var radius = sphere.radius * MaximumScale(sphere.transform.lossyScale);
+                var from = visual.previousJointTracked[index]
+                    ? visual.previousJointPositions[index]
+                    : center;
+                var hasPenetration = interaction.TryGetPenetrationCorrection(
+                    sphere,
+                    out var penetrationCorrection,
+                    out var penetrationRegion);
+                if (hasPenetration)
+                {
+                    correctionTarget = penetrationCorrection;
+                    hasPalmCorrection = true;
+                }
+
+                if (interaction.TryGetContactRegionSwept(
+                    from,
+                    center,
+                    Mathf.Max(.005f, radius),
+                    out var region,
+                    out var contactPoint) &&
+                    ShouldReportContact(probe, region, visual.pinching))
+                {
+                    interaction.ReportTrackedHandContact(region, visual.pinching, contactPoint);
+                    if (lastPhysicalContact != region ||
+                        Time.unscaledTime - lastPhysicalContactLogAt >= .75f)
+                    {
+                        lastPhysicalContact = region;
+                        lastPhysicalContactLogAt = Time.unscaledTime;
+                        Debug.Log("[HandTracking] Physical contact: " + region + " (continuous sweep).", this);
+                    }
+                    if (!hasPenetration)
+                    {
+                        correctionTarget = contactPoint - center;
+                        hasPalmCorrection = correctionTarget.sqrMagnitude > .000001f;
+                    }
+                }
+                visual.previousJointPositions[index] = center;
+                visual.previousJointTracked[index] = true;
+            }
+            ApplyVisualCollisionCorrection(visual, hasPalmCorrection ? correctionTarget : Vector3.zero);
+        }
+
+        private static void ApplyVisualCollisionCorrection(HandVisual visual, Vector3 target)
+        {
+            var previous = visual.collisionCorrection;
+            visual.collisionCorrection = target.sqrMagnitude > .000001f
+                ? target
+                : Vector3.MoveTowards(previous, Vector3.zero, Time.fixedUnscaledDeltaTime * .35f);
+            var delta = visual.collisionCorrection - previous;
+            if (delta.sqrMagnitude <= .00000001f) return;
+            // Joint poses are written in world space every frame, so moving the
+            // root alone would be overwritten by the next XR pose update. Move
+            // the visible probes themselves and keep the root as a stable parent.
+            if (visual.joints != null)
+            {
+                for (var index = 0; index < visual.joints.Length; index++)
+                {
+                    if (visual.joints[index] != null)
+                    {
+                        visual.joints[index].transform.position += delta;
+                    }
+                }
+            }
+            // The official mesh is parented to tracking space and is driven by
+            // the XR hand provider. Its own pose must be corrected alongside the
+            // proxy joints, otherwise the visible hand can remain inside the
+            // avatar while only hidden probes are pushed out.
+            if (visual.meshRoot != null)
+            {
+                visual.meshRoot.transform.position += delta;
+            }
+            if (visual.lines != null)
+            {
+                for (var index = 0; index < visual.lines.Length; index++)
+                {
+                    if (visual.lines[index].enabled)
+                    {
+                        visual.lines[index].SetPosition(0, visual.lines[index].GetPosition(0) + delta);
+                        visual.lines[index].SetPosition(1, visual.lines[index].GetPosition(1) + delta);
+                    }
+                }
+            }
+        }
+
+        public static float MaximumScale(Vector3 scale)
+        {
+            return Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
         }
 
         private int UpdateTrackedHand(HandVisual visual, XRHand hand, bool hasSubsystem)
@@ -170,6 +293,7 @@ namespace QuestMmdPlayer
             if (found < 2)
             {
                 visual.DisableContacts();
+                ClearPreviousPose(visual);
                 return false;
             }
 
@@ -187,6 +311,8 @@ namespace QuestMmdPlayer
 
         private void SetControllerPose(HandVisual visual, Vector3 palm, Quaternion rotation)
         {
+            ClearPreviousPose(visual);
+            visual.collisionCorrection = Vector3.zero;
             var forward = rotation * Vector3.forward;
             var side = rotation * Vector3.right;
             visual.joints[0].transform.SetPositionAndRotation(palm - forward * .035f, rotation);
@@ -217,13 +343,18 @@ namespace QuestMmdPlayer
             var body = visual.root.AddComponent<Rigidbody>();
             body.isKinematic = true;
             body.useGravity = false;
+            body.detectCollisions = true;
+            body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
             visual.joints = new GameObject[JointIds.Length];
             visual.proxyRenderers = new Renderer[JointIds.Length];
             visual.contactColliders = new Collider[JointIds.Length];
             visual.relays = new TrackedHandContactRelay[JointIds.Length];
             visual.jointTracked = new bool[JointIds.Length];
+            visual.previousJointPositions = new Vector3[JointIds.Length];
+            visual.previousJointTracked = new bool[JointIds.Length];
             visual.runtimeMaterial = handMaterial != null ? handMaterial : ResolveMaterial(visual.color);
             visual.ownsRuntimeMaterial = handMaterial == null;
+            ApplyOfficialMeshMaterial(visual);
             for (var index = 0; index < visual.joints.Length; index++)
             {
                 var joint = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -277,6 +408,21 @@ namespace QuestMmdPlayer
             instance.name = visual.name + " Official Hand Mesh";
             instance.SetActive(false);
             return instance;
+        }
+
+        private static void ApplyOfficialMeshMaterial(HandVisual visual)
+        {
+            if (visual.meshRoot == null || visual.runtimeMaterial == null)
+            {
+                return;
+            }
+
+            var renderers = visual.meshRoot.GetComponentsInChildren<Renderer>(true);
+            for (var index = 0; index < renderers.Length; index++)
+            {
+                renderers[index].sharedMaterial = visual.runtimeMaterial;
+                renderers[index].enabled = true;
+            }
         }
 
         private void UpdateOfficialMeshParent(HandVisual visual)
@@ -333,6 +479,7 @@ namespace QuestMmdPlayer
             {
                 visual.meshRoot.SetActive(visual.visible && showOfficialMesh);
             }
+            if (!visible) visual.collisionCorrection = Vector3.zero;
         }
 
         private XRHandSubsystem FindRunningSubsystem()
@@ -358,6 +505,15 @@ namespace QuestMmdPlayer
             if (visual.relays[index] != null) visual.relays[index].SetTracked(active);
         }
 
+        private static void ClearPreviousPose(HandVisual visual)
+        {
+            if (visual.previousJointTracked == null) return;
+            for (var index = 0; index < visual.previousJointTracked.Length; index++)
+            {
+                visual.previousJointTracked[index] = false;
+            }
+        }
+
         public static bool IsTrackingGraceActive(float now, float lastTrackedAt, float graceSeconds)
         {
             return AvatarTouchInteraction.IsTrackingGraceActive(now, lastTrackedAt, graceSeconds);
@@ -380,7 +536,9 @@ namespace QuestMmdPlayer
         {
             if (probe == TrackedHandContactProbe.Palm)
             {
-                return region == AvatarContactRegion.Head || region == AvatarContactRegion.Hand;
+                return region == AvatarContactRegion.Body ||
+                       region == AvatarContactRegion.Head ||
+                       region == AvatarContactRegion.Hand;
             }
             return probe == TrackedHandContactProbe.PinchTip &&
                    region == AvatarContactRegion.Face &&
@@ -402,6 +560,8 @@ namespace QuestMmdPlayer
             if (handMaterial != null) return handMaterial;
             var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
             var material = new Material(shader) { color = color };
+            if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
+            if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0f);
             return material;
         }
 

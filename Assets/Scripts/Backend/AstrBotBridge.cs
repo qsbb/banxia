@@ -31,8 +31,12 @@ namespace QuestMmdPlayer
         private string sessionId = string.Empty;
         private long eventSequence;
         private bool sessionReady;
+        private bool eventStreamReady;
+        private bool healthReady;
+        private string healthPipelineStatus = "unknown";
         private bool shuttingDown;
         private int receivedStreamData;
+        private int receivedStreamHeaders;
         private readonly Queue<byte[]> outgoingAudioChunks = new Queue<byte[]>();
         private Coroutine audioUploadRoutine;
         private UnityWebRequest activeAudioRequest;
@@ -42,19 +46,22 @@ namespace QuestMmdPlayer
         private int queuedInputAudioBytes;
         private const int AudioUploadBatchBytes = 16000;
         private const int MaxQueuedInputAudioBytes = 1048576;
+        private const string StableSessionPreferenceKey = "banxia.astrbot.session_id.v1";
         private int uploadedInputAudioBytes;
         private int uploadedInputBatchCount;
         private float audioUploadStartedAt;
         private float audioEndRequestedAt = -1f;
+        private float nextSessionStartAt;
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
 
-        public bool IsConnected => sessionReady && activeSseRequest != null && !shuttingDown;
+        public bool IsConnected => sessionReady && eventStreamReady && activeSseRequest != null && !shuttingDown;
         public bool IsConfigured { get; private set; }
         public string ConfigurationPath => Path.Combine(Application.persistentDataPath, configurationFileName);
         public string ConfiguredBaseUrl => settings == null ? string.Empty : settings.base_url ?? string.Empty;
         public string Status { get; private set; } = "AstrBot configuration not loaded";
+        public string BackendChainStatus { get; private set; } = "chain unknown";
         public int QueuedInputAudioBytes => queuedInputAudioBytes;
         public bool AudioUploadInProgress => !string.IsNullOrEmpty(audioUploadTurnId);
         public string AudioUploadDiagnosticStatus => AudioUploadInProgress
@@ -77,9 +84,12 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
-            if (Interlocked.Exchange(ref receivedStreamData, 0) != 0 && IsConnected)
+            var streamActivity = Interlocked.Exchange(ref receivedStreamHeaders, 0) != 0 |
+                Interlocked.Exchange(ref receivedStreamData, 0) != 0;
+            if (streamActivity && sessionReady && activeSseRequest != null &&
+                IsSseHandshakeReady(activeSseRequest.responseCode))
             {
-                Status = "AstrBot SSE connected";
+                MarkEventStreamReady();
             }
 
             var remainingFrameBudget = Mathf.Clamp(maxIncomingFramesPerUpdate, 8, 256);
@@ -153,7 +163,7 @@ namespace QuestMmdPlayer
             audioUploadStartedAt = Time.unscaledTime;
             audioEndRequestedAt = -1f;
             audioUploadRoutine = StartCoroutine(UploadAudioTurn(turnId));
-            Status = "Recording voice for AstrBot";
+            SetStatus("Recording voice for AstrBot");
             return true;
         }
 
@@ -194,7 +204,7 @@ namespace QuestMmdPlayer
 
             audioEndRequested = true;
             audioEndRequestedAt = Time.unscaledTime;
-            Status = "Uploading voice to AstrBot";
+            SetStatus("Uploading voice to AstrBot");
             return true;
         }
 
@@ -293,8 +303,13 @@ namespace QuestMmdPlayer
             {
                 if (!sessionReady)
                 {
+                    if (Time.unscaledTime < nextSessionStartAt)
+                    {
+                        yield return null;
+                        continue;
+                    }
                     yield return CheckHealth();
-                    if (!sessionReady && Status == "AstrBot health check ready")
+                    if (!sessionReady && healthReady)
                     {
                         yield return StartSession();
                     }
@@ -315,7 +330,8 @@ namespace QuestMmdPlayer
 
         private IEnumerator CheckHealth()
         {
-            Status = "Checking AstrBot health";
+            healthReady = false;
+            SetStatus("Checking AstrBot health");
             using (var request = UnityWebRequest.Get(Endpoint("health")))
             {
                 ConfigureHeaders(request, false);
@@ -327,21 +343,28 @@ namespace QuestMmdPlayer
                     if (response != null && response.status == "ok" && response.data != null &&
                         response.data.protocol_version == AstrBotProtocol.Version && response.data.transport == "http+sse")
                     {
-                        Status = "AstrBot health check ready";
+                        healthPipelineStatus = response.data.series_integrations == null ||
+                            response.data.series_integrations.astrbot_message_pipeline == null
+                            ? "unknown"
+                            : response.data.series_integrations.astrbot_message_pipeline.available
+                                ? "ready"
+                                : "unavailable";
+                        healthReady = true;
+                        SetStatus("AstrBot health check ready");
                         yield break;
                     }
-                    Status = "AstrBot health response is incompatible";
+                    SetStatus("AstrBot health response is incompatible");
                 }
                 else
                 {
-                    Status = HttpFailure("Health check", request);
+                    SetStatus(HttpFailure("Health check", request));
                 }
             }
         }
 
         private IEnumerator StartSession()
         {
-            sessionId = "q3-" + Guid.NewGuid().ToString("N");
+            sessionId = GetOrCreateStableSessionId();
             var payload = new SessionStartRequest
             {
                 session_id = sessionId,
@@ -352,20 +375,39 @@ namespace QuestMmdPlayer
                 relationship_profile_id = settings.relationship_profile_id ?? string.Empty
             };
 
-            Status = "Starting AstrBot session";
+            eventStreamReady = false;
+            SetStatus("Starting AstrBot session");
             using (var request = CreateJsonRequest("session/start", JsonUtility.ToJson(payload)))
             {
                 yield return request.SendWebRequest();
                 if (Succeeded(request))
                 {
+                    nextSessionStartAt = 0f;
                     sessionReady = true;
-                    Status = "AstrBot session ready";
-                    Debug.Log("[AstrBotBridge] Session established: " + sessionId);
+                    BackendChainStatus = ResolveBackendChainStatus(
+                        ParseSessionChainStatus(request.downloadHandler.text), healthPipelineStatus);
+                    SetStatus("AstrBot session ready (" + BackendChainStatus + ")");
+                    Debug.Log("[AstrBotBridge] Backend chain: " + BackendChainStatus, this);
+                    Debug.Log("[AstrBotBridge] Session established.", this);
+                }
+                else if (CanRecoverExistingSession(request.responseCode, request.downloadHandler.text))
+                {
+                    // Android can terminate the process before session.close is sent.
+                    // Reusing one persisted ID lets the next process reattach.
+                    nextSessionStartAt = 0f;
+                    sessionReady = true;
+                    SetStatus("Existing AstrBot session found; reconnecting SSE");
+                }
+                else if (IsSessionCapacityConflict(request.responseCode, request.downloadHandler.text))
+                {
+                    sessionId = string.Empty;
+                    nextSessionStartAt = Time.unscaledTime + 10f;
+                    SetStatus("AstrBot session capacity is full; reload the bridge plugin");
                 }
                 else
                 {
                     sessionId = string.Empty;
-                    Status = HttpFailure("Session start", request);
+                    SetStatus(HttpFailure("Session start", request));
                 }
             }
         }
@@ -373,23 +415,41 @@ namespace QuestMmdPlayer
         private IEnumerator RunEventStream()
         {
             var request = UnityWebRequest.Get(Endpoint("events/" + UnityWebRequest.EscapeURL(sessionId)));
-            var handler = new SseDownloadHandler(frame =>
-            {
-                incomingFrames.Enqueue(frame);
-                Interlocked.Exchange(ref receivedStreamData, 1);
-            });
+            eventStreamReady = false;
+            Interlocked.Exchange(ref receivedStreamHeaders, 0);
+            Interlocked.Exchange(ref receivedStreamData, 0);
+            var handler = new SseDownloadHandler(
+                frame =>
+                {
+                    incomingFrames.Enqueue(frame);
+                    Interlocked.Exchange(ref receivedStreamData, 1);
+                },
+                () => Interlocked.Exchange(ref receivedStreamHeaders, 1));
             request.downloadHandler.Dispose();
             request.downloadHandler = handler;
             ConfigureHeaders(request, true);
             request.timeout = 0;
             activeSseRequest = request;
-            Status = "Connecting AstrBot SSE";
+            SetStatus("Connecting AstrBot SSE");
 
-            yield return request.SendWebRequest();
+            var operation = request.SendWebRequest();
+            while (!operation.isDone && !shuttingDown)
+            {
+                if (!eventStreamReady && IsSseHandshakeReady(request.responseCode))
+                {
+                    MarkEventStreamReady();
+                }
+                yield return null;
+            }
+            if (shuttingDown && !operation.isDone)
+            {
+                request.Abort();
+            }
             if (ReferenceEquals(activeSseRequest, request))
             {
                 activeSseRequest = null;
             }
+            eventStreamReady = false;
 
             if (!shuttingDown)
             {
@@ -397,11 +457,11 @@ namespace QuestMmdPlayer
                 {
                     sessionReady = false;
                     sessionId = string.Empty;
-                    Status = "AstrBot session expired; recreating";
+                    SetStatus("AstrBot session expired; recreating");
                 }
                 else
                 {
-                    Status = HttpFailure("SSE disconnected", request);
+                    SetStatus(HttpFailure("SSE disconnected", request));
                 }
             }
             request.Dispose();
@@ -473,7 +533,7 @@ namespace QuestMmdPlayer
                             Type = ConversationEventType.Thinking,
                             TurnId = turnId
                         });
-                        Status = "AstrBot is processing voice";
+                        SetStatus("AstrBot is processing voice");
                         var now = Time.unscaledTime;
                         Debug.Log($"[AstrBotBridge] Voice upload complete: {uploadedInputAudioBytes} B in " +
                             $"{uploadedInputBatchCount} batches, stream {Mathf.Max(0f, now - audioUploadStartedAt):F2}s, " +
@@ -664,9 +724,13 @@ namespace QuestMmdPlayer
         {
             IsConfigured = false;
             settings = null;
+            BackendChainStatus = "chain unknown";
+            healthPipelineStatus = "unknown";
+            healthReady = false;
+            eventStreamReady = false;
             if (!File.Exists(ConfigurationPath))
             {
-                Status = "AstrBot config missing: " + ConfigurationPath;
+                SetStatus("AstrBot configuration missing");
                 return;
             }
 
@@ -675,19 +739,19 @@ namespace QuestMmdPlayer
                 settings = JsonUtility.FromJson<AstrBotBridgeSettings>(File.ReadAllText(ConfigurationPath, Encoding.UTF8));
                 if (!AstrBotProtocol.TryValidateSettings(settings, out var reason))
                 {
-                    Status = "AstrBot config invalid: " + reason;
+                    SetStatus("AstrBot config invalid: " + reason);
                     return;
                 }
                 // This is the single transport-policy gate. Plain HTTP is accepted
                 // only after local opt-in and only for a literal private-network IP.
                 settings.base_url = AstrBotProtocol.NormalizeBaseUrl(settings.base_url);
                 IsConfigured = true;
-                Status = "AstrBot config loaded";
+                SetStatus("AstrBot config loaded");
                 Debug.Log("[AstrBotBridge] Configuration loaded from " + ConfigurationPath);
             }
             catch (Exception exception)
             {
-                Status = "AstrBot config could not be read";
+                SetStatus("AstrBot config could not be read");
                 Debug.LogWarning("[AstrBotBridge] Configuration error: " + exception.Message);
             }
         }
@@ -726,6 +790,11 @@ namespace QuestMmdPlayer
                 FireAndForgetClose();
             }
             sessionReady = false;
+            eventStreamReady = false;
+            healthReady = false;
+            BackendChainStatus = "chain unknown";
+            healthPipelineStatus = "unknown";
+            nextSessionStartAt = 0f;
             sessionId = string.Empty;
             while (incomingFrames.TryDequeue(out _)) { }
         }
@@ -746,6 +815,141 @@ namespace QuestMmdPlayer
         private static bool Succeeded(UnityWebRequest request)
         {
             return request.result == UnityWebRequest.Result.Success && request.responseCode >= 200 && request.responseCode < 300;
+        }
+
+        public static bool IsSseHandshakeReady(long responseCode)
+        {
+            return responseCode >= 200 && responseCode < 300;
+        }
+
+        public static bool CanRecoverExistingSession(long responseCode, string responseBody)
+        {
+            return responseCode == 409 && TryReadBridgeError(responseBody, out var code, out var message) &&
+                code == "session_conflict" &&
+                message.IndexOf("already exists", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        public static bool IsSessionCapacityConflict(long responseCode, string responseBody)
+        {
+            return responseCode == 409 && TryReadBridgeError(responseBody, out var code, out var message) &&
+                code == "session_conflict" &&
+                message.IndexOf("limit reached", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        public static bool IsStableSessionId(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length != 35 ||
+                !value.StartsWith("q3-", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            for (var index = 3; index < value.Length; index++)
+            {
+                var character = value[index];
+                if (!((character >= '0' && character <= '9') ||
+                      (character >= 'a' && character <= 'f')))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool TryReadBridgeError(string responseBody, out string code, out string message)
+        {
+            code = string.Empty;
+            message = string.Empty;
+            if (string.IsNullOrWhiteSpace(responseBody))
+            {
+                return false;
+            }
+            try
+            {
+                var response = JsonUtility.FromJson<BridgeErrorResponse>(responseBody);
+                code = response?.data?.code ?? string.Empty;
+                message = response?.message ?? string.Empty;
+                return !string.IsNullOrEmpty(code);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+
+        public static string ParseSessionChainStatus(string responseBody)
+        {
+            if (string.IsNullOrWhiteSpace(responseBody))
+            {
+                return "chain unknown";
+            }
+
+            try
+            {
+                var response = JsonUtility.FromJson<SessionStartResponse>(responseBody);
+                var context = response == null || response.data == null
+                    ? null
+                    : response.data.protected_context;
+                if (context == null)
+                {
+                    return "chain unknown";
+                }
+                return context.authorized ? "EventBus eligible" : "direct provider fallback";
+            }
+            catch (ArgumentException)
+            {
+                return "chain unknown";
+            }
+        }
+
+        public static string ResolveBackendChainStatus(string sessionStatus, string pipelineStatus)
+        {
+            if (!string.Equals(sessionStatus, "EventBus eligible", StringComparison.Ordinal))
+            {
+                return string.IsNullOrWhiteSpace(sessionStatus) ? "chain unknown" : sessionStatus;
+            }
+            if (string.Equals(pipelineStatus, "ready", StringComparison.Ordinal))
+            {
+                return "EventBus ready";
+            }
+            if (string.Equals(pipelineStatus, "unavailable", StringComparison.Ordinal))
+            {
+                return "direct provider fallback";
+            }
+            return "EventBus eligible";
+        }
+
+        private static string GetOrCreateStableSessionId()
+        {
+            var existing = PlayerPrefs.GetString(StableSessionPreferenceKey, string.Empty);
+            if (IsStableSessionId(existing))
+            {
+                return existing;
+            }
+            var created = "q3-" + Guid.NewGuid().ToString("N");
+            PlayerPrefs.SetString(StableSessionPreferenceKey, created);
+            PlayerPrefs.Save();
+            return created;
+        }
+
+        private void MarkEventStreamReady()
+        {
+            if (eventStreamReady)
+            {
+                return;
+            }
+            eventStreamReady = true;
+            SetStatus("AstrBot SSE connected");
+        }
+
+        private void SetStatus(string value)
+        {
+            var next = string.IsNullOrWhiteSpace(value) ? "AstrBot status unavailable" : value;
+            if (string.Equals(Status, next, StringComparison.Ordinal))
+            {
+                return;
+            }
+            Status = next;
+            Debug.Log("[AstrBotBridge] " + next, this);
         }
 
         private static string HttpFailure(string operation, UnityWebRequest request)
@@ -775,9 +979,19 @@ namespace QuestMmdPlayer
         {
             private readonly SseEventStreamParser parser = new SseEventStreamParser();
 
-            public SseDownloadHandler(Action<SseEventFrame> receive) : base(new byte[8192])
+            private readonly Action contentStarted;
+
+            public SseDownloadHandler(
+                Action<SseEventFrame> receive,
+                Action contentStarted) : base(new byte[8192])
             {
                 parser.EventReceived += receive;
+                this.contentStarted = contentStarted;
+            }
+
+            protected override void ReceiveContentLengthHeader(ulong contentLength)
+            {
+                contentStarted?.Invoke();
             }
 
             protected override bool ReceiveData(byte[] data, int dataLength)
@@ -799,6 +1013,51 @@ namespace QuestMmdPlayer
         {
             public string protocol_version;
             public string transport;
+            public SeriesIntegrations series_integrations;
+        }
+
+        [Serializable]
+        private sealed class SeriesIntegrations
+        {
+            public MessagePipelineStatus astrbot_message_pipeline;
+        }
+
+        [Serializable]
+        private sealed class MessagePipelineStatus
+        {
+            public bool available;
+        }
+
+        [Serializable]
+        private sealed class SessionStartResponse
+        {
+            public string status;
+            public SessionStartData data;
+        }
+
+        [Serializable]
+        private sealed class SessionStartData
+        {
+            public SessionProtectedContext protected_context;
+        }
+
+        [Serializable]
+        private sealed class SessionProtectedContext
+        {
+            public bool authorized;
+        }
+
+        [Serializable]
+        private sealed class BridgeErrorResponse
+        {
+            public string message;
+            public BridgeErrorData data;
+        }
+
+        [Serializable]
+        private sealed class BridgeErrorData
+        {
+            public string code;
         }
     }
 }

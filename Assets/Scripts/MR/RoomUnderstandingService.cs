@@ -92,12 +92,16 @@ namespace QuestMmdPlayer
         [SerializeField, Range(.1f, 1f)] private float minimumSurfaceExtent = .35f;
         [SerializeField, Range(.3f, 1.2f)] private float minimumSeatWidth = .45f;
         [SerializeField, Range(.25f, 1f)] private float minimumSeatDepth = .35f;
+        [SerializeField, Range(5f, 60f)] private float sceneCaptureTrackingSeconds = 20f;
 
         private readonly List<RoomSurfaceObservation> surfaces = new List<RoomSurfaceObservation>();
         private readonly List<RoomPlacementCandidate> placementCandidates = new List<RoomPlacementCandidate>();
         private XROrigin xrOrigin;
         private ARPlaneManager planeManager;
         private float nextRefreshAt;
+        private float sceneCaptureTrackingStartedAt;
+        private float sceneCaptureTrackingDeadline;
+        private bool sceneCaptureTrackingRequested;
 
         public event Action SnapshotChanged;
 
@@ -111,6 +115,7 @@ namespace QuestMmdPlayer
         public RoomSemanticSnapshot SemanticSnapshot => BuildSemanticSnapshot(surfaces);
         public string ContextSummary => SemanticSnapshot.ToContextString();
         public bool HasRoomData => surfaces.Count > 0;
+        public bool IsSceneCaptureTrackingRequested => sceneCaptureTrackingRequested;
 
         private void Awake()
         {
@@ -130,20 +135,38 @@ namespace QuestMmdPlayer
             }
             nextRefreshAt = Time.unscaledTime + Mathf.Max(.25f, refreshIntervalSeconds);
             RefreshNow();
+            if (sceneCaptureTrackingRequested && ShouldStopExplicitTracking(
+                    sceneCaptureTrackingStartedAt,
+                    sceneCaptureTrackingDeadline,
+                    Time.unscaledTime,
+                    surfaces.Count > 0))
+            {
+                sceneCaptureTrackingRequested = false;
+                if (planeManager != null)
+                {
+                    planeManager.enabled = false;
+                }
+                Status = surfaces.Count == 0
+                    ? "Room scan timed out; run Quest room setup"
+                    : ContextSummary;
+            }
         }
 
         public void RefreshNow()
         {
             ResolveDependencies();
+            if (planeManager == null || !planeManager.isActiveAndEnabled)
+            {
+                if (surfaces.Count == 0)
+                {
+                    Status = "Room tracking is idle; scan the room when needed";
+                }
+                return;
+            }
+
             surfaces.Clear();
             placementCandidates.Clear();
             FloorCount = SeatCount = TableCount = WallCount = 0;
-            if (planeManager == null || !planeManager.isActiveAndEnabled)
-            {
-                Status = "Room planes unavailable; run Quest room setup";
-                SnapshotChanged?.Invoke();
-                return;
-            }
 
             foreach (var plane in planeManager.trackables)
             {
@@ -182,20 +205,47 @@ namespace QuestMmdPlayer
 
         public bool RequestSceneCapture()
         {
+            ResolveDependencies();
+            if (planeManager != null)
+            {
+                planeManager.enabled = true;
+                planeManager.requestedDetectionMode = PlaneDetectionMode.Horizontal | PlaneDetectionMode.Vertical;
+            }
             var manager = XRGeneralSettings.Instance == null ? null : XRGeneralSettings.Instance.Manager;
             var loader = manager == null ? null : manager.activeLoader;
             var subsystem = loader == null ? null : loader.GetLoadedSubsystem<XRSessionSubsystem>();
             if (!(subsystem is MetaOpenXRSessionSubsystem metaSession))
             {
+                if (planeManager != null) planeManager.enabled = false;
                 Status = "Meta scene capture is unavailable";
                 return false;
             }
 
             var requested = metaSession.TryRequestSceneCapture();
+            sceneCaptureTrackingRequested = requested;
+            sceneCaptureTrackingStartedAt = Time.unscaledTime;
+            sceneCaptureTrackingDeadline = Time.unscaledTime + Mathf.Max(5f, sceneCaptureTrackingSeconds);
+            if (!requested && planeManager != null)
+            {
+                planeManager.enabled = false;
+            }
             Status = requested
                 ? "Quest room setup opened"
                 : "Quest room setup could not be opened";
             return requested;
+        }
+
+        public static bool ShouldStopExplicitTracking(
+            float startedAt,
+            float deadline,
+            float now,
+            bool hasSurfaces)
+        {
+            if (now < startedAt)
+            {
+                return false;
+            }
+            return now >= deadline || hasSurfaces && now - startedAt >= 3f;
         }
 
         public bool TryFindNearestSurface(

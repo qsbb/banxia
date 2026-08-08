@@ -75,19 +75,9 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void AvatarPointerSelectsSemanticInteractionByRegionAndGrip()
+        public void AvatarPointerCannotSynthesizeSemanticTouch()
         {
-            var bounds = new Bounds(new Vector3(0f, 1f, 0f), new Vector3(1f, 2f, 1f));
-
-            Assert.That(
-                QuestAvatarRayInteraction.ClassifyInteraction(bounds, new Vector3(0f, 1.7f, 0f), false),
-                Is.EqualTo(HumanInteractionKind.HeadPat));
-            Assert.That(
-                QuestAvatarRayInteraction.ClassifyInteraction(bounds, new Vector3(0f, 1.7f, 0f), true),
-                Is.EqualTo(HumanInteractionKind.CheekPinch));
-            Assert.That(
-                QuestAvatarRayInteraction.ClassifyInteraction(bounds, new Vector3(0f, .7f, 0f), false),
-                Is.EqualTo(HumanInteractionKind.Handshake));
+            Assert.That(QuestAvatarRayInteraction.CanSynthesizeSemanticTouch, Is.False);
         }
         [Test]
         public void WorldMenuModalLayersBlockUnderlyingButtonColliders()
@@ -113,11 +103,13 @@ namespace QuestMmdPlayer.Tests
                     .ToArray();
 
                 Assert.That(actionList.gameObject.activeSelf, Is.True);
+                Assert.That(menu.ActiveLayer, Is.EqualTo(RuntimeMenuLayer.ActionList));
                 Assert.That(underlying.Length, Is.GreaterThan(0));
                 Assert.That(underlying.All(value => !value.enabled), Is.True);
                 Assert.That(actionList.GetComponentsInChildren<BoxCollider>(true).Any(value => value.enabled), Is.True);
 
                 InvokeMenuMethod(menu, "HideActionList");
+                Assert.That(menu.ActiveLayer, Is.EqualTo(RuntimeMenuLayer.Actions));
                 Assert.That(underlying.All(value => value.enabled), Is.True);
 
                 InvokeMenuMethod(menu, "ShowPairingPanel");
@@ -130,8 +122,20 @@ namespace QuestMmdPlayer.Tests
                     .ToArray();
 
                 Assert.That(keyboardLayer.gameObject.activeSelf, Is.True);
+                Assert.That(menu.ActiveLayer, Is.EqualTo(RuntimeMenuLayer.PairingKeyboard));
                 Assert.That(pairingButtons.All(value => !value.enabled), Is.True);
                 Assert.That(keyboardLayer.GetComponentsInChildren<BoxCollider>(true).All(value => value.enabled), Is.True);
+
+                var pairingTarget = FindButtonTarget(pairingButtons.First());
+                var keyboardTarget = FindButtonTarget(
+                    keyboardLayer.GetComponentsInChildren<BoxCollider>(true).First());
+                InvokeTargetMethod(pairingTarget, "SetInteractive", true);
+                Assert.That(
+                    InvokeMenuMethod(menu, "IsTargetInFocusedLayer", pairingTarget),
+                    Is.False);
+                Assert.That(
+                    InvokeMenuMethod(menu, "IsTargetInFocusedLayer", keyboardTarget),
+                    Is.True);
             }
             finally
             {
@@ -140,11 +144,118 @@ namespace QuestMmdPlayer.Tests
             }
         }
 
-        private static void InvokeMenuMethod(CompanionWorldMenu menu, string name)
+        [Test]
+        public void WorldMenuModalFocusRejectsUnderlyingTargetsEvenIfTheirColliderIsReenabled()
         {
-            typeof(CompanionWorldMenu)
+            var cameraObject = new GameObject("Modal Focus Test Camera");
+            var menuObject = new GameObject("Modal Focus Test Menu");
+            try
+            {
+                cameraObject.tag = "MainCamera";
+                cameraObject.AddComponent<Camera>();
+                var menu = menuObject.AddComponent<CompanionWorldMenu>();
+                menu.Initialize(null);
+                menu.ShowInFront();
+
+                InvokeMenuMethod(menu, "ShowActionPanel");
+                InvokeMenuMethod(menu, "ShowActionList");
+                var root = GetMenuField<GameObject>(menu, "menuRoot");
+                var actionLayer = root.transform.Find("Action Presets Layer");
+                var actionList = actionLayer.Find("Added Actions List");
+                var underlyingTarget = FindButtonTarget(
+                    actionLayer
+                        .GetComponentsInChildren<BoxCollider>(true)
+                        .First(value => value.transform.parent == actionLayer));
+                var modalTarget = FindButtonTarget(
+                    actionList.GetComponentsInChildren<BoxCollider>(true).First());
+
+                InvokeTargetMethod(underlyingTarget, "SetInteractive", true);
+
+                Assert.That(
+                    InvokeMenuMethod(menu, "IsTargetInFocusedLayer", underlyingTarget),
+                    Is.False);
+                Assert.That(
+                    InvokeMenuMethod(menu, "IsTargetInFocusedLayer", modalTarget),
+                    Is.True);
+            }
+            finally
+            {
+                Object.DestroyImmediate(menuObject);
+                Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
+        public void WorldMenuLayerTransitionRequiresReleaseAndAllowsOnlyOnePressPerFrame()
+        {
+            var cameraObject = new GameObject("Input Gate Test Camera");
+            var menuObject = new GameObject("Input Gate Test Menu");
+            try
+            {
+                cameraObject.tag = "MainCamera";
+                cameraObject.AddComponent<Camera>();
+                var menu = menuObject.AddComponent<CompanionWorldMenu>();
+                menu.Initialize(null);
+                menu.ShowInFront();
+                InvokeMenuMethod(menu, "ShowActionPanel");
+                InvokeMenuMethod(menu, "ShowActionList");
+
+                var root = GetMenuField<GameObject>(menu, "menuRoot");
+                var actionList = root.transform.Find("Action Presets Layer/Added Actions List");
+                var modalTarget = FindButtonTarget(
+                    actionList.GetComponentsInChildren<BoxCollider>(true).First());
+
+                Assert.That(GetMenuField<bool>(menu, "pointerReleaseRequired"), Is.True);
+                Assert.That(
+                    InvokeMenuMethod(menu, "CanDispatchPointerPress", modalTarget, true),
+                    Is.False,
+                    "A press held across a modal transition must not activate the new layer.");
+
+                InvokeMenuMethod(menu, "ReleasePointerInputGateIfReady");
+
+                Assert.That(GetMenuField<bool>(menu, "pointerReleaseRequired"), Is.False);
+                Assert.That(
+                    InvokeMenuMethod(menu, "CanDispatchPointerPress", modalTarget, true),
+                    Is.True);
+                Assert.That(
+                    InvokeMenuMethod(menu, "CanDispatchPointerPress", modalTarget, true),
+                    Is.False,
+                    "The other pointer must not dispatch a second button in the same frame.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(menuObject);
+                Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        private static object InvokeMenuMethod(CompanionWorldMenu menu, string name, params object[] arguments)
+        {
+            return typeof(CompanionWorldMenu)
                 .GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)
-                ?.Invoke(menu, null);
+                ?.Invoke(menu, arguments);
+        }
+
+        private static T GetMenuField<T>(CompanionWorldMenu menu, string name)
+        {
+            return (T)typeof(CompanionWorldMenu)
+                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(menu);
+        }
+
+        private static Component FindButtonTarget(BoxCollider collider)
+        {
+            return collider
+                .GetComponents<Component>()
+                .Single(value => value.GetType().Name == "CompanionMenuButtonTarget");
+        }
+
+        private static object InvokeTargetMethod(Component target, string name, params object[] arguments)
+        {
+            return target
+                .GetType()
+                .GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.Invoke(target, arguments);
         }
         [Test]
         public void WorldMenuBuildsMainAndActionPresetButtons()
@@ -164,10 +275,14 @@ namespace QuestMmdPlayer.Tests
 
                 var root = GameObject.Find("Companion World Menu");
                 Assert.That(root, Is.Not.Null);
-                Assert.That(root.GetComponentsInChildren<BoxCollider>(true).Length, Is.EqualTo(46));
+                Assert.That(root.GetComponentsInChildren<BoxCollider>(true).Length, Is.GreaterThanOrEqualTo(55));
                 Assert.That(root.transform.Find("Appearance Layer/\u626b\u63cf\u623f\u95f4"), Is.Not.Null);
                 Assert.That(root.transform.Find("Main Menu Layer/绑定后端"), Is.Not.Null);
-                Assert.That(root.transform.Find("Main Menu Layer/调试"), Is.Not.Null);
+                Assert.That(root.transform.Find("Main Menu Layer/诊断"), Is.Not.Null);
+                Assert.That(root.transform.Find("Main Menu Layer/语音"), Is.Not.Null);
+                Assert.That(root.transform.Find("Voice Layer/常开监听"), Is.Not.Null);
+                Assert.That(root.transform.Find("Voice Layer/开始说话"), Is.Not.Null);
+                Assert.That(root.transform.Find("Debug Layer/清空记录"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/刷新外部动作"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/导入文件"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/播放选中"), Is.Not.Null);
@@ -175,7 +290,19 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(root.transform.Find("Appearance Layer/描边开关"), Is.Not.Null);
                 Assert.That(root.transform.Find("Appearance Layer/站立校准"), Is.Not.Null);
                 Assert.That(root.transform.Find("Appearance Layer/画质"), Is.Not.Null);
+                Assert.That(root.transform.Find("Appearance Layer/表情：模型默认"), Is.Not.Null);
                 Assert.That(root.transform.Find("Quality Layer/清晰"), Is.Not.Null);
+
+                InvokeTargetMethod(menu, "ShowDebugPanel");
+                var mainLayer = root.transform.Find("Main Menu Layer");
+                var debugLayer = root.transform.Find("Debug Layer");
+                Assert.That(mainLayer.gameObject.activeSelf, Is.True);
+                Assert.That(debugLayer.gameObject.activeSelf, Is.True);
+                Assert.That(debugLayer.localPosition.x, Is.LessThan(-360f));
+
+                InvokeTargetMethod(menu, "ToggleDebugMode");
+                Assert.That(mainLayer.gameObject.activeSelf, Is.True);
+                Assert.That(debugLayer.gameObject.activeSelf, Is.False);
             }
             finally
             {

@@ -7,6 +7,55 @@ namespace QuestMmdPlayer.Tests
 {
     public sealed class AstrBotProtocolTests
     {
+        [TestCase(0, false)]
+        [TestCase(199, false)]
+        [TestCase(200, true)]
+        [TestCase(204, true)]
+        [TestCase(299, true)]
+        [TestCase(300, false)]
+        [TestCase(401, false)]
+        public void SseBecomesReadyFromSuccessfulResponseHeaders(int status, bool expected)
+        {
+            Assert.That(AstrBotBridge.IsSseHandshakeReady(status), Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void ExistingSessionConflictCanReconnectButCapacityConflictCannot()
+        {
+            const string existing =
+                "{\"status\":\"error\",\"message\":\"session already exists\",\"data\":{\"code\":\"session_conflict\"}}";
+            const string capacity =
+                "{\"status\":\"error\",\"message\":\"session limit reached\",\"data\":{\"code\":\"session_conflict\"}}";
+
+            Assert.That(AstrBotBridge.CanRecoverExistingSession(409, existing), Is.True);
+            Assert.That(AstrBotBridge.IsSessionCapacityConflict(409, existing), Is.False);
+            Assert.That(AstrBotBridge.CanRecoverExistingSession(409, capacity), Is.False);
+            Assert.That(AstrBotBridge.IsSessionCapacityConflict(409, capacity), Is.True);
+            Assert.That(AstrBotBridge.CanRecoverExistingSession(500, existing), Is.False);
+        }
+
+        [Test]
+        public void SessionResponseExposesEventBusEligibilityWithoutIdentifiers()
+        {
+            Assert.That(AstrBotBridge.ParseSessionChainStatus(
+                "{\"status\":\"ok\",\"data\":{\"protected_context\":{\"authorized\":true,\"reason\":\"authorized\"}}}"),
+                Is.EqualTo("EventBus eligible"));
+            Assert.That(AstrBotBridge.ParseSessionChainStatus(
+                "{\"status\":\"ok\",\"data\":{\"protected_context\":{\"authorized\":false,\"reason\":\"denied\"}}}"),
+                Is.EqualTo("direct provider fallback"));
+            Assert.That(AstrBotBridge.ParseSessionChainStatus("not json"), Is.EqualTo("chain unknown"));
+            Assert.That(AstrBotBridge.ResolveBackendChainStatus("EventBus eligible", "ready"), Is.EqualTo("EventBus ready"));
+            Assert.That(AstrBotBridge.ResolveBackendChainStatus("EventBus eligible", "unavailable"), Is.EqualTo("direct provider fallback"));
+        }
+
+        [Test]
+        public void StableSessionIdentifierHasStrictShape()
+        {
+            Assert.That(AstrBotBridge.IsStableSessionId("q3-0123456789abcdef0123456789abcdef"), Is.True);
+            Assert.That(AstrBotBridge.IsStableSessionId("q3-0123456789ABCDEF0123456789ABCDEF"), Is.False);
+            Assert.That(AstrBotBridge.IsStableSessionId("q3-short"), Is.False);
+        }
+
         [Test]
         public void SseParserHandlesSplitUtf8AndComments()
         {
@@ -67,6 +116,19 @@ namespace QuestMmdPlayer.Tests
                 AstrBotProtocol.TryMapSseEvent("current", "reply.end", json, out _, out var error),
                 Is.False);
             Assert.That(error, Does.Contain("stale session"));
+        }
+
+        [Test]
+        public void ReplyEndCarriesServerDeliverySummary()
+        {
+            const string json = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"text_sent\":true,\"audio_sent\":false}";
+
+            Assert.That(
+                AstrBotProtocol.TryMapSseEvent("s1", "reply.end", json, out var message, out var error),
+                Is.True,
+                error);
+            Assert.That(message.TextSent, Is.True);
+            Assert.That(message.AudioSent, Is.False);
         }
 
         [Test]

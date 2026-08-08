@@ -12,6 +12,13 @@ namespace QuestMmdPlayer
         Enabled
     }
 
+    public enum PassthroughLifecycleAction
+    {
+        None,
+        Suspend,
+        Restore
+    }
+
     public sealed class PassthroughFacade : MonoBehaviour
     {
         [SerializeField] private bool requestOnStart = true;
@@ -23,6 +30,11 @@ namespace QuestMmdPlayer
         private float nextStatusLogTime;
         private Coroutine restartRoutine;
         private bool requestedEnabled;
+        private bool requestApplied;
+        private bool applicationPaused;
+        private bool applicationFocused = true;
+        private bool suspendedForLifecycle;
+        private bool providerEnableFailed;
 
         public event Action<PassthroughState> StateChanged;
         public PassthroughState State { get; private set; } = PassthroughState.Unavailable;
@@ -48,7 +60,8 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
-            if (State != PassthroughState.Enabled || cameraManager == null)
+            if (State != PassthroughState.Enabled || cameraManager == null ||
+                suspendedForLifecycle || providerEnableFailed)
             {
                 return;
             }
@@ -72,10 +85,14 @@ namespace QuestMmdPlayer
 
         private void OnApplicationFocus(bool hasFocus)
         {
-            if (hasFocus && requestOnStart && State == PassthroughState.Enabled)
-            {
-                SetEnabled(true);
-            }
+            applicationFocused = hasFocus;
+            ApplyLifecycleState(hasFocus ? "focus restored" : "focus lost");
+        }
+
+        private void OnApplicationPause(bool pauseStatus)
+        {
+            applicationPaused = pauseStatus;
+            ApplyLifecycleState(pauseStatus ? "application paused" : "application resumed");
         }
 
         private void EnsureCameraConfiguration()
@@ -103,20 +120,40 @@ namespace QuestMmdPlayer
         public void SetProvider(IPassthroughProvider nextProvider)
         {
             provider = nextProvider ?? new EditorPassthroughProvider();
-            SetEnabled(requestOnStart);
+            ApplyEnabled(requestApplied ? requestedEnabled : requestOnStart, true, "provider changed");
         }
 
         public void SetEnabled(bool enabled)
         {
+            ApplyEnabled(enabled, false, "user request");
+        }
+
+        private void ApplyEnabled(bool enabled, bool forceRestart, string reason)
+        {
             EnsureCameraConfiguration();
+            var sameRequest = requestApplied && requestedEnabled == enabled;
             requestedEnabled = enabled;
-            if (restartRoutine != null)
+            requestApplied = true;
+
+            if (sameRequest && !forceRestart && !suspendedForLifecycle &&
+                ((enabled && (restartRoutine != null || State == PassthroughState.Enabled)) ||
+                 (!enabled && State == PassthroughState.Disabled)))
             {
-                StopCoroutine(restartRoutine);
-                restartRoutine = null;
+                return;
             }
 
-            if (arSession != null && !arSession.enabled)
+            CancelRestart();
+
+            if (enabled && (applicationPaused || !applicationFocused))
+            {
+                suspendedForLifecycle = true;
+                SetState(PassthroughState.Enabled, "Waiting for application focus to restore passthrough");
+                return;
+            }
+
+            suspendedForLifecycle = false;
+            providerEnableFailed = false;
+            if (enabled && arSession != null && !arSession.enabled)
             {
                 arSession.enabled = true;
             }
@@ -128,28 +165,113 @@ namespace QuestMmdPlayer
 
             if (!provider.IsAvailable)
             {
-                State = PassthroughState.Unavailable;
-                Status = provider.UnavailableReason;
+                SetState(PassthroughState.Unavailable, provider.UnavailableReason);
             }
             else if (!enabled)
             {
-                provider.SetEnabled(false);
-                State = PassthroughState.Disabled;
-                Status = "Disabled";
+                var disabled = provider.SetEnabled(false);
+                SetState(
+                    PassthroughState.Disabled,
+                    disabled ? "Disabled" : "Disabled (provider did not confirm shutdown)");
+                if (!disabled)
+                {
+                    Debug.LogWarning($"[Passthrough] Provider shutdown was not confirmed ({reason}).", this);
+                }
             }
             else
             {
                 // Meta Quest can leave the passthrough stream in a stale mux state
                 // when ARCameraManager is toggled in the same frame. Restart it over
                 // two frames so the camera service receives a real stop/start pair.
-                State = PassthroughState.Enabled;
-                Status = "Restarting Quest camera";
+                SetState(PassthroughState.Enabled, "Restarting Quest camera");
                 restartRoutine = StartCoroutine(RestartCameraAfterToggle());
             }
 
             lastCameraRunning = null;
             nextStatusLogTime = 0f;
-            StateChanged?.Invoke(State);
+        }
+
+        public static PassthroughLifecycleAction DecideLifecycleAction(
+            bool requestedEnabled,
+            bool applicationPaused,
+            bool applicationFocused,
+            bool suspendedForLifecycle)
+        {
+            var applicationInactive = applicationPaused || !applicationFocused;
+            if (requestedEnabled && applicationInactive && !suspendedForLifecycle)
+            {
+                return PassthroughLifecycleAction.Suspend;
+            }
+
+            if (requestedEnabled && !applicationInactive && suspendedForLifecycle)
+            {
+                return PassthroughLifecycleAction.Restore;
+            }
+
+            return PassthroughLifecycleAction.None;
+        }
+
+        private void ApplyLifecycleState(string reason)
+        {
+            switch (DecideLifecycleAction(
+                        requestedEnabled,
+                        applicationPaused,
+                        applicationFocused,
+                        suspendedForLifecycle))
+            {
+                case PassthroughLifecycleAction.Suspend:
+                    SuspendForLifecycle(reason);
+                    break;
+                case PassthroughLifecycleAction.Restore:
+                    suspendedForLifecycle = false;
+                    ApplyEnabled(true, true, reason);
+                    break;
+            }
+        }
+
+        private void SuspendForLifecycle(string reason)
+        {
+            suspendedForLifecycle = true;
+            CancelRestart();
+
+            var providerStopped = provider == null || !provider.IsAvailable || provider.SetEnabled(false);
+            if (cameraManager != null)
+            {
+                cameraManager.enabled = false;
+            }
+
+            var status = providerStopped
+                ? "Passthrough suspended while application is inactive"
+                : "Passthrough suspend was not confirmed; restore will retry";
+            SetState(PassthroughState.Enabled, status);
+            if (!providerStopped)
+            {
+                Debug.LogWarning($"[Passthrough] Provider suspend was not confirmed ({reason}).", this);
+            }
+
+            Debug.Log($"[Passthrough] Lifecycle suspend ({reason}); requested=on.", this);
+        }
+
+        private void CancelRestart()
+        {
+            if (restartRoutine == null)
+            {
+                return;
+            }
+
+            StopCoroutine(restartRoutine);
+            restartRoutine = null;
+        }
+
+        private void SetState(PassthroughState state, string status)
+        {
+            var changed = State != state || !string.Equals(Status, status, StringComparison.Ordinal);
+            State = state;
+            Status = status;
+            if (changed)
+            {
+                StateChanged?.Invoke(State);
+            }
         }
 
         private IEnumerator RestartCameraAfterToggle()
@@ -161,7 +283,7 @@ namespace QuestMmdPlayer
             }
             yield return null;
             yield return new WaitForSecondsRealtime(.06f);
-            if (!requestedEnabled)
+            if (!requestedEnabled || applicationPaused || !applicationFocused)
             {
                 restartRoutine = null;
                 yield break;
@@ -180,10 +302,18 @@ namespace QuestMmdPlayer
             {
                 cameraManager.enabled = true;
             }
-            provider.SetEnabled(true);
-            Status = IsCameraSubsystemRunning ? "Enabled (Quest camera running)" : "Starting Quest camera";
+            var enabled = provider.SetEnabled(true);
+            providerEnableFailed = !enabled;
+            SetState(
+                PassthroughState.Enabled,
+                enabled
+                    ? (IsCameraSubsystemRunning ? "Enabled (Quest camera running)" : "Starting Quest camera")
+                    : "Failed to enable passthrough provider");
+            if (!enabled)
+            {
+                Debug.LogWarning("[Passthrough] Provider failed to enable after camera restart.", this);
+            }
             restartRoutine = null;
-            StateChanged?.Invoke(State);
         }
 
         public void Toggle()
@@ -193,12 +323,7 @@ namespace QuestMmdPlayer
 
         private void OnDisable()
         {
-            requestedEnabled = false;
-            if (restartRoutine != null)
-            {
-                StopCoroutine(restartRoutine);
-                restartRoutine = null;
-            }
+            CancelRestart();
         }
     }
 

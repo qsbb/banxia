@@ -19,6 +19,17 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void MissingTransportDoesNotSilentlyCreateMock()
+        {
+            owner = new GameObject("No implicit mock transport test");
+            var controller = owner.AddComponent<ConversationController>();
+
+            Assert.IsFalse(controller.IsUsingMockTransport);
+            Assert.IsFalse(controller.IsRealBackendConnected);
+            Assert.That(controller.TransportStatus, Does.Contain("No conversation transport"));
+        }
+
+        [Test]
         public void VoiceTurnUsesOneTurnIdAndForwardsPcmBeforeEnd()
         {
             owner = new GameObject("Voice conversation test");
@@ -39,6 +50,24 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void DuplicateVoiceActivationWhileCapturingDoesNotCreateAnotherTurn()
+        {
+            owner = new GameObject("Duplicate voice activation guard test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+
+            Assert.IsTrue(controller.BeginVoiceInput());
+            var firstTurnId = controller.TurnId;
+
+            Assert.IsFalse(controller.BeginVoiceInput());
+            Assert.AreEqual(firstTurnId, controller.TurnId);
+            Assert.AreEqual(1, transport.AudioStartCount);
+            Assert.AreEqual(0, transport.InterruptCount);
+            CollectionAssert.AreEqual(new[] { "start" }, transport.Calls);
+        }
+
+        [Test]
         public void DisconnectedTransportCannotStartVoiceTurn()
         {
             owner = new GameObject("Offline voice conversation test");
@@ -53,7 +82,7 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void VoiceInputCannotImplicitlyInterruptAReply()
+        public void VoiceInputCanInterruptAnActiveReplyForBargeIn()
         {
             owner = new GameObject("No accidental barge-in test");
             var controller = owner.AddComponent<ConversationController>();
@@ -69,9 +98,31 @@ namespace QuestMmdPlayer.Tests
             });
 
             Assert.AreEqual(ConversationState.Speaking, controller.State);
-            Assert.IsFalse(controller.CanStartVoiceInput);
-            Assert.IsFalse(controller.BeginVoiceInput());
-            Assert.AreEqual(0, transport.InterruptCount);
+            Assert.IsTrue(controller.CanStartVoiceInput);
+            Assert.IsTrue(controller.BeginVoiceInput());
+            Assert.AreEqual(ConversationState.Listening, controller.State);
+            Assert.AreEqual(1, transport.InterruptCount);
+        }
+
+        [Test]
+        public void VoiceInputCanBargeInWhileWaitingForFirstBackendEvent()
+        {
+            owner = new GameObject("Waiting response barge-in test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+
+            Assert.IsTrue(controller.BeginVoiceInput());
+            Assert.IsTrue(controller.PushVoiceAudio(new byte[] { 0, 0 }));
+            Assert.IsTrue(controller.EndVoiceInput());
+            Assert.IsTrue(controller.AwaitingBackendResponse);
+            var firstTurnId = controller.TurnId;
+
+            Assert.IsTrue(controller.BeginVoiceInput());
+            Assert.AreNotEqual(firstTurnId, controller.TurnId);
+            Assert.AreEqual(1, transport.InterruptCount);
+            Assert.AreEqual(2, transport.AudioStartCount);
+            Assert.AreEqual(ConversationState.Listening, controller.State);
         }
 
         [Test]
@@ -119,6 +170,39 @@ namespace QuestMmdPlayer.Tests
             Assert.AreEqual(ConversationState.Listening, controller.State);
             Assert.AreEqual(0, transport.InterruptCount);
             Assert.IsEmpty(transport.LastInteractionName);
+        }
+
+        [Test]
+        public void OnlyPhysicalContactIsForwardedToBackend()
+        {
+            owner = new GameObject("Physical interaction forwarding test");
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            owner.AddComponent<AvatarTouchInteraction>();
+            var interaction = owner.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(avatar);
+            var controller = owner.AddComponent<ConversationController>();
+            controller.Bind(avatar, interaction);
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+
+            interaction.SimulateInteraction(HumanInteractionKind.HeadPat);
+            Assert.IsEmpty(transport.LastInteractionName);
+
+            interaction.SetInputEnabled(false);
+            interaction.SetInputEnabled(true);
+            typeof(AvatarHumanInteraction)
+                .GetField("simulationUntil", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(interaction, 0f);
+            interaction.ReportTrackedHandContact(AvatarContactRegion.Head, false, Vector3.zero);
+            typeof(AvatarHumanInteraction)
+                .GetField("stateTime", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(interaction, 1f);
+            typeof(AvatarHumanInteraction)
+                .GetMethod("Update", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.Invoke(interaction, null);
+
+            Assert.AreEqual("head_pat", transport.LastInteractionName);
         }
 
         [Test]
@@ -235,20 +319,80 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ResponseWatchdogDistinguishesNoEventFromStalledStream()
+        {
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, 34f, 0f, -1f, 35f, 30f, out _), Is.False);
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, 35f, 0f, -1f, 35f, 30f, out var firstCode), Is.True);
+            Assert.That(firstCode, Is.EqualTo("response_first_event_timeout"));
+
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, 39f, 0f, 10f, 35f, 30f, out _), Is.False);
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, 40f, 0f, 10f, 35f, 30f, out var stallCode), Is.True);
+            Assert.That(stallCode, Is.EqualTo("response_event_stall_timeout"));
+        }
+
+        [Test]
+        public void ResponseWatchdogStopsAfterReplyEndOrCancellation()
+        {
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, true, 100f, 0f, -1f, 35f, 30f, out _), Is.False);
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                false, false, 100f, 0f, -1f, 35f, 30f, out _), Is.False);
+        }
+
+        [Test]
+        public void EmptyReplyEndBecomesVisibleErrorInsteadOfSilentSuccess()
+        {
+            owner = new GameObject("Empty backend reply test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.StartConversation("hello");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.Thinking,
+                TurnId = controller.TurnId
+            });
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyEnd,
+                TurnId = controller.TurnId,
+                TextSent = false,
+                AudioSent = false
+            });
+
+            Assert.That(controller.State, Is.EqualTo(ConversationState.Error));
+            Assert.That(controller.LastErrorCode, Is.EqualTo("empty_backend_reply"));
+            Assert.That(transport.InterruptCount, Is.EqualTo(1));
+        }
+
+        [Test]
         public void ExpressionMappingIsEmotionSpecificAndBounded()
         {
             Assert.That(
                 AvatarConversationPresenter.GetExpressionWeight("smile", "happy", .5f),
-                Is.EqualTo(31f).Within(.001f));
+                Is.EqualTo(19f).Within(.001f));
             Assert.That(
                 AvatarConversationPresenter.GetExpressionWeight("smile", "sad", 1f),
                 Is.EqualTo(0f));
             Assert.That(
                 AvatarConversationPresenter.GetExpressionWeight("照れ", "shy", 2f),
-                Is.EqualTo(43.4f).Within(.001f));
+                Is.EqualTo(26.6f).Within(.001f));
             Assert.That(
                 AvatarConversationPresenter.GetExpressionWeight("笑い", "happy", 1f),
-                Is.EqualTo(62f).Within(.001f));
+                Is.EqualTo(38f).Within(.001f));
+        }
+
+        [Test]
+        public void ManualExpressionNamesNormalizeToSafePresets()
+        {
+            Assert.That(AvatarConversationPresenter.NormalizeExpression("happy"), Is.EqualTo("happy"));
+            Assert.That(AvatarConversationPresenter.NormalizeExpression("unknown"), Is.EqualTo("neutral"));
+            Assert.That(AvatarConversationPresenter.NormalizeExpression(""), Is.EqualTo("neutral"));
         }
         private sealed class RecordingVoiceTransport : MonoBehaviour, IConversationTransport
         {
@@ -263,6 +407,7 @@ namespace QuestMmdPlayer.Tests
             public string EndedTurnId;
             public byte[] LastChunk;
             public int InterruptCount;
+            public int AudioStartCount;
             public string InteractionEventId = string.Empty;
             public string LastInteractionName = string.Empty;
             public bool IsConnected => Connected;
@@ -280,6 +425,7 @@ namespace QuestMmdPlayer.Tests
             public bool BeginAudioTurn(string turnId)
             {
                 Calls.Add("start");
+                AudioStartCount++;
                 StartedTurnId = turnId;
                 return true;
             }

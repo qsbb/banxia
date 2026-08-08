@@ -8,6 +8,8 @@ namespace QuestMmdPlayer
     /// </summary>
     public sealed class QuestMmdPlayerBootstrap : MonoBehaviour
     {
+        public const string AndroidTaskLabel = "\u4F34\u590F";
+
         [SerializeField] private bool createCameraIfMissing = true;
         [SerializeField] private bool createLightIfMissing = true;
         [SerializeField] private bool createFallbackAvatar = true;
@@ -43,9 +45,11 @@ namespace QuestMmdPlayer
 
         private RuntimeMmdModelLoader runtimeMmdLoader;
         private AvatarController fallbackAvatar;
+        private bool androidTaskLabelLogged;
 
         private void Awake()
         {
+            ApplyAndroidTaskLabel();
             DebugLog = gameObject.GetComponent<RuntimeDebugLog>() ?? gameObject.AddComponent<RuntimeDebugLog>();
             EnsureCamera();
             EnsureLight();
@@ -62,7 +66,6 @@ namespace QuestMmdPlayer
             if (createHumanInteraction)
             {
                 HumanInteraction = gameObject.GetComponent<AvatarHumanInteraction>() ?? gameObject.AddComponent<AvatarHumanInteraction>();
-                AvatarRayInteraction = gameObject.GetComponent<QuestAvatarRayInteraction>() ?? gameObject.AddComponent<QuestAvatarRayInteraction>();
             }
             TrackedHands = gameObject.GetComponent<QuestTrackedHandVisualizer>() ?? gameObject.AddComponent<QuestTrackedHandVisualizer>();
             if (createConversationPrototype)
@@ -112,6 +115,56 @@ namespace QuestMmdPlayer
 #endif
                 BindInteractions();
             }
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            if (hasFocus)
+            {
+                ApplyAndroidTaskLabel();
+            }
+        }
+
+        private void ApplyAndroidTaskLabel()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                {
+                    activity.Call("runOnUiThread", new AndroidJavaRunnable(() =>
+                    {
+                        try
+                        {
+                            using (var callbackPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                            using (var callbackActivity = callbackPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                            using (var description = new AndroidJavaObject(
+                                "android.app.ActivityManager$TaskDescription",
+                                AndroidTaskLabel))
+                            {
+                                callbackActivity.Call("setTitle", AndroidTaskLabel);
+                                callbackActivity.Call("setTaskDescription", description);
+                            }
+
+                            if (!androidTaskLabelLogged)
+                            {
+                                androidTaskLabelLogged = true;
+                                Debug.Log("[QuestMmdPlayer] Android activity title and task label configured.");
+                            }
+                        }
+                        catch (System.Exception exception)
+                        {
+                            Debug.LogWarning($"[QuestMmdPlayer] Android task label failed: {exception.Message}");
+                        }
+                    }));
+                }
+            }
+            catch (System.Exception exception)
+            {
+                Debug.LogWarning($"[QuestMmdPlayer] Android task label scheduling failed: {exception.Message}");
+            }
+#endif
         }
 
         private void OnEnable()
@@ -201,7 +254,9 @@ namespace QuestMmdPlayer
             {
                 IdlePose.Bind(Avatar);
             }
-            Avatar?.CaptureActionPose();
+            // IdlePose has just written the relaxed stance. Capture exactly that
+            // visible pose instead of restoring AvatarController's import T-pose.
+            Avatar?.CaptureCurrentActionPose();
             if (TouchInteraction != null)
             {
                 TouchInteraction.Bind(Avatar);

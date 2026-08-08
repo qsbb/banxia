@@ -40,6 +40,32 @@ namespace QuestMmdPlayer.Tests
             Assert.IsFalse(machine.Apply(Event(second, ConversationEventType.AudioChunk)));
         }
 
+        [Test]
+        public void ReplyEndSealsTurnAgainstLateContentAndDuplicateEndIsHarmless()
+        {
+            var machine = new ConversationStateMachine();
+            var turnId = machine.Begin("hello");
+
+            Assert.IsTrue(machine.Apply(Event(turnId, ConversationEventType.ReplyEnd)));
+            Assert.IsTrue(machine.Apply(Event(turnId, ConversationEventType.ReplyEnd)));
+            Assert.IsFalse(machine.Apply(Event(turnId, ConversationEventType.ReplyTextDelta, "late")));
+            Assert.IsFalse(machine.Apply(Event(turnId, ConversationEventType.AudioChunk)));
+            Assert.IsEmpty(machine.ReplyText);
+        }
+
+        [Test]
+        public void LocalFailureSealsTurnUntilReset()
+        {
+            var machine = new ConversationStateMachine();
+            var turnId = machine.Begin(string.Empty);
+
+            Assert.IsTrue(machine.Fail("Backend response timed out"));
+            Assert.AreEqual(ConversationState.Error, machine.State);
+            Assert.AreEqual("Backend response timed out", machine.ErrorMessage);
+            Assert.IsFalse(machine.Apply(Event(turnId, ConversationEventType.AudioChunk)));
+            Assert.IsFalse(machine.Fail("again"));
+        }
+
         private static ConversationEvent Event(string turnId, ConversationEventType type, string text = null)
         {
             return new ConversationEvent { TurnId = turnId, Type = type, Text = text };

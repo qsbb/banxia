@@ -277,6 +277,8 @@ namespace QuestMmdPlayer
                     break;
                 case "reply.end":
                     message = Basic(payload, ConversationEventType.ReplyEnd);
+                    message.TextSent = payload.text_sent;
+                    message.AudioSent = payload.audio_sent;
                     break;
                 case "error":
                     message = Basic(payload, ConversationEventType.Error);
@@ -322,6 +324,9 @@ namespace QuestMmdPlayer
                 case "cheek_pinch":
                 case "refuse":
                 case "step_back":
+                case "dance":
+                case "nod":
+                case "sway":
                     return value;
                 default:
                     return "idle";
@@ -431,6 +436,8 @@ namespace QuestMmdPlayer
             public string data;
             public string code;
             public string message;
+            public bool text_sent;
+            public bool audio_sent;
         }
     }
 

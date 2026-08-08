@@ -153,6 +153,8 @@ namespace QuestMmdPlayer.Tests
                 var avatar = avatarObject.AddComponent<AvatarController>();
                 var service = serviceObject.AddComponent<AvatarPlacementService>();
                 service.Bind(avatar);
+
+                Assert.That(originObject.GetComponent<UnityEngine.XR.ARFoundation.ARPlaneManager>().enabled, Is.False);
                 service.ResetHeightAndPlace();
 
                 Assert.That(service.HasHeightCalibration, Is.True);

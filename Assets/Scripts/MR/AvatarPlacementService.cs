@@ -150,7 +150,11 @@ namespace QuestMmdPlayer
 
             if (placeAutomatically)
             {
-                RequestPlacementInternal(hasSavedPlacementBookmark);
+                // Startup must be immediate and independent of optional Meta Scene
+                // data. Explicit height reset/room placement commands can start a
+                // bounded plane-tracking window later.
+                ResolveDependencies();
+                PlaceAtFallbackPose();
             }
             else
             {
@@ -575,8 +579,14 @@ namespace QuestMmdPlayer
                 raycastManager.enabled = false;
             }
 
-            // Keep semantic room planes alive after placement. Meta OpenXR reads
-            // these from Space Setup, and RoomUnderstandingService reuses them.
+            // Meta Scene plane discovery can retry continuously when Space Setup
+            // data is unavailable. Stop it after placement; the room scan command
+            // owns an explicit bounded tracking window when semantic data is needed.
+            if (planeManager != null &&
+                (roomUnderstanding == null || !roomUnderstanding.IsSceneCaptureTrackingRequested))
+            {
+                planeManager.enabled = false;
+            }
         }
 
         private float ResolveFloorHeight()

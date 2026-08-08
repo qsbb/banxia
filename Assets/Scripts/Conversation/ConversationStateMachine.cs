@@ -59,6 +59,11 @@ namespace QuestMmdPlayer
                 return false;
             }
 
+            if (replyEnded && message.Type != ConversationEventType.ReplyEnd)
+            {
+                return false;
+            }
+
             switch (message.Type)
             {
                 case ConversationEventType.AsrPartial:
@@ -90,6 +95,20 @@ namespace QuestMmdPlayer
                     throw new ArgumentOutOfRangeException();
             }
 
+            return true;
+        }
+
+        public bool Fail(string message)
+        {
+            if (!acceptingEvents || State == ConversationState.Idle)
+            {
+                return false;
+            }
+
+            ErrorMessage = string.IsNullOrWhiteSpace(message) ? "Conversation failed" : message.Trim();
+            State = ConversationState.Error;
+            replyEnded = false;
+            acceptingEvents = false;
             return true;
         }
 

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UMT;
 using UnityEngine;
@@ -42,9 +43,11 @@ namespace QuestMmdPlayer
         private bool mouthWasActive;
         private string targetEmotion = "neutral";
         private float targetEmotionIntensity;
+        private string manualExpression = "neutral";
         [SerializeField, Range(1f, 12f)] private float expressionBlendSpeed = 6f;
 
         public int MatchedVisemeCount => visemes.Count;
+        public string ManualExpression => manualExpression;
         public string Status => avatar == null
             ? "Waiting for avatar"
             : $"{state} | gesture:{behavior.LastGesture} visemes:{visemes.Count} jaw:{(jaw == null ? "no" : "yes")}";
@@ -65,10 +68,11 @@ namespace QuestMmdPlayer
             expressions.Clear();
             targetEmotion = "neutral";
             targetEmotionIntensity = 0f;
+            manualExpression = "neutral";
             gazeBlend = 0f;
             lookAtMode = "none";
             mouthWasActive = false;
-            behavior.Reset(Time.unscaledTime, Random.value);
+            behavior.Reset(Time.unscaledTime, UnityEngine.Random.value);
 
             if (avatar == null)
             {
@@ -94,7 +98,7 @@ namespace QuestMmdPlayer
         {
             if (state != ConversationState.Idle && next == ConversationState.Idle)
             {
-                behavior.DeferIdle(Time.unscaledTime, Random.value);
+                behavior.DeferIdle(Time.unscaledTime, UnityEngine.Random.value);
             }
             state = next;
         }
@@ -137,10 +141,74 @@ namespace QuestMmdPlayer
             {
                 humanInteraction?.PlayReaction(HumanInteractionKind.CheekPinch, reactionSeconds);
             }
-            else if (acceptedGesture == "wave" || acceptedGesture == "bow" || acceptedGesture == "idle")
+            else if (acceptedGesture == "wave" || acceptedGesture == "bow" ||
+                acceptedGesture == "dance" || acceptedGesture == "nod" ||
+                acceptedGesture == "sway" || acceptedGesture == "idle")
             {
-                avatar.PlayAction(acceptedGesture);
+                if (acceptedGesture == "dance")
+                {
+                    _ = PlayRecommendedDance();
+                }
+                else
+                {
+                    avatar.PlayAction(acceptedGesture);
+                }
             }
+        }
+
+        public void SetManualExpression(string expression)
+        {
+            manualExpression = NormalizeExpression(expression);
+            targetEmotion = manualExpression;
+            targetEmotionIntensity = manualExpression == "neutral" ? 0f : .42f;
+            avatar?.SetEmotion(manualExpression);
+        }
+
+        public void PlayLocalAction(string action)
+        {
+            var normalized = string.IsNullOrWhiteSpace(action)
+                ? "idle"
+                : action.Trim().ToLowerInvariant();
+            if (normalized == "dance")
+            {
+                _ = PlayRecommendedDance();
+                return;
+            }
+
+            if (avatar != null)
+            {
+                avatar.PlayAction(normalized);
+            }
+        }
+
+        private async System.Threading.Tasks.Task PlayRecommendedDance()
+        {
+            if (vmdActions != null && vmdActions.BoundModel)
+            {
+                try
+                {
+                    if (await vmdActions.PlayRecommendedDanceAsync())
+                    {
+                        return;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning("[ConversationPresenter] Dance motion fallback failed: " + exception.Message, this);
+                }
+            }
+
+            // A built-in fallback keeps the explicit request visible even when
+            // no imported dance is installed or the VMD is not compatible.
+            avatar?.PlayAction("dance");
+        }
+
+        public static string NormalizeExpression(string expression)
+        {
+            var value = string.IsNullOrWhiteSpace(expression) ? "neutral" : expression.Trim().ToLowerInvariant();
+            return value == "happy" || value == "shy" || value == "surprised" || value == "sad"
+                ? value
+                : "neutral";
         }
 
         private void LateUpdate()
@@ -171,7 +239,7 @@ namespace QuestMmdPlayer
                     IsImportedMotionBusy(),
                     avatar.CurrentAction,
                     Time.unscaledTime,
-                    Random.value,
+                    UnityEngine.Random.value,
                     out var gesture))
             {
                 avatar.PlayAction(gesture);
@@ -354,7 +422,7 @@ namespace QuestMmdPlayer
         {
             var name = Normalize(shapeName);
             var value = string.IsNullOrWhiteSpace(emotion) ? "neutral" : emotion.ToLowerInvariant();
-            var amount = Mathf.Clamp01(intensity) * 62f;
+            var amount = Mathf.Clamp01(intensity) * 38f;
             if (value == "happy" || value == "joy" || value == "fond")
             {
                 return ContainsAny(name, "smile", "happy", "joy", "laugh", "笑", "微笑",

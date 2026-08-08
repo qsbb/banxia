@@ -17,10 +17,8 @@ namespace QuestMmdPlayer
         [SerializeField] bool enableBoneReactions = true;
         [SerializeField] bool enableMorphReactions = true;
         [SerializeField] float pinchDistance = .035f;
-        [SerializeField] float contactRadius = .10f;
         [SerializeField, Range(.1f, .35f)] float handshakeHoldSeconds = .18f;
         [SerializeField] float handshakeTargetSmoothing = 14f;
-        [SerializeField] float handshakeReleaseSlack = .18f;
         [SerializeField, Range(.75f, .995f)] float maxArmStretch = .98f;
         [SerializeField] Transform trackingSpace;
 
@@ -31,8 +29,6 @@ namespace QuestMmdPlayer
         AvatarController avatar;
         AvatarTouchInteraction touch;
         BoneSet bones;
-        Bounds bounds;
-        bool hasBounds;
         HumanInteractionKind current;
         HumanInteractionKind fadeKind;
         float stateTime;
@@ -47,14 +43,15 @@ namespace QuestMmdPlayer
         HumanInteractionKind trackedContactKind;
         float trackedContactUntil;
         Vector3 trackedContactTarget;
-        HandData handshakeUserHand;
         bool handshakeUsesRightArm;
         bool hasHandshakeArm;
         Vector3 smoothedHandshakeTarget;
         bool hasSmoothedHandshakeTarget;
         bool reactionPoseApplied;
+        bool currentInteractionIsPhysical;
 
         public event Action<HumanInteractionKind> InteractionChanged;
+        public event Action<HumanInteractionKind> PhysicalInteractionChanged;
         public AvatarController Avatar => avatar;
         public HumanInteractionKind CurrentInteraction => current;
         public bool HasSemanticContact => current != HumanInteractionKind.None || simulationUntil > Time.unscaledTime;
@@ -64,6 +61,30 @@ namespace QuestMmdPlayer
         public int MatchedMorphCount => morphs.Count;
         public bool LocalReactionsEnabled => localReactionsEnabled;
         public HumanInteractionKind PendingBackendReaction => backendReactionUntil > Time.unscaledTime ? backendReactionKind : HumanInteractionKind.None;
+
+        public bool TryGetContactRegionSwept(
+            Vector3 from,
+            Vector3 to,
+            float radius,
+            out AvatarContactRegion region,
+            out Vector3 contactPoint)
+        {
+            EnsureTouchSubscription();
+            region = AvatarContactRegion.None;
+            contactPoint = to;
+            return touch != null && touch.TryGetContactRegionSwept(from, to, radius, out region, out contactPoint);
+        }
+
+        public bool TryGetPenetrationCorrection(
+            Collider handCollider,
+            out Vector3 correction,
+            out AvatarContactRegion region)
+        {
+            EnsureTouchSubscription();
+            correction = Vector3.zero;
+            region = AvatarContactRegion.None;
+            return touch != null && touch.TryGetPenetrationCorrection(handCollider, out correction, out region);
+        }
 
         sealed class HandData
         {
@@ -158,20 +179,18 @@ namespace QuestMmdPlayer
             trackedContactKind = HumanInteractionKind.None;
             trackedContactUntil = 0f;
             trackedContactTarget = Vector3.zero;
-            handshakeUserHand = null;
             hasHandshakeArm = false;
             hasSmoothedHandshakeTarget = false;
             reactionPoseApplied = false;
+            currentInteractionIsPhysical = false;
             target = Vector3.zero;
             morphs.Clear();
-            hasBounds = false;
             bones = null;
             if (avatar == null) { Status = "Waiting for avatar"; return; }
             bones = FindBones(avatar);
             bones.headScale = bones.head == null ? Vector3.one : bones.head.localScale;
             bones.CapturePose();
             CacheMorphs();
-            CacheBounds();
             Status = "XR hand tracking/controller ready";
             Debug.Log($"[HumanInteraction] Bound avatar; head={HasHeadBone}, hands={HasHandBones}, morphs={morphs.Count}.", this);
         }
@@ -179,7 +198,7 @@ namespace QuestMmdPlayer
         public void SetInputEnabled(bool enabled)
         {
             inputEnabled = enabled;
-            if (!enabled) { SetState(HumanInteractionKind.None); UnlockTouch(); Status = "Human interaction disabled"; }
+            if (!enabled) { SetState(HumanInteractionKind.None, false); UnlockTouch(); Status = "Human interaction disabled"; }
         }
 
         public void SetLocalReactionsEnabled(bool enabled)
@@ -208,7 +227,7 @@ namespace QuestMmdPlayer
             simulationKind = kind;
             simulationUntil = Time.unscaledTime + Mathf.Max(.25f, seconds);
             target = SimulatedTarget();
-            SetState(kind);
+            SetState(kind, false);
         }
 
         void HandleTouchStateChanged(bool touched)
@@ -233,7 +252,7 @@ namespace QuestMmdPlayer
             if (avatar == null) return;
             if (avatar.CurrentAction == "vmd")
             {
-                if (current != HumanInteractionKind.None) SetState(HumanInteractionKind.None);
+                if (current != HumanInteractionKind.None) SetState(HumanInteractionKind.None, false);
                 UnlockTouch();
                 Status = "Touch reactions paused during VMD motion";
                 return;
@@ -243,20 +262,28 @@ namespace QuestMmdPlayer
             Read(left);
             Read(right);
             var proxyContact = trackedContactUntil > Time.unscaledTime ? trackedContactKind : HumanInteractionKind.None;
-            var detected = simulationUntil > Time.unscaledTime ? simulationKind : proxyContact != HumanInteractionKind.None ? proxyContact : Detect();
+            var simulated = simulationUntil > Time.unscaledTime;
+            var detected = simulated ? simulationKind : proxyContact != HumanInteractionKind.None ? proxyContact : Detect();
+            var detectedFromPhysicalContact = !simulated && detected != HumanInteractionKind.None;
             if (proxyContact != HumanInteractionKind.None) target = trackedContactTarget;
+            var sourceChanged = detected == current && detected != HumanInteractionKind.None &&
+                detectedFromPhysicalContact != currentInteractionIsPhysical;
             if (detected != current) stateTime += Time.unscaledDeltaTime;
             else stateTime = 0f;
             if (detected == HumanInteractionKind.None && current != HumanInteractionKind.None)
             {
-                if (stateTime >= .24f) SetState(HumanInteractionKind.None);
+                if (stateTime >= .24f) SetState(HumanInteractionKind.None, false);
             }
             else if (detected != HumanInteractionKind.None && detected != current)
             {
                 var activationDelay = detected == HumanInteractionKind.Handshake
                     ? handshakeHoldSeconds
                     : .1f;
-                if (stateTime >= activationDelay) SetState(detected);
+                if (stateTime >= activationDelay) SetState(detected, detectedFromPhysicalContact);
+            }
+            else if (sourceChanged)
+            {
+                SetState(detected, detectedFromPhysicalContact);
             }
             if (touch != null) touch.SetSemanticInteractionLock(detected != HumanInteractionKind.None || current != HumanInteractionKind.None);
             Status = current != HumanInteractionKind.None ? Name(current) + " active" : detected != HumanInteractionKind.None ? "Contact candidate: " + Name(detected) : left.valid || right.valid ? "Hands ready | head:" + (HasHeadBone ? "yes" : "no") + " hand:" + (HasHandBones ? "yes" : "no") + " morphs:" + morphs.Count : "No XR hand tracking/controller";
@@ -369,46 +396,10 @@ namespace QuestMmdPlayer
 
         HumanInteractionKind Detect()
         {
-            if (!hasBounds) return HumanInteractionKind.None;
-            if (current == HumanInteractionKind.Handshake && TryContinueHandshake())
-                return HumanInteractionKind.Handshake;
-            var scale = Mathf.Clamp(bounds.size.y, .5f, 3f);
-            var head = bones.head == null ? bounds.center + Vector3.up * bounds.size.y * .22f : bones.head.position + avatar.transform.up * .1f * scale;
-            var face = bones.head == null ? bounds.center : bones.head.position;
-            var toward = Camera.main == null ? -avatar.transform.forward : Camera.main.transform.position - face;
-            if (toward.sqrMagnitude < .0001f) toward = -avatar.transform.forward;
-            face += toward.normalized * .12f * scale;
-            if (TryPhysicalContact(left, scale, out var physicalLeft)) return physicalLeft;
-            if (TryPhysicalContact(right, scale, out var physicalRight)) return physicalRight;
-            if (NearPinch(left, face, contactRadius * scale) || NearPinch(right, face, contactRadius * scale)) return HumanInteractionKind.CheekPinch;
-            if (NearPalm(left, head, contactRadius * scale) || NearPalm(right, head, contactRadius * scale)) return HumanInteractionKind.HeadPat;
-            if (NearModelHand(left, contactRadius * scale)) { target = left.palm; return HumanInteractionKind.Handshake; }
-            if (NearModelHand(right, contactRadius * scale)) { target = right.palm; return HumanInteractionKind.Handshake; }
+            // Semantic interactions are fed only by TrackedHandContactRelay.
+            // Proximity, pinch state, and controller poses alone cannot create
+            // a head pat, cheek pinch, or handshake.
             return HumanInteractionKind.None;
-        }
-
-        bool TryPhysicalContact(HandData hand, float scale, out HumanInteractionKind kind)
-        {
-            kind = HumanInteractionKind.None;
-            if (touch == null || !hand.valid)
-            {
-                return false;
-            }
-
-            var point = hand.pinch ? hand.pinchPoint : hand.palm;
-            if (!touch.TryGetContactRegion(point, Mathf.Clamp(contactRadius * scale * .72f, .045f, .16f), out var region))
-            {
-                return false;
-            }
-
-            kind = ClassifyPhysicalContact(region, hand.pinch);
-            if (kind == HumanInteractionKind.None)
-            {
-                return false;
-            }
-
-            target = hand.palm;
-            return true;
         }
 
         public void ReportTrackedHandContact(AvatarContactRegion region, bool pinching, Vector3 point)
@@ -418,6 +409,7 @@ namespace QuestMmdPlayer
             trackedContactKind = kind;
             trackedContactTarget = point;
             trackedContactUntil = Time.unscaledTime + .14f;
+            if (kind == HumanInteractionKind.Handshake) AcquireHandshakeTarget(point);
         }
 
         public static HumanInteractionKind ClassifyPhysicalContact(
@@ -439,78 +431,50 @@ namespace QuestMmdPlayer
             return HumanInteractionKind.None;
         }
 
-        static bool NearPinch(HandData hand, Vector3 point, float range) { return hand.valid && hand.pinch && Vector3.Distance(hand.pinchPoint, point) <= Mathf.Clamp(range, .04f, .22f); }
-        static bool NearPalm(HandData hand, Vector3 point, float range) { return hand.valid && !hand.pinch && Vector3.Distance(hand.palm, point) <= Mathf.Clamp(range, .055f, .28f); }
-
-        bool NearModelHand(HandData hand, float range)
+        void AcquireHandshakeTarget(Vector3 point)
         {
-            if (!hand.valid || !hand.grip || bones == null) return false;
-            var leftDistance = bones.leftHand == null ? float.MaxValue : Vector3.Distance(bones.leftHand.position, hand.palm);
-            var rightDistance = bones.rightHand == null ? float.MaxValue : Vector3.Distance(bones.rightHand.position, hand.palm);
-            if (Mathf.Min(leftDistance, rightDistance) <= Mathf.Clamp(range, .08f, .32f))
-            {
-                AcquireHandshake(hand);
-                return true;
-            }
-
-            return bones.leftHand == null && bones.rightHand == null &&
-                bounds.SqrDistance(hand.palm) <= Mathf.Pow(Mathf.Clamp(range, .08f, .32f), 2f);
-        }
-
-        void AcquireHandshake(HandData hand)
-        {
-            if (hand == null || bones == null) return;
-            var rightDistance = bones.rightHand == null ? float.MaxValue : Vector3.Distance(bones.rightHand.position, hand.palm);
-            var leftDistance = bones.leftHand == null ? float.MaxValue : Vector3.Distance(bones.leftHand.position, hand.palm);
+            if (bones == null) return;
+            var rightDistance = bones.rightHand == null ? float.MaxValue : Vector3.Distance(bones.rightHand.position, point);
+            var leftDistance = bones.leftHand == null ? float.MaxValue : Vector3.Distance(bones.leftHand.position, point);
             var useRight = bones.rightHand != null && (bones.leftHand == null || rightDistance <= leftDistance);
-            if (handshakeUserHand != hand || !hasHandshakeArm || handshakeUsesRightArm != useRight)
+            if (!hasHandshakeArm || handshakeUsesRightArm != useRight)
                 hasSmoothedHandshakeTarget = false;
-            handshakeUserHand = hand;
             handshakeUsesRightArm = useRight;
             hasHandshakeArm = bones.rightHand != null || bones.leftHand != null;
-            target = hand.palm;
+            target = point;
         }
 
-        bool TryContinueHandshake()
+        void SetState(HumanInteractionKind next, bool physicalContact)
         {
-            if (handshakeUserHand == null || !handshakeUserHand.valid || !handshakeUserHand.grip || !hasHandshakeArm)
-                return false;
-            var upper = handshakeUsesRightArm ? bones.rightUpper : bones.leftUpper;
-            var lower = handshakeUsesRightArm ? bones.rightLower : bones.leftLower;
-            var hand = handshakeUsesRightArm ? bones.rightHand : bones.leftHand;
-            if (upper == null || lower == null || hand == null) return false;
-            var reach = Vector3.Distance(upper.position, lower.position) + Vector3.Distance(lower.position, hand.position);
-            var avatarScale = avatar == null ? 1f : Mathf.Max(.25f, avatar.transform.lossyScale.magnitude / Mathf.Sqrt(3f));
-            var slack = Mathf.Clamp(handshakeReleaseSlack * avatarScale, .08f, .4f);
-            if (reach <= .02f || Vector3.Distance(upper.position, handshakeUserHand.palm) > reach + slack)
-                return false;
-            target = handshakeUserHand.palm;
-            return true;
-        }
-
-        void SetState(HumanInteractionKind next)
-        {
-            if (current == next) return;
+            var nextIsPhysical = next != HumanInteractionKind.None && physicalContact;
+            if (current == next && currentInteractionIsPhysical == nextIsPhysical)
+            {
+                return;
+            }
+            var kindChanged = current != next;
+            var previousWasPhysical = currentInteractionIsPhysical;
             current = next;
-            if (next != HumanInteractionKind.None)
+            currentInteractionIsPhysical = nextIsPhysical;
+            if (kindChanged && next != HumanInteractionKind.None)
             {
                 fadeKind = next;
                 stateTime = 0f;
                 if (localReactionsEnabled && avatar != null) avatar.SetEmotion(next == HumanInteractionKind.CheekPinch ? "shy" : "happy");
             }
-            else if (localReactionsEnabled && avatar != null) avatar.SetEmotion("neutral");
-            if (next == HumanInteractionKind.Handshake)
+            else if (kindChanged && localReactionsEnabled && avatar != null) avatar.SetEmotion("neutral");
+            if (kindChanged && next == HumanInteractionKind.Handshake)
             {
                 smoothedHandshakeTarget = target;
                 hasSmoothedHandshakeTarget = target != Vector3.zero;
             }
-            else if (next == HumanInteractionKind.None)
+            else if (kindChanged && next == HumanInteractionKind.None)
             {
-                handshakeUserHand = null;
                 hasHandshakeArm = false;
                 hasSmoothedHandshakeTarget = false;
             }
-            InteractionChanged?.Invoke(next);
+            if (kindChanged) InteractionChanged?.Invoke(next);
+            if (previousWasPhysical) PhysicalInteractionChanged?.Invoke(HumanInteractionKind.None);
+            if (currentInteractionIsPhysical) PhysicalInteractionChanged?.Invoke(next);
             if (next != HumanInteractionKind.None) Debug.Log($"[HumanInteraction] Started {Name(next)}.", this);
         }
 
@@ -685,17 +649,6 @@ namespace QuestMmdPlayer
                     if (kind >= 0) morphs.Add(new Morph { renderer = renderers[r], index = i, kind = kind, baseWeight = renderers[r].GetBlendShapeWeight(i) });
                 }
             }
-        }
-
-        void CacheBounds()
-        {
-            var renderers = avatar.GetComponentsInChildren<Renderer>(true);
-            for (var i = 0; i < renderers.Length; i++)
-            {
-                if (!hasBounds) { bounds = renderers[i].bounds; hasBounds = true; }
-                else bounds.Encapsulate(renderers[i].bounds);
-            }
-            if (!hasBounds) { bounds = new Bounds(avatar.transform.position, Vector3.one); hasBounds = true; }
         }
 
         void OnDisable() { UnlockTouch(); RestorePose(); RestoreMorphs(); }

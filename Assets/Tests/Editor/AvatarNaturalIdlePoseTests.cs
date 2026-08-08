@@ -59,12 +59,45 @@ namespace QuestMmdPlayer.Tests
 
             var leftForearm = (leftHand.position - leftLower.position).normalized;
             var rightForearm = (rightHand.position - rightLower.position).normalized;
+            var leftUpperArm = (leftLower.position - leftUpper.position).normalized;
+            var rightUpperArm = (rightLower.position - rightUpper.position).normalized;
             Assert.That(leftForearm.x, Is.LessThan(0f));
             Assert.That(rightForearm.x, Is.GreaterThan(0f));
             Assert.That(leftForearm.y, Is.LessThan(-.95f));
             Assert.That(rightForearm.y, Is.LessThan(-.95f));
+            Assert.That(leftUpperArm.y, Is.LessThan(-.92f));
+            Assert.That(rightUpperArm.y, Is.LessThan(-.92f));
             Assert.That(leftHand.position.x, Is.LessThan(leftLower.position.x));
             Assert.That(rightHand.position.x, Is.GreaterThan(rightLower.position.x));
+            Assert.That(leftHand.position.z, Is.GreaterThan(leftLower.position.z + .01f));
+            Assert.That(rightHand.position.z, Is.GreaterThan(rightLower.position.z + .01f));
+            Assert.That(leftHand.position.x, Is.LessThan(leftUpper.position.x - .04f));
+            Assert.That(rightHand.position.x, Is.GreaterThan(rightUpper.position.x + .04f));
+        }
+
+        [Test]
+        public void CapturingRelaxedPoseDoesNotRestoreImportedRightArm()
+        {
+            avatarObject = new GameObject("CapturedIdleAvatar");
+            var leftUpper = CreateBone("LeftUpper", "\u5de6\u8155", avatarObject.transform, new Vector3(-.16f, 1.4f, 0f));
+            var leftLower = CreateBone("LeftLower", "\u5de6\u3072\u3058", leftUpper, new Vector3(-.28f, 0f, 0f));
+            CreateBone("LeftHand", "\u5de6\u624b\u9996", leftLower, new Vector3(-.25f, 0f, 0f));
+            var rightUpper = CreateBone("RightUpper", "\u53f3\u8155", avatarObject.transform, new Vector3(.16f, 1.4f, 0f));
+            var rightLower = CreateBone("RightLower", "\u53f3\u3072\u3058", rightUpper, new Vector3(.28f, 0f, 0f));
+            CreateBone("RightHand", "\u53f3\u624b\u9996", rightLower, new Vector3(.25f, 0f, 0f));
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+
+            serviceObject = new GameObject("CapturedIdleService");
+            var idlePose = serviceObject.AddComponent<AvatarNaturalIdlePose>();
+            idlePose.Bind(controller);
+            controller.CaptureCurrentActionPose();
+            typeof(AvatarController)
+                .GetMethod("LateUpdate", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.Invoke(controller, null);
+
+            Assert.That((leftLower.position - leftUpper.position).normalized.y, Is.LessThan(-.92f));
+            Assert.That((rightLower.position - rightUpper.position).normalized.y, Is.LessThan(-.92f));
         }
         [Test]
         public void DirectionalIdleCapsLargeBoneAxisCorrection()
@@ -106,6 +139,31 @@ namespace QuestMmdPlayer.Tests
             Assert.That(AvatarTouchInteraction.IsWithinDistance(bounds, new Vector3(1.09f, 0f, 0f), .1f), Is.True);
             Assert.That(AvatarTouchInteraction.IsWithinDistance(bounds, new Vector3(1.2f, 0f, 0f), .1f), Is.False);
             Assert.That(AvatarTouchInteraction.IsWithinDistance(bounds, Vector3.zero, 0f), Is.True);
+        }
+
+        [Test]
+        public void SelfCollisionDistanceUsesPmxSphereBoxAndCapsuleVolumes()
+        {
+            var volumeObject = new GameObject("PMX body volume");
+            try
+            {
+                var body = volumeObject.AddComponent<MMDRigidBody>();
+                body.shape = PMXRigidBody.Shape.Sphere;
+                body.size = new Unity.Mathematics.float3(.2f, 0f, 0f);
+                Assert.That(AvatarNaturalIdlePose.SignedDistanceToRigidBody(body, new Vector3(.1f, 0f, 0f)), Is.EqualTo(-.1f).Within(.001f));
+
+                body.shape = PMXRigidBody.Shape.Box;
+                body.size = new Unity.Mathematics.float3(.2f, .3f, .1f);
+                Assert.That(AvatarNaturalIdlePose.SignedDistanceToRigidBody(body, new Vector3(.25f, 0f, 0f)), Is.EqualTo(.05f).Within(.001f));
+
+                body.shape = PMXRigidBody.Shape.Capsule;
+                body.size = new Unity.Mathematics.float3(.1f, .4f, 0f);
+                Assert.That(AvatarNaturalIdlePose.SignedDistanceToRigidBody(body, new Vector3(0f, .3f, 0f)), Is.EqualTo(0f).Within(.001f));
+            }
+            finally
+            {
+                Object.DestroyImmediate(volumeObject);
+            }
         }
 
         [Test]

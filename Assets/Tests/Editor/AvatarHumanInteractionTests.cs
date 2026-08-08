@@ -65,6 +65,53 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PreviewSimulationDoesNotPretendToBePhysicalContact()
+        {
+            avatarObject = new GameObject("PreviewAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+
+            serviceObject = new GameObject("PreviewInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            var physicalChanges = 0;
+            interaction.PhysicalInteractionChanged += _ => physicalChanges++;
+
+            interaction.SimulateInteraction(HumanInteractionKind.HeadPat);
+
+            Assert.AreEqual(HumanInteractionKind.HeadPat, interaction.CurrentInteraction);
+            Assert.AreEqual(0, physicalChanges);
+        }
+
+        [Test]
+        public void TrackedColliderContactRaisesPhysicalSemanticEvent()
+        {
+            avatarObject = new GameObject("PhysicalAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("Head", "\u982D");
+
+            serviceObject = new GameObject("PhysicalInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            var physical = HumanInteractionKind.None;
+            interaction.PhysicalInteractionChanged += next => physical = next;
+
+            interaction.ReportTrackedHandContact(AvatarContactRegion.Head, false, Vector3.zero);
+            typeof(AvatarHumanInteraction)
+                .GetField("stateTime", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(interaction, 1f);
+            typeof(AvatarHumanInteraction)
+                .GetMethod("Update", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.Invoke(interaction, null);
+
+            Assert.AreEqual(HumanInteractionKind.HeadPat, interaction.CurrentInteraction);
+            Assert.AreEqual(HumanInteractionKind.HeadPat, physical);
+        }
+
+        [Test]
         public void BodyContactDoesNotBecomeHandshakeWithoutHandGrip()
         {
             Assert.AreEqual(

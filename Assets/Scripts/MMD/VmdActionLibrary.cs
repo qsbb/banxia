@@ -393,15 +393,18 @@ namespace QuestMmdPlayer
     public sealed class VmdActionLibrary : MonoBehaviour
     {
         [SerializeField] private VmdActionLimits limits = new VmdActionLimits();
-        [SerializeField, Range(1f, 12f)] private float frameBudgetMilliseconds = 6f;
+        [SerializeField, Range(1f, 16f)] private float frameBudgetMilliseconds = 10f;
         [SerializeField, Range(.25f, 2f)] private float endPoseHoldSeconds = 1f;
         [SerializeField, Range(.35f, 1.2f)] private float exitBlendSeconds = .65f;
         [SerializeField, Range(.05f, 1.2f)] private float physicsWarmUpDuration = .2f;
+        [SerializeField, Range(30f, 900f)] private float cachedActionRetentionSeconds = 180f;
+        [SerializeField, Range(1, 8)] private int maxPreparedActionCount = 3;
 
         private sealed class ActionSource
         {
             internal string motionPath;
             internal string facialPath;
+            internal string cacheKey;
         }
 
         private sealed class PreparedAction
@@ -409,6 +412,8 @@ namespace QuestMmdPlayer
             internal VmdActionInfo info;
             internal BoneBinding[] bones;
             internal MorphBinding[] morphs;
+            internal string sourceCacheKey;
+            internal float lastUsedAt;
         }
 
         private readonly Dictionary<string, ActionSource> actionPaths =
@@ -434,6 +439,7 @@ namespace QuestMmdPlayer
         private float endPoseHoldClock;
         private bool blendOutActive;
         private float blendOutClock;
+        private float nextCachePruneAt;
 
         public event Action ActionsChanged;
         public event Action PlaybackChanged;
@@ -449,6 +455,7 @@ namespace QuestMmdPlayer
         public bool IsHoldingEndPose => endPoseHoldActive;
         public bool IsBlendingOut => blendOutActive;
         public int PreparedActionCount => preparedActions.Count;
+        public bool IsPrepared(string actionId) => !string.IsNullOrEmpty(actionId) && preparedActions.ContainsKey(actionId);
 
         private sealed class BoneBinding
         {
@@ -499,7 +506,11 @@ namespace QuestMmdPlayer
                         {
                             var info = VmdActionFilePolicy.Inspect(file, actionId, limits);
                             discovered.Add(info);
-                            discoveredPaths.Add(info.Id, new ActionSource { motionPath = expectedPath });
+                            discoveredPaths.Add(info.Id, new ActionSource
+                            {
+                                motionPath = expectedPath,
+                                cacheKey = BuildSourceCacheKey(expectedPath, string.Empty)
+                            });
                         }
                         catch (Exception exception) when (
                             exception is IOException ||
@@ -545,7 +556,12 @@ namespace QuestMmdPlayer
                                     true);
                             }
                             discovered.Add(info);
-                            discoveredPaths.Add(info.Id, new ActionSource { motionPath = motionPath, facialPath = facialPath });
+                            discoveredPaths.Add(info.Id, new ActionSource
+                            {
+                                motionPath = motionPath,
+                                facialPath = facialPath,
+                                cacheKey = BuildSourceCacheKey(motionPath, facialPath)
+                            });
                         }
                         catch (Exception exception) when (
                             exception is IOException ||
@@ -567,7 +583,15 @@ namespace QuestMmdPlayer
                 }
 
                 actionPaths.Clear();
-                preparedActions.Clear();
+                var stalePrepared = preparedActions
+                    .Where(pair => !discoveredPaths.TryGetValue(pair.Key, out var source) ||
+                        !string.Equals(pair.Value.sourceCacheKey, source.cacheKey, StringComparison.Ordinal))
+                    .Select(pair => pair.Key)
+                    .ToArray();
+                foreach (var actionId in stalePrepared)
+                {
+                    preparedActions.Remove(actionId);
+                }
                 foreach (var pair in discoveredPaths)
                 {
                     actionPaths.Add(pair.Key, pair.Value);
@@ -639,8 +663,10 @@ namespace QuestMmdPlayer
                 VmdActionInfo info;
                 BoneBinding[] nextBones;
                 MorphBinding[] nextMorphs;
-                if (preparedActions.TryGetValue(actionId, out var prepared))
+                if (preparedActions.TryGetValue(actionId, out var prepared) &&
+                    string.Equals(prepared.sourceCacheKey, source.cacheKey, StringComparison.Ordinal))
                 {
+                    prepared.lastUsedAt = Time.unscaledTime;
                     info = prepared.info;
                     nextBones = prepared.bones;
                     nextMorphs = prepared.morphs;
@@ -648,6 +674,7 @@ namespace QuestMmdPlayer
                 }
                 else
                 {
+                    preparedActions.Remove(actionId);
                     info = VmdActionFilePolicy.Inspect(source.motionPath, actionId, limits);
                     if (!string.IsNullOrEmpty(source.facialPath))
                     {
@@ -715,8 +742,11 @@ namespace QuestMmdPlayer
                     {
                         info = info,
                         bones = nextBones,
-                        morphs = nextMorphs
+                        morphs = nextMorphs,
+                        sourceCacheKey = source.cacheKey,
+                        lastUsedAt = Time.unscaledTime
                     };
+                    PrunePreparedActions(actionId);
                 }
 
                 if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
@@ -760,6 +790,42 @@ namespace QuestMmdPlayer
                 IsLoading = false;
                 PlaybackChanged?.Invoke();
             }
+        }
+
+        public async Task<bool> PlayRecommendedDanceAsync()
+        {
+            var candidate = actions
+                .Where(info => info != null && IsDanceLikeName(info.Id))
+                .OrderByDescending(info => DanceNameScore(info.Id))
+                .ThenBy(info => info.Id, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            return candidate != null && await PlayAsync(candidate.Id);
+        }
+
+        public static bool IsDanceLikeName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+            var normalized = value.Trim().ToLowerInvariant();
+            return normalized.Contains("dance") || normalized.Contains("舞") ||
+                normalized.Contains("踊") || normalized.Contains("跳");
+        }
+
+        private static int DanceNameScore(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return 0;
+            }
+            var normalized = value.Trim().ToLowerInvariant();
+            var score = 0;
+            if (normalized.Contains("dance")) score += 4;
+            if (normalized.Contains("舞")) score += 3;
+            if (normalized.Contains("踊")) score += 2;
+            if (normalized.Contains("跳")) score += 1;
+            return score;
         }
 
         public async Task<bool> DeleteActionAsync(string actionId)
@@ -855,6 +921,58 @@ namespace QuestMmdPlayer
             {
                 BeginEndPoseHold();
             }
+        }
+
+        private void Update()
+        {
+            if (Time.unscaledTime < nextCachePruneAt)
+            {
+                return;
+            }
+            nextCachePruneAt = Time.unscaledTime + 5f;
+            PrunePreparedActions(CurrentActionId);
+        }
+
+        private void PrunePreparedActions(string protectedActionId)
+        {
+            var now = Time.unscaledTime;
+            var expired = preparedActions
+                .Where(pair => !string.Equals(pair.Key, protectedActionId, StringComparison.OrdinalIgnoreCase) &&
+                    IsPreparedActionExpired(pair.Value.lastUsedAt, now, cachedActionRetentionSeconds))
+                .Select(pair => pair.Key)
+                .ToArray();
+            foreach (var actionId in expired)
+            {
+                preparedActions.Remove(actionId);
+            }
+
+            var maximum = Mathf.Clamp(maxPreparedActionCount, 1, 8);
+            while (preparedActions.Count > maximum)
+            {
+                var oldest = preparedActions
+                    .Where(pair => !string.Equals(pair.Key, protectedActionId, StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(pair => pair.Value.lastUsedAt)
+                    .Select(pair => pair.Key)
+                    .FirstOrDefault();
+                if (string.IsNullOrEmpty(oldest))
+                {
+                    break;
+                }
+                preparedActions.Remove(oldest);
+            }
+        }
+
+        public static bool IsPreparedActionExpired(float lastUsedAt, float now, float retentionSeconds)
+        {
+            return now >= lastUsedAt && now - lastUsedAt >= Mathf.Max(0f, retentionSeconds);
+        }
+
+        private static string BuildSourceCacheKey(string motionPath, string facialPath)
+        {
+            var motion = new FileInfo(motionPath ?? string.Empty);
+            var facial = string.IsNullOrEmpty(facialPath) ? null : new FileInfo(facialPath);
+            return motion.FullName + "|" + motion.Length + "|" + motion.LastWriteTimeUtc.Ticks + "|" +
+                (facial == null ? string.Empty : facial.FullName + "|" + facial.Length + "|" + facial.LastWriteTimeUtc.Ticks);
         }
 
         private void BeginEndPoseHold()

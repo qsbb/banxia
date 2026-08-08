@@ -47,6 +47,7 @@ namespace QuestMmdPlayer
         private const float BowDuration = 2.2f;
         private const float NodDuration = 2.1f;
         private const float SwayDuration = 3.4f;
+        private const float DanceDuration = 6.4f;
 
         public event Action<string> ActionChanged;
 
@@ -123,6 +124,14 @@ namespace QuestMmdPlayer
                     PlayAction("idle");
                 }
             }
+            else if (currentAction == "dance")
+            {
+                ApplyDance();
+                if (actionClock >= DanceDuration)
+                {
+                    PlayAction("idle");
+                }
+            }
             else if (currentAction == "idle")
             {
                 // Idle is the captured natural pose. Applying it before the
@@ -134,7 +143,20 @@ namespace QuestMmdPlayer
 
         public void CaptureActionPose()
         {
-            RestoreActionPose();
+            CaptureActionPose(true);
+        }
+
+        public void CaptureCurrentActionPose()
+        {
+            CaptureActionPose(false);
+        }
+
+        private void CaptureActionPose(bool restorePreviousPose)
+        {
+            if (restorePreviousPose)
+            {
+                RestoreActionPose();
+            }
             actionPoseCaptured = false;
             upperBody = head = rightUpperArm = rightLowerArm = rightHand = null;
             if (visualRoot == null)
@@ -269,6 +291,29 @@ namespace QuestMmdPlayer
             var phase = Mathf.Sin(actionClock * 2.05f);
             SetRotation(upperBody, upperBodyBase, Quaternion.Euler(0f, phase * 2.2f, phase * 3.2f), blend);
             SetRotation(head, headBase, Quaternion.Euler(0f, -phase * 1.5f, -phase * 1.8f), blend);
+        }
+
+        private void ApplyDance()
+        {
+            if (!actionPoseCaptured)
+            {
+                CaptureActionPose();
+            }
+
+            var blend = ActionBlend(actionClock, DanceDuration, .65f);
+            var phase = actionClock * 3.1f;
+            var sway = Mathf.Sin(phase);
+            var counter = Mathf.Sin(phase + Mathf.PI * .5f);
+            SetRotation(upperBody, upperBodyBase,
+                Quaternion.Euler(counter * 2.8f, sway * 4.5f, sway * 3.6f), blend);
+            SetRotation(head, headBase,
+                Quaternion.Euler(-counter * 2.2f, -sway * 3.2f, -sway * 2.4f), blend);
+            SetRotation(rightUpperArm, rightUpperArmBase,
+                Quaternion.Euler(-8f + counter * 5f, -10f + sway * 8f, 18f + sway * 12f), blend);
+            SetRotation(rightLowerArm, rightLowerArmBase,
+                Quaternion.Euler(0f, -18f + counter * 12f, -22f + sway * 14f), blend);
+            SetRotation(rightHand, rightHandBase,
+                Quaternion.Euler(0f, sway * 10f, counter * 8f), blend);
         }
 
         private void CaptureTransitionPose()
@@ -458,6 +503,7 @@ namespace QuestMmdPlayer
             actionClock = 0f;
             isPlaying = true;
             ActionChanged?.Invoke(currentAction);
+            Debug.Log("[QuestMmdPlayer] Avatar action started: " + currentAction, this);
         }
 
         public void SetEmotion(string emotion)

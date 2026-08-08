@@ -1,12 +1,21 @@
 #if UNITY_EDITOR
 using NUnit.Framework;
 using UnityEditor;
+using UnityEngine;
 using UnityEngine.Rendering.Universal;
 
 namespace QuestMmdPlayer.Tests
 {
     public sealed class QuestPassthroughConfigurationTests
     {
+        [Test]
+        public void AndroidTaskLabelMatchesProductName()
+        {
+            Assert.That(QuestMmdPlayerBootstrap.AndroidTaskLabel, Is.EqualTo("\u4F34\u590F"));
+            Assert.That(PlayerSettings.productName, Is.EqualTo(QuestMmdPlayerBootstrap.AndroidTaskLabel));
+            Assert.That(Application.identifier, Is.EqualTo("com.lingxi.banxia"));
+        }
+
         [Test]
         public void UrpSettingsPreservePassthroughAlpha()
         {
@@ -21,6 +30,30 @@ namespace QuestMmdPlayer.Tests
 
             var rendererSettings = new SerializedObject(renderer);
             Assert.That(rendererSettings.FindProperty("m_IntermediateTextureMode").intValue, Is.Zero);
+        }
+
+        [TestCase(true, true, true, false, PassthroughLifecycleAction.Suspend)]
+        [TestCase(true, false, false, false, PassthroughLifecycleAction.Suspend)]
+        [TestCase(true, true, false, false, PassthroughLifecycleAction.Suspend)]
+        [TestCase(true, false, true, true, PassthroughLifecycleAction.Restore)]
+        [TestCase(true, true, true, true, PassthroughLifecycleAction.None)]
+        [TestCase(true, false, false, true, PassthroughLifecycleAction.None)]
+        [TestCase(false, true, true, false, PassthroughLifecycleAction.None)]
+        [TestCase(false, false, true, true, PassthroughLifecycleAction.None)]
+        public void LifecycleDecisionPreservesUserIntentAndIsIdempotent(
+            bool requestedEnabled,
+            bool applicationPaused,
+            bool applicationFocused,
+            bool suspendedForLifecycle,
+            PassthroughLifecycleAction expected)
+        {
+            var actual = PassthroughFacade.DecideLifecycleAction(
+                requestedEnabled,
+                applicationPaused,
+                applicationFocused,
+                suspendedForLifecycle);
+
+            Assert.That(actual, Is.EqualTo(expected));
         }
     }
 }

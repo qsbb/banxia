@@ -48,7 +48,8 @@ namespace QuestMmdPlayer
                 return true;
             }
 
-            if (normalized != "wave" && normalized != "bow" && normalized != "idle")
+            if (normalized != "wave" && normalized != "bow" && normalized != "dance" &&
+                normalized != "nod" && normalized != "sway" && normalized != "idle")
             {
                 return false;
             }

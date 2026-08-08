@@ -8,7 +8,7 @@ namespace QuestMmdPlayer
     [DisallowMultipleComponent]
     public sealed class RuntimeDebugLog : MonoBehaviour
     {
-        [SerializeField, Range(12, 96)] private int capacity = 48;
+        [SerializeField, Range(24, 160)] private int capacity = 96;
 
         private readonly Queue<string> entries = new Queue<string>();
         private static readonly string[] AllowedPrefixes =
@@ -20,6 +20,10 @@ namespace QuestMmdPlayer
             "[BackendPairing]",
             "[HumanInteraction]",
             "[TouchInteraction]",
+            "[AvatarTouch]",
+            "[HandTracking]",
+            "[IdlePose]",
+            "[PcmStream]",
             "[AvatarPlacement]",
             "[VmdActionLibrary]",
             "[FileImport]",
@@ -50,6 +54,12 @@ namespace QuestMmdPlayer
         public void ToggleDisplay()
         {
             SetDisplayEnabled(!DisplayEnabled);
+        }
+
+        public void Clear()
+        {
+            entries.Clear();
+            Record("RuntimeDebug", "诊断记录已清空");
         }
 
         public void Record(string category, string message)

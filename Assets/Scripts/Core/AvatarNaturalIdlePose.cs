@@ -18,16 +18,16 @@ namespace QuestMmdPlayer
     /// still leaving the hands and head available for interaction reactions.
     /// </summary>
     [DisallowMultipleComponent]
-    [DefaultExecutionOrder(10300)]
+    [DefaultExecutionOrder(10900)]
     public sealed class AvatarNaturalIdlePose : MonoBehaviour
     {
-        [SerializeField, Range(0f, 55f)] private float armDropDegrees = 32f;
-        [SerializeField, Range(0f, 25f)] private float elbowBendDegrees = 10f;
-        [SerializeField, Range(0f, 15f)] private float handRelaxDegrees = 5f;
-        [SerializeField, Range(20f, 90f)] private float maxArmCorrectionDegrees = 55f;
-        [SerializeField] private AvatarIdlePreset preset = AvatarIdlePreset.Formal;
+        [SerializeField, Range(0f, 110f)] private float armDropDegrees = 78f;
+        [SerializeField, Range(0f, 25f)] private float elbowBendDegrees = 8f;
+        [SerializeField, Range(0f, 15f)] private float handRelaxDegrees;
+        [SerializeField, Range(20f, 130f)] private float maxArmCorrectionDegrees = 105f;
+        [SerializeField] private AvatarIdlePreset preset = AvatarIdlePreset.Relaxed;
         [SerializeField, Range(1f, 20f)] private float poseBlendSpeed = 8f;
-        private const string PresetPreferenceKey = "banxia.avatar.idle_preset_v2";
+        private const string PresetPreferenceKey = "banxia.avatar.idle_preset_v3";
 
         private AvatarController avatar;
         private Transform leftUpper;
@@ -48,6 +48,8 @@ namespace QuestMmdPlayer
         private Quaternion rightLowerRelaxed;
         private bool hasLeftDirectionalPose;
         private bool hasRightDirectionalPose;
+        private MMDRigidBody[] bodyCollisionVolumes = Array.Empty<MMDRigidBody>();
+        private const float SelfCollisionMargin = .012f;
 
 
         public AvatarController Avatar => avatar;
@@ -58,7 +60,7 @@ namespace QuestMmdPlayer
         private void Awake()
         {
             preset = (AvatarIdlePreset)Mathf.Clamp(
-                PlayerPrefs.GetInt(PresetPreferenceKey, (int)AvatarIdlePreset.Formal),
+                PlayerPrefs.GetInt(PresetPreferenceKey, (int)AvatarIdlePreset.Relaxed),
                 (int)AvatarIdlePreset.Relaxed,
                 (int)AvatarIdlePreset.Formal);
         }
@@ -115,9 +117,10 @@ namespace QuestMmdPlayer
             rightHand = Find(all, "righthand", "hand_r", "右手首");
 
             CaptureBases();
+            bodyCollisionVolumes = FindBodyCollisionVolumes(avatar.GetComponentsInChildren<MMDRigidBody>(true));
             BuildDirectionalRelaxedPose();
             ApplyRelaxedArms(true);
-            Debug.Log($"[IdlePose] Bound natural stance; arms={(leftUpper != null ? 1 : 0) + (rightUpper != null ? 1 : 0)}/2, hands={(leftHand != null ? 1 : 0) + (rightHand != null ? 1 : 0)}/2.", this);
+            Debug.Log($"[IdlePose] Bound natural stance; arms={(leftUpper != null ? 1 : 0) + (rightUpper != null ? 1 : 0)}/2, hands={(leftHand != null ? 1 : 0) + (rightHand != null ? 1 : 0)}/2, bodyVolumes={bodyCollisionVolumes.Length}.", this);
         }
 
         private void LateUpdate()
@@ -183,7 +186,7 @@ namespace QuestMmdPlayer
             hasRightDirectionalPose = rightUpper != null && rightLower != null && rightHand != null;
             if (hasLeftDirectionalPose)
             {
-                BuildArmPose(
+                BuildArmPoseWithClearance(
                     leftUpper,
                     leftLower,
                     leftHand,
@@ -191,12 +194,13 @@ namespace QuestMmdPlayer
                     avatar.transform.TransformDirection(GetLeftLowerDirection()),
                     leftUpperBase,
                     leftLowerBase,
+                    -1f,
                     out leftUpperRelaxed,
                     out leftLowerRelaxed);
             }
             if (hasRightDirectionalPose)
             {
-                BuildArmPose(
+                BuildArmPoseWithClearance(
                     rightUpper,
                     rightLower,
                     rightHand,
@@ -204,8 +208,152 @@ namespace QuestMmdPlayer
                     avatar.transform.TransformDirection(GetRightLowerDirection()),
                     rightUpperBase,
                     rightLowerBase,
+                    1f,
                     out rightUpperRelaxed,
                     out rightLowerRelaxed);
+            }
+        }
+
+        private void BuildArmPoseWithClearance(
+            Transform upper,
+            Transform lower,
+            Transform hand,
+            Vector3 desiredUpperDirection,
+            Vector3 desiredLowerDirection,
+            Quaternion upperBase,
+            Quaternion lowerBase,
+            float side,
+            out Quaternion upperTarget,
+            out Quaternion lowerTarget)
+        {
+            var outward = avatar.transform.right * Mathf.Sign(side);
+            var forward = avatar.transform.forward;
+            var handRadius = EstimateHandRadius(hand);
+            upperTarget = upperBase;
+            lowerTarget = lowerBase;
+            for (var attempt = 0; attempt < 7; attempt++)
+            {
+                var upperDirection = (desiredUpperDirection + outward * (attempt * .025f) + forward * (attempt * .012f)).normalized;
+                var lowerDirection = (desiredLowerDirection + outward * (attempt * .045f) + forward * (attempt * .025f)).normalized;
+                BuildArmPose(
+                    upper,
+                    lower,
+                    hand,
+                    upperDirection,
+                    lowerDirection,
+                    upperBase,
+                    lowerBase,
+                    out upperTarget,
+                    out lowerTarget);
+                if (bodyCollisionVolumes.Length == 0 ||
+                    MeasureHandClearance(upper, lower, hand, upperTarget, lowerTarget) >= handRadius + SelfCollisionMargin)
+                {
+                    break;
+                }
+            }
+        }
+
+        private float MeasureHandClearance(
+            Transform upper,
+            Transform lower,
+            Transform hand,
+            Quaternion upperTarget,
+            Quaternion lowerTarget)
+        {
+            var originalUpper = upper.localRotation;
+            var originalLower = lower.localRotation;
+            try
+            {
+                upper.localRotation = upperTarget;
+                lower.localRotation = lowerTarget;
+                var minimum = float.PositiveInfinity;
+                for (var index = 0; index < bodyCollisionVolumes.Length; index++)
+                {
+                    minimum = Mathf.Min(minimum, SignedDistanceToRigidBody(bodyCollisionVolumes[index], hand.position));
+                }
+                return minimum;
+            }
+            finally
+            {
+                upper.localRotation = originalUpper;
+                lower.localRotation = originalLower;
+            }
+        }
+
+        private float EstimateHandRadius(Transform hand)
+        {
+            var radius = .035f;
+            var bodies = avatar.GetComponentsInChildren<MMDRigidBody>(true);
+            for (var index = 0; index < bodies.Length; index++)
+            {
+                var body = bodies[index];
+                if (body == null || body.relatedBone == null || body.relatedBone.transform != hand)
+                {
+                    continue;
+                }
+                radius = Mathf.Max(radius, ShapeRadius(body));
+            }
+            return Mathf.Clamp(radius, .025f, .08f);
+        }
+
+        private static MMDRigidBody[] FindBodyCollisionVolumes(MMDRigidBody[] bodies)
+        {
+            if (bodies == null || bodies.Length == 0)
+            {
+                return Array.Empty<MMDRigidBody>();
+            }
+            return Array.FindAll(bodies, body =>
+            {
+                if (body == null || body.relatedBone == null)
+                {
+                    return false;
+                }
+                var name = Normalize(body.relatedBone.boneName);
+                return name.Contains("leg") || name.Contains("knee") || name.Contains("thigh") ||
+                       name.Contains("hip") || name.Contains("pelvis") || name.Contains("lowerbody") ||
+                       name.Contains("足") || name.Contains("ひざ") || name.Contains("膝") ||
+                       name.Contains("腰") || name.Contains("下半身");
+            });
+        }
+
+        public static float SignedDistanceToRigidBody(MMDRigidBody body, Vector3 worldPoint)
+        {
+            if (body == null)
+            {
+                return float.PositiveInfinity;
+            }
+            var local = body.transform.InverseTransformPoint(worldPoint);
+            var size = new Vector3(body.size.x, body.size.y, body.size.z);
+            float localDistance;
+            switch (body.shape)
+            {
+                case PMXRigidBody.Shape.Sphere:
+                    localDistance = local.magnitude - Mathf.Max(.0001f, size.x);
+                    break;
+                case PMXRigidBody.Shape.Box:
+                    var delta = new Vector3(Mathf.Abs(local.x), Mathf.Abs(local.y), Mathf.Abs(local.z)) - size;
+                    var outside = new Vector3(Mathf.Max(0f, delta.x), Mathf.Max(0f, delta.y), Mathf.Max(0f, delta.z)).magnitude;
+                    var inside = Mathf.Min(Mathf.Max(delta.x, Mathf.Max(delta.y, delta.z)), 0f);
+                    localDistance = outside + inside;
+                    break;
+                default:
+                    var halfCylinder = Mathf.Max(0f, size.y) * .5f;
+                    var nearestY = Mathf.Clamp(local.y, -halfCylinder, halfCylinder);
+                    localDistance = Vector3.Distance(local, new Vector3(0f, nearestY, 0f)) - Mathf.Max(.0001f, size.x);
+                    break;
+            }
+            var scale = body.transform.lossyScale;
+            return localDistance * Mathf.Max(.0001f, Mathf.Min(Mathf.Abs(scale.x), Mathf.Min(Mathf.Abs(scale.y), Mathf.Abs(scale.z))));
+        }
+
+        private static float ShapeRadius(MMDRigidBody body)
+        {
+            var size = new Vector3(body.size.x, body.size.y, body.size.z);
+            switch (body.shape)
+            {
+                case PMXRigidBody.Shape.Sphere: return Mathf.Abs(size.x);
+                case PMXRigidBody.Shape.Box: return Mathf.Max(.01f, Mathf.Min(Mathf.Abs(size.x), Mathf.Abs(size.z)));
+                default: return Mathf.Abs(size.x);
             }
         }
 
@@ -254,9 +402,9 @@ namespace QuestMmdPlayer
         {
             switch (preset)
             {
-                case AvatarIdlePreset.Casual: return new Vector3(-.22f, -.97f, .03f);
-                case AvatarIdlePreset.Formal: return new Vector3(-.09f, -.995f, .01f);
-                default: return new Vector3(-.16f, -.98f, .04f);
+                case AvatarIdlePreset.Casual: return new Vector3(-.27f, -.955f, .12f);
+                case AvatarIdlePreset.Formal: return new Vector3(-.14f, -.988f, .06f);
+                default: return new Vector3(-.20f, -.975f, .09f);
             }
         }
 
@@ -264,18 +412,18 @@ namespace QuestMmdPlayer
         {
             switch (preset)
             {
-                case AvatarIdlePreset.Casual: return new Vector3(-.06f, -.995f, .05f);
-                case AvatarIdlePreset.Formal: return new Vector3(-.02f, -.999f, .02f);
-                default: return new Vector3(-.04f, -.996f, .04f);
+                case AvatarIdlePreset.Casual: return new Vector3(-.22f, -.965f, .14f);
+                case AvatarIdlePreset.Formal: return new Vector3(-.12f, -.990f, .08f);
+                default: return new Vector3(-.18f, -.976f, .12f);
             }
         }
         private Vector3 GetRightUpperDirection()
         {
             switch (preset)
             {
-                case AvatarIdlePreset.Casual: return new Vector3(.22f, -.97f, .03f);
-                case AvatarIdlePreset.Formal: return new Vector3(.09f, -.995f, .01f);
-                default: return new Vector3(.16f, -.98f, .04f);
+                case AvatarIdlePreset.Casual: return new Vector3(.27f, -.955f, .12f);
+                case AvatarIdlePreset.Formal: return new Vector3(.14f, -.988f, .06f);
+                default: return new Vector3(.20f, -.975f, .09f);
             }
         }
 
@@ -283,9 +431,9 @@ namespace QuestMmdPlayer
         {
             switch (preset)
             {
-                case AvatarIdlePreset.Casual: return new Vector3(.06f, -.995f, .05f);
-                case AvatarIdlePreset.Formal: return new Vector3(.02f, -.999f, .02f);
-                default: return new Vector3(.04f, -.996f, .04f);
+                case AvatarIdlePreset.Casual: return new Vector3(.22f, -.965f, .14f);
+                case AvatarIdlePreset.Formal: return new Vector3(.12f, -.990f, .08f);
+                default: return new Vector3(.18f, -.976f, .12f);
             }
         }
         private static Quaternion CalculateAlignedLocalRotation(
@@ -322,6 +470,7 @@ namespace QuestMmdPlayer
         {
             leftUpper = leftLower = leftHand = rightUpper = rightLower = rightHand = null;
             hasLeftDirectionalPose = hasRightDirectionalPose = false;
+            bodyCollisionVolumes = Array.Empty<MMDRigidBody>();
 
         }
 

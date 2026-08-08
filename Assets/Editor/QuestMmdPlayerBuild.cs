@@ -45,7 +45,7 @@ namespace QuestMmdPlayer.Editor
             ConfigureRuntimeShaders();
             EditorUserBuildSettings.buildAppBundle = false;
             PlayerSettings.companyName = "Quest MMD Player";
-            PlayerSettings.productName = "伴夏";
+            PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel;
             PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, AndroidApplicationIdentifier);
             PlayerSettings.colorSpace = ColorSpace.Linear;
             PlayerSettings.insecureHttpOption = InsecureHttpOption.AlwaysAllowed;

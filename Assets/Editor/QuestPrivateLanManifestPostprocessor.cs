@@ -31,6 +31,8 @@ namespace QuestMmdPlayer.Editor
             }
 
             application.SetAttribute("usesCleartextTraffic", AndroidNamespace, "true");
+            EnsureUnityPlayerActivityLabel(application);
+            EnsureAppLabelResource(path);
             EnsurePermission(document, "horizonos.permission.HAND_TRACKING");
             document.Save(manifestPath);
             ConfigureFilePickerModule(path);
@@ -86,6 +88,54 @@ namespace QuestMmdPlayer.Editor
 
             File.WriteAllText(gradlePath, source, new UTF8Encoding(false));
         }
+
+        internal static void EnsureUnityPlayerActivityLabel(XmlElement application)
+        {
+            if (application == null)
+            {
+                throw new System.ArgumentNullException(nameof(application));
+            }
+
+            // Keep the task/application label independent of Unity's generated
+            // app_name resource, which can be absent on Quest merge variants.
+            const string applicationLabel = "伴夏";
+
+            var activities = application.SelectNodes("activity");
+            if (activities == null)
+            {
+                throw new InvalidDataException("Generated AndroidManifest.xml has no activity elements.");
+            }
+
+            foreach (XmlNode node in activities)
+            {
+                if (!(node is XmlElement activity) ||
+                    activity.GetAttribute("name", AndroidNamespace) !=
+                    "com.unity3d.player.UnityPlayerActivity")
+                {
+                    continue;
+                }
+
+                activity.SetAttribute("label", AndroidNamespace, applicationLabel);
+                return;
+            }
+
+            throw new InvalidDataException(
+                "Generated AndroidManifest.xml has no UnityPlayerActivity element.");
+        }
+
+        private static void EnsureAppLabelResource(string unityLibraryPath)
+        {
+            var valuesDirectory = Path.Combine(unityLibraryPath, "src", "main", "res", "values");
+            Directory.CreateDirectory(valuesDirectory);
+            var resourcePath = Path.Combine(valuesDirectory, "banxia_strings.xml");
+            File.WriteAllText(
+                resourcePath,
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>" + System.Environment.NewLine +
+                "<resources><string name=\"banxia_app_name\">伴夏</string></resources>" +
+                System.Environment.NewLine,
+                new UTF8Encoding(false));
+        }
+
         private static void EnsurePermission(XmlDocument document, string permissionName)
         {
             var manifest = document.DocumentElement;

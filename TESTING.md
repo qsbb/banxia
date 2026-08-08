@@ -43,6 +43,10 @@ APK 位于 Builds/Banxia.apk，包名为 com.lingxi.banxia。只需在设备上�
 
 真手空间精度、追踪丢失、真实 Passthrough 和性能只能在 Quest 3 上确认；当前 APK 已配置 Meta OpenXR Passthrough provider；房间画面、遮挡和光照仍需 Quest 3 真机截图确认。
 
+菜单主界面的“调试”会显示一份脱敏运行快照：手追数量、触碰与骨骼匹配、VAD 电平/阈值、上传队列、首事件/首音频/结束耗时、TTS 缓冲与欠载、彩透相机状态、身高/地面、房间平面计数以及 VMD 保持/回退阶段。快照不包含后端地址、密钥、身份 ID、对话正文或动作文件名。
+
+从 Quest 系统菜单返回应用时，彩透会根据用户离开前的开关状态恢复：原本开启则重启相机 provider，原本关闭则保持关闭。二级菜单和内置键盘切换后必须先松开扳机/捏合，射线只允许命中当前最上层面板。
+
 ## 4. 任意 PMX 导入验收
 
 把一个 PMX 和它引用的贴图放在可读目录，调用：
@@ -79,5 +83,7 @@ Android 构建后必须用 APK/Dex 分析确认 com.lingxi.banxia.filepicker.Ban
 | Mock 可打断对话、PCM 流播放 | 已完成第一切片 | ConversationController、ConversationStateMachine |
 | 音量驱动嘴型和对话注视 | 已完成降级实现 | AvatarConversationPresenter |
 | AstrBot HTTP/SSE、8520 配对、Quest 麦克风/VAD | 已接入，模型已选，待真机闭环 | AstrBotBridge、BackendPairingController、QuestMicrophoneInput |
+| 语音无事件/事件停滞恢复 | 已实现，待真实断网与后端超时验收 | ConversationController、ConversationStateMachine |
+| 脱敏运行诊断快照 | 已实现 | RuntimeDiagnosticsSnapshot、菜单调试区 |
 | 连续手臂 IK 与自然注视 | 已实现，待真机调参 | AvatarPresence、AvatarController、AvatarTouchInteraction |
 | Quest 3 真机显示与性能 | 待测试 | 需要设备 |

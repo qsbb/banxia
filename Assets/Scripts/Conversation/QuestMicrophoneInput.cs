@@ -19,7 +19,7 @@ namespace QuestMmdPlayer
         [SerializeField] private bool enableTrackedVoiceGesture;
         [SerializeField, Range(.2f, 1.2f)] private float trackedVoiceHoldSeconds = .75f;
         [SerializeField] private bool autoStopOnSilence = true;
-        [SerializeField, Range(.003f, .08f)] private float voiceSilenceRms = .008f;
+        [SerializeField, Range(.003f, .08f)] private float voiceSilenceRms = .006f;
         [SerializeField, Range(.4f, 3f)] private float voiceSilenceSeconds = 1.8f;
         [SerializeField, Range(.2f, 1f)] private float minimumVoiceSeconds = .45f;
         [SerializeField, Range(1.5f, 8f)] private float initialVoiceTimeoutSeconds = 4f;
@@ -55,6 +55,8 @@ namespace QuestMmdPlayer
         public int LastTurnPcmBytes { get; private set; }
         public int LastTurnChunkCount { get; private set; }
         public float ActivationThreshold => activityGate == null ? voiceSilenceRms : activityGate.Threshold;
+        public float ActivationProgress => activityGate == null ? 0f : activityGate.ActivationProgress;
+        public bool SpeechDetected => detectedSpeech;
         public float LastTurnCaptureSeconds { get; private set; }
         public string DiagnosticStatus => $"{Status} | level {InputLevel:F3}/{ActivationThreshold:F3} | " +
             $"chunks {LastTurnChunkCount} | pcm {LastTurnPcmBytes} B | capture {LastTurnCaptureSeconds:F2}s";
@@ -127,6 +129,12 @@ namespace QuestMmdPlayer
             }
             if (!IsRecording)
             {
+                if (alwaysListening && IsMonitoring && conversation != null &&
+                    conversation.State == ConversationState.Idle &&
+                    Status.StartsWith("Waiting for reply", System.StringComparison.Ordinal))
+                {
+                    Status = "Listening for speech";
+                }
                 return;
             }
 
@@ -161,7 +169,7 @@ namespace QuestMmdPlayer
             {
                 return false;
             }
-            if (!IsRecording && conversation != null && conversation.State != ConversationState.Idle)
+            if (!IsRecording && conversation != null && !conversation.CanStartVoiceInput)
             {
                 return false;
             }
@@ -199,6 +207,20 @@ namespace QuestMmdPlayer
         public void ToggleAlwaysListening()
         {
             SetAlwaysListening(!alwaysListening);
+        }
+
+        public void RestartMonitoring()
+        {
+            if (IsRecording)
+            {
+                CancelRecording();
+            }
+            StopMicrophoneOnly();
+            nextMonitorAttemptAt = 0f;
+            var started = StartMonitoring();
+            Debug.Log(started
+                ? "[VoiceInput] Microphone monitor restarted."
+                : "[VoiceInput] Microphone monitor restart failed.", this);
         }
 
         public void SetAlwaysListening(bool enabled)
@@ -466,7 +488,6 @@ namespace QuestMmdPlayer
                 var level = CalculateRms(pendingMono, sourceFrames);
                 InputLevel = level;
                 var canActivate = alwaysListening && conversation != null &&
-                    conversation.State == ConversationState.Idle &&
                     conversation.CanStartVoiceInput;
                 if (!canActivate)
                 {
@@ -474,7 +495,7 @@ namespace QuestMmdPlayer
                     preRollMono.Clear();
                     activityGate?.ResetActivation();
                     Status = alwaysListening && conversation != null && conversation.State != ConversationState.Idle
-                        ? "Listening paused during reply"
+                        ? "Listening for speech during reply"
                         : alwaysListening ? "Listening | backend offline" : "Microphone ready";
                     continue;
                 }
@@ -597,7 +618,7 @@ namespace QuestMmdPlayer
         {
             activityGate = new VoiceActivityGate(
                 voiceSilenceRms,
-                Mathf.Max(voiceSilenceRms, Mathf.Min(.024f, voiceSilenceRms * 3f)),
+                Mathf.Max(voiceSilenceRms, Mathf.Min(.018f, voiceSilenceRms * 2.5f)),
                 voiceActivationSeconds);
         }
 

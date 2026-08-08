@@ -161,6 +161,14 @@ namespace QuestMmdPlayer.Tests
                 VmdActionLibrary.IsEndPoseHoldComplete(elapsedSeconds, holdSeconds),
                 Is.EqualTo(expected));
         }
+
+        [Test]
+        public void PreparedActionCacheExpiresOnlyAfterRetentionWindow()
+        {
+            Assert.IsFalse(VmdActionLibrary.IsPreparedActionExpired(10f, 39.9f, 30f));
+            Assert.IsTrue(VmdActionLibrary.IsPreparedActionExpired(10f, 40f, 30f));
+            Assert.IsFalse(VmdActionLibrary.IsPreparedActionExpired(10f, 9f, 30f));
+        }
         private static void WriteVmd(string path, uint[] boneFrames, uint[] morphFrames)
         {
             using var stream = File.Create(path);

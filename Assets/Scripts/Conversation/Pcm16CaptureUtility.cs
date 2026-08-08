@@ -34,7 +34,7 @@ namespace QuestMmdPlayer
 
         public float Threshold => Math.Max(
             minimumThreshold,
-            Math.Min(maximumThreshold, noiseFloor * 1.8f));
+            Math.Min(maximumThreshold, noiseFloor * 1.45f));
 
         public float ActivationProgress => Math.Min(1f, activeSeconds / activationSeconds);
 

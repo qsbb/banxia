@@ -39,6 +39,8 @@ namespace QuestMmdPlayer
         public int DurationMs;
         public short[] Pcm16;
         public int SampleRate;
+        public bool TextSent;
+        public bool AudioSent;
     }
 
     public interface IConversationTransport

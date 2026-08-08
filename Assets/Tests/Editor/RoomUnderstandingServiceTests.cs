@@ -9,6 +9,16 @@ namespace QuestMmdPlayer.Tests
     public sealed class RoomUnderstandingServiceTests
     {
         [Test]
+        public void ExplicitRoomTrackingStopsAfterSnapshotOrDeadline()
+        {
+            Assert.That(RoomUnderstandingService.ShouldStopExplicitTracking(10f, 30f, 12.9f, true), Is.False);
+            Assert.That(RoomUnderstandingService.ShouldStopExplicitTracking(10f, 30f, 13f, true), Is.True);
+            Assert.That(RoomUnderstandingService.ShouldStopExplicitTracking(10f, 30f, 29.9f, false), Is.False);
+            Assert.That(RoomUnderstandingService.ShouldStopExplicitTracking(10f, 30f, 30f, false), Is.True);
+            Assert.That(RoomUnderstandingService.ShouldStopExplicitTracking(10f, 30f, 9f, true), Is.False);
+        }
+
+        [Test]
         public void SummaryContainsOnlySemanticCounts()
         {
             var observations = new[]

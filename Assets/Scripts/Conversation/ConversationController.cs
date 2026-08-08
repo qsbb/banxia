@@ -26,8 +26,17 @@ namespace QuestMmdPlayer
         private float firstTextAt = -1f;
         private float firstAudioAt = -1f;
         private float replyEndedAt = -1f;
+        private float audioDoneAt = -1f;
+        private float responseWaitStartedAt = -1f;
+        private float lastBackendProgressAt = -1f;
+        private bool awaitingBackendResponse;
         private int replyAudioChunkCount;
-        [SerializeField] private bool sendInteractionEvents;
+        private string pendingLocalAction = string.Empty;
+        private bool backendActionReceived;
+        [SerializeField] private bool allowAutomaticMockTransport;
+        [SerializeField] private bool sendInteractionEvents = true;
+        [SerializeField, Range(8f, 90f)] private float firstResponseTimeoutSeconds = 35f;
+        [SerializeField, Range(8f, 90f)] private float responseStallTimeoutSeconds = 30f;
         private const float InteractionUpdateInterval = 5f;
 
         public event Action<ConversationState> StateChanged;
@@ -41,18 +50,45 @@ namespace QuestMmdPlayer
         public string LastErrorCode { get; private set; } = string.Empty;
         public string LastErrorMessage => stateMachine.ErrorMessage;
         public float BufferedAudioSeconds => audioPlayer == null ? 0f : audioPlayer.BufferedSeconds;
-        public bool CanStartVoiceInput => transport != null && transport.IsConnected && stateMachine.State == ConversationState.Idle;
+        // Capture stays armed while a reply is playing. A new VAD activation
+        // is a deliberate barge-in: BeginVoiceInput cancels the current turn,
+        // flushes playback, and starts a fresh generation.
+        public bool CanStartVoiceInput => transport != null && transport.IsConnected &&
+            stateMachine.State != ConversationState.Error &&
+            (stateMachine.State != ConversationState.Listening || awaitingBackendResponse);
         public bool IsRealBackendConnected => transport != null && !(transport is MockConversationTransport) && transport.IsConnected;
         public bool IsUsingMockTransport => transport is MockConversationTransport;
         public string Status => $"{State} | {TransportStatus}";
         public string TurnTimingStatus => BuildTimingStatus(Time.unscaledTime);
+        public bool AwaitingBackendResponse => awaitingBackendResponse;
+        public int TranscriptCharacters => string.IsNullOrEmpty(stateMachine.Transcript) ? 0 : stateMachine.Transcript.Length;
+        public int ReplyTextCharacters => string.IsNullOrEmpty(stateMachine.ReplyText) ? 0 : stateMachine.ReplyText.Length;
+        public string ManualExpression => presenter == null ? "neutral" : presenter.ManualExpression;
 
         private void Awake()
         {
             audioPlayer = GetComponent<Pcm16StreamAudioPlayer>() ?? gameObject.AddComponent<Pcm16StreamAudioPlayer>();
             presenter = GetComponent<AvatarConversationPresenter>() ?? gameObject.AddComponent<AvatarConversationPresenter>();
-            SetTransport(FindTransport() ?? gameObject.AddComponent<MockConversationTransport>());
+            var discovered = FindTransport();
+            if (discovered != null)
+            {
+                SetTransport(discovered);
+            }
+            else if (allowAutomaticMockTransport)
+            {
+                SetTransport(gameObject.AddComponent<MockConversationTransport>());
+                Debug.LogWarning("[Conversation] Explicitly configured automatic Mock transport; AstrBot is bypassed.", this);
+            }
+            else
+            {
+                Debug.LogError("[Conversation] No AstrBot transport found; conversation is unavailable until pairing succeeds.", this);
+            }
             RefreshLocalReactionMode();
+        }
+
+        public void SetManualExpression(string expression)
+        {
+            presenter?.SetManualExpression(expression);
         }
 
         private void OnEnable()
@@ -79,6 +115,7 @@ namespace QuestMmdPlayer
                 audioPlayer.StopAndClear();
             }
             stateMachine.ResetToIdle();
+            awaitingBackendResponse = false;
             if (presenter != null)
             {
                 presenter.SetConversationState(ConversationState.Idle);
@@ -90,6 +127,7 @@ namespace QuestMmdPlayer
             RefreshLocalReactionMode();
             if (stateMachine.TryFinishAudio(audioPlayer == null || audioPlayer.IsDrained))
             {
+                audioDoneAt = Time.unscaledTime;
                 Debug.Log("[Conversation] Voice timing " + BuildTimingStatus(Time.unscaledTime), this);
                 NotifyStateChanged();
             }
@@ -102,6 +140,20 @@ namespace QuestMmdPlayer
             {
                 stateMachine.ResetToIdle();
                 NotifyStateChanged();
+            }
+            if (ShouldTimeoutResponse(
+                awaitingBackendResponse,
+                stateMachine.ReplyEnded,
+                Time.unscaledTime,
+                responseWaitStartedAt,
+                lastBackendProgressAt,
+                firstResponseTimeoutSeconds,
+                responseStallTimeoutSeconds,
+                out var timeoutCode))
+            {
+                FailActiveTurn(timeoutCode, timeoutCode == "response_first_event_timeout"
+                    ? "Backend accepted the turn but sent no response event"
+                    : "Backend response stopped before reply.end");
             }
             if (sendInteractionEvents && lastInteraction != HumanInteractionKind.None &&
                 Time.unscaledTime >= nextInteractionUpdateAt)
@@ -123,7 +175,7 @@ namespace QuestMmdPlayer
             latestInteractionEventId = string.Empty;
             if (boundHumanInteraction != null)
             {
-                boundHumanInteraction.InteractionChanged += HandleInteractionChanged;
+                boundHumanInteraction.PhysicalInteractionChanged += HandleInteractionChanged;
             }
             if (presenter == null)
             {
@@ -145,6 +197,8 @@ namespace QuestMmdPlayer
             audioPlayer?.BeginStream();
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
+            pendingLocalAction = string.Empty;
+            backendActionReceived = false;
             var turnId = stateMachine.Begin(string.Empty);
             ResetTurnTiming();
             NotifyStateChanged();
@@ -180,6 +234,7 @@ namespace QuestMmdPlayer
             if (accepted)
             {
                 inputEndedAt = Time.unscaledTime;
+                BeginResponseWait(inputEndedAt);
             }
             Debug.Log(accepted
                 ? "[Conversation] Voice input end accepted."
@@ -197,6 +252,12 @@ namespace QuestMmdPlayer
 
         public void StartMockConversation(string userText)
         {
+            if (transport == null || !(transport is MockConversationTransport))
+            {
+                SetTransport(gameObject.GetComponent<MockConversationTransport>() ??
+                    gameObject.AddComponent<MockConversationTransport>());
+                Debug.LogWarning("[Conversation] Local demo transport selected explicitly; AstrBot is bypassed for this turn.", this);
+            }
             StartConversation(userText);
         }
 
@@ -213,10 +274,14 @@ namespace QuestMmdPlayer
             audioPlayer?.BeginStream();
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
+            pendingLocalAction = string.Empty;
+            backendActionReceived = false;
+            TryQueueLocalAction(text);
             var turnId = stateMachine.Begin(text);
             ResetTurnTiming();
             NotifyStateChanged();
             transport.StartTurn(turnId, text);
+            BeginResponseWait(Time.unscaledTime);
             Debug.Log("[Conversation] Text turn started.", this);
         }
 
@@ -227,6 +292,8 @@ namespace QuestMmdPlayer
                 return;
             }
 
+            awaitingBackendResponse = false;
+            pendingLocalAction = string.Empty;
             transport?.Interrupt(stateMachine.TurnId);
             audioPlayer?.StopAndClear();
             interruptedUntil = Time.unscaledTime + .3f;
@@ -257,8 +324,14 @@ namespace QuestMmdPlayer
             {
                 Debug.Log("[Conversation] Event received: " + message.Type, this);
             }
+            if (message.Type == ConversationEventType.AvatarIntent)
+            {
+                Debug.Log("[Conversation] Avatar intent received: gesture=" +
+                    (message.Gesture ?? "idle") + " reason=" + (message.ReasonCode ?? ""), this);
+            }
             if (message.Type == ConversationEventType.AvatarIntent && string.IsNullOrEmpty(message.TurnId))
             {
+                backendActionReceived |= IsExecutableAvatarAction(message.Gesture);
                 presenter?.ApplyIntent(
                     message.Emotion, message.Gesture, message.LookAt, message.Intensity, message.DurationMs);
                 return;
@@ -295,6 +368,14 @@ namespace QuestMmdPlayer
             {
                 return;
             }
+            if (message.Type == ConversationEventType.AsrFinal)
+            {
+                TryQueueLocalAction(message.Text);
+            }
+            if (message.Type != ConversationEventType.AvatarIntent)
+            {
+                lastBackendProgressAt = Time.unscaledTime;
+            }
             RecordEventTiming(message);
 
             switch (message.Type)
@@ -303,9 +384,22 @@ namespace QuestMmdPlayer
                     audioPlayer?.Enqueue(message.Pcm16, message.SampleRate);
                     break;
                 case ConversationEventType.ReplyEnd:
+                    if (string.IsNullOrWhiteSpace(stateMachine.ReplyText) && replyAudioChunkCount == 0)
+                    {
+                        Debug.LogWarning(
+                            $"[Conversation] Empty reply.end received; server text_sent={message.TextSent}, audio_sent={message.AudioSent}.",
+                            this);
+                        FailActiveTurn(
+                            "empty_backend_reply",
+                            "Backend completed the turn without text or audio");
+                        return;
+                    }
                     audioPlayer?.MarkStreamCompleted();
+                    awaitingBackendResponse = false;
+                    TryRunLocalActionFallback();
                     break;
                 case ConversationEventType.AvatarIntent:
+                    backendActionReceived |= IsExecutableAvatarAction(message.Gesture);
                     presenter?.ApplyIntent(
                         message.Emotion, message.Gesture, message.LookAt, message.Intensity, message.DurationMs);
                     break;
@@ -314,6 +408,7 @@ namespace QuestMmdPlayer
                     LastErrorCode = string.IsNullOrWhiteSpace(message.ErrorCode)
                         ? "conversation_error"
                         : message.ErrorCode;
+                    awaitingBackendResponse = false;
                     errorUntil = Time.unscaledTime + 1.25f;
                     Debug.LogWarning("[Conversation] Voice/transport error code=" + LastErrorCode +
                         "; bridge=" + TransportStatus + "; timing=" + BuildTimingStatus(Time.unscaledTime), this);
@@ -396,7 +491,7 @@ namespace QuestMmdPlayer
         {
             if (boundHumanInteraction != null)
             {
-                boundHumanInteraction.InteractionChanged -= HandleInteractionChanged;
+                boundHumanInteraction.PhysicalInteractionChanged -= HandleInteractionChanged;
             }
         }
 
@@ -406,8 +501,8 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            boundHumanInteraction.InteractionChanged -= HandleInteractionChanged;
-            boundHumanInteraction.InteractionChanged += HandleInteractionChanged;
+            boundHumanInteraction.PhysicalInteractionChanged -= HandleInteractionChanged;
+            boundHumanInteraction.PhysicalInteractionChanged += HandleInteractionChanged;
         }
 
         private static string InteractionName(HumanInteractionKind kind)
@@ -423,6 +518,11 @@ namespace QuestMmdPlayer
 
         private void CancelCurrentTurn(bool showInterrupted)
         {
+            awaitingBackendResponse = false;
+            if (showInterrupted)
+            {
+                pendingLocalAction = string.Empty;
+            }
             if (stateMachine.State == ConversationState.Idle)
             {
                 audioPlayer?.StopAndClear();
@@ -496,7 +596,104 @@ namespace QuestMmdPlayer
             firstTextAt = -1f;
             firstAudioAt = -1f;
             replyEndedAt = -1f;
+            audioDoneAt = -1f;
+            responseWaitStartedAt = -1f;
+            lastBackendProgressAt = -1f;
+            awaitingBackendResponse = false;
             replyAudioChunkCount = 0;
+        }
+
+        private void TryQueueLocalAction(string text)
+        {
+            if (string.IsNullOrEmpty(pendingLocalAction) &&
+                ConversationActionIntent.TryDetect(text, out var detectedAction))
+            {
+                pendingLocalAction = detectedAction;
+                Debug.Log("[Conversation] Explicit action request detected: " + detectedAction, this);
+            }
+        }
+
+        private void TryRunLocalActionFallback()
+        {
+            if (string.IsNullOrEmpty(pendingLocalAction) || backendActionReceived)
+            {
+                pendingLocalAction = string.Empty;
+                return;
+            }
+
+            var action = pendingLocalAction;
+            pendingLocalAction = string.Empty;
+            presenter?.PlayLocalAction(action);
+            Debug.Log("[Conversation] Local action fallback executed: " + action +
+                " (AstrBot reply had no executable avatar.intent).", this);
+        }
+
+        private static bool IsExecutableAvatarAction(string gesture)
+        {
+            return !string.IsNullOrEmpty(gesture) &&
+                !string.Equals(gesture, "idle", StringComparison.Ordinal) &&
+                !string.Equals(gesture, "talk", StringComparison.Ordinal);
+        }
+
+        private void BeginResponseWait(float now)
+        {
+            responseWaitStartedAt = now;
+            lastBackendProgressAt = -1f;
+            awaitingBackendResponse = true;
+        }
+
+        private void FailActiveTurn(string code, string message)
+        {
+            if (!stateMachine.Fail(message))
+            {
+                awaitingBackendResponse = false;
+                return;
+            }
+
+            var turnId = stateMachine.TurnId;
+            pendingLocalAction = string.Empty;
+            awaitingBackendResponse = false;
+            LastErrorCode = code;
+            transport?.Interrupt(turnId);
+            audioPlayer?.StopAndClear();
+            errorUntil = Time.unscaledTime + 1.25f;
+            NotifyStateChanged();
+            Debug.LogWarning("[Conversation] Voice/transport error code=" + code +
+                "; bridge=" + TransportStatus + "; timing=" + BuildTimingStatus(Time.unscaledTime), this);
+        }
+
+        public static bool ShouldTimeoutResponse(
+            bool awaiting,
+            bool replyEnded,
+            float now,
+            float waitStartedAt,
+            float lastProgressAt,
+            float firstEventTimeout,
+            float stallTimeout,
+            out string errorCode)
+        {
+            errorCode = string.Empty;
+            if (!awaiting || replyEnded || waitStartedAt < 0f || now < waitStartedAt)
+            {
+                return false;
+            }
+
+            if (lastProgressAt < waitStartedAt)
+            {
+                if (now - waitStartedAt < Mathf.Max(1f, firstEventTimeout))
+                {
+                    return false;
+                }
+                errorCode = "response_first_event_timeout";
+                return true;
+            }
+
+            if (now - lastProgressAt < Mathf.Max(1f, stallTimeout))
+            {
+                return false;
+            }
+            errorCode = "response_event_stall_timeout";
+            return true;
         }
 
         private void RecordEventTiming(ConversationEvent message)
@@ -537,7 +734,7 @@ namespace QuestMmdPlayer
                 $"firstText={ElapsedMs(responseStart, firstTextAt)}ms " +
                 $"firstAudio={ElapsedMs(responseStart, firstAudioAt)}ms " +
                 $"replyEnd={ElapsedMs(responseStart, replyEndedAt)}ms " +
-                $"audioDone={ElapsedMs(responseStart, now)}ms chunks={replyAudioChunkCount}";
+                $"audioDone={ElapsedMs(responseStart, audioDoneAt)}ms chunks={replyAudioChunkCount}";
         }
 
         private static string ElapsedMs(float start, float end)

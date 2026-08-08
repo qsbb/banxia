@@ -28,6 +28,7 @@ namespace QuestMmdPlayer.Editor
             QuestMmdPlayerMenu.EnsureRenderPipeline();
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             Directory.CreateDirectory(OutputDirectory);
+            RenderInteraction(HumanInteractionKind.None, "idle", 1f);
             RenderInteraction(HumanInteractionKind.Handshake, "handshake", 1f);
             RenderInteraction(HumanInteractionKind.HeadPat, "head_pat", .58f);
             RenderInteraction(HumanInteractionKind.CheekPinch, "cheek_pinch", .52f);
@@ -63,6 +64,10 @@ namespace QuestMmdPlayer.Editor
                 result.root.transform.SetParent(host.transform, false);
                 var avatar = host.AddComponent<AvatarController>();
                 avatar.Initialize(result.root.transform);
+                var idlePose = host.AddComponent<AvatarNaturalIdlePose>();
+                idlePose.SetPreset(AvatarIdlePreset.Relaxed);
+                idlePose.Bind(avatar);
+                avatar.CaptureCurrentActionPose();
 
                 cameraObject = new GameObject("Preview Camera") { tag = "MainCamera" };
                 var camera = cameraObject.AddComponent<Camera>();
@@ -80,14 +85,19 @@ namespace QuestMmdPlayer.Editor
                 RenderSettings.ambientEquatorColor = new Color(.1f, .12f, .16f);
                 RenderSettings.ambientGroundColor = new Color(.04f, .045f, .055f);
 
+                var touch = host.AddComponent<AvatarTouchInteraction>();
+                touch.Bind(avatar);
                 var interaction = host.AddComponent<AvatarHumanInteraction>();
                 interaction.Bind(avatar);
                 if (!interaction.HasHeadBone || !interaction.HasHandBones)
                     Debug.LogWarning("Preview bone matching is incomplete: head=" + interaction.HasHeadBone + ", hands=" + interaction.HasHandBones);
-                interaction.SimulateInteraction(kind, 30f);
-                SetPrivateFloat(interaction, "fade", 1f);
-                InvokePoseMethod(interaction, "ApplyMorphs", kind, 1f);
-                InvokePoseMethod(interaction, "ApplyBones", kind, 1f);
+                if (kind != HumanInteractionKind.None)
+                {
+                    interaction.SimulateInteraction(kind, 30f);
+                    SetPrivateFloat(interaction, "fade", 1f);
+                    InvokePoseMethod(interaction, "ApplyMorphs", kind, 1f);
+                    InvokePoseMethod(interaction, "ApplyBones", kind, 1f);
+                }
                 Physics.SyncTransforms();
 
                 var bounds = GetBounds(host);
@@ -102,12 +112,20 @@ namespace QuestMmdPlayer.Editor
                     var focus = kind == HumanInteractionKind.Handshake
                         ? bounds.center + Vector3.up * .02f
                         : new Vector3(bounds.center.x, bounds.max.y - bounds.size.y * (1f - frameHeight) * .48f, bounds.center.z);
-                    var distance = GetCameraDistance(camera, bounds, frameHeight, kind == HumanInteractionKind.Handshake);
+                    var distance = GetCameraDistance(
+                        camera,
+                        bounds,
+                        frameHeight,
+                        kind == HumanInteractionKind.Handshake || kind == HumanInteractionKind.None);
                     cameraObject.transform.position = focus - views[i].direction * distance + Vector3.up * .01f;
                     cameraObject.transform.rotation = Quaternion.LookRotation(focus - cameraObject.transform.position, Vector3.up);
                     Render(camera, Path.Combine(OutputDirectory, fileName + "_" + views[i].name + ".png"));
                 }
-                Debug.Log("Human interaction preview PASS: " + kind + ", renderers=" + host.GetComponentsInChildren<Renderer>(true).Length + ", morphs=" + interaction.MatchedMorphCount);
+                Debug.Log(
+                    "Human interaction preview PASS: " + kind +
+                    ", renderers=" + host.GetComponentsInChildren<Renderer>(true).Length +
+                    ", morphs=" + interaction.MatchedMorphCount +
+                    ", modelCollisionVolumes=" + touch.ModelCollisionVolumeCount);
             }
             finally
             {
