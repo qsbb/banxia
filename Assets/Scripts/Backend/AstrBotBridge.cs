@@ -893,7 +893,9 @@ namespace QuestMmdPlayer
                 {
                     return "chain unknown";
                 }
-                return context.authorized ? "EventBus eligible" : "direct provider fallback";
+                return context.authorized
+                    ? "EventBus eligible"
+                    : NormalizeProtectedContextReason(context.reason);
             }
             catch (ArgumentException)
             {
@@ -916,6 +918,33 @@ namespace QuestMmdPlayer
                 return "direct provider fallback";
             }
             return "EventBus eligible";
+        }
+
+        private static string NormalizeProtectedContextReason(string reason)
+        {
+            switch (reason)
+            {
+                case "owner_not_configured":
+                case "quest_identity_not_allowlisted":
+                case "invalid_bot_id":
+                case "invalid_user_id":
+                case "missing_bot_id":
+                case "missing_user_id":
+                case "client_id_mismatch":
+                case "invalid_client_id":
+                case "missing_client_id":
+                case "trusted_client_id_missing":
+                case "missing_platform_id":
+                case "trusted_platform_id_missing":
+                case "trusted_platform_not_configured":
+                case "trusted_platform_unavailable":
+                case "authorization_denied":
+                case "authorization_timeout":
+                case "authorization_error":
+                    return reason;
+                default:
+                    return "protected_context_denied";
+            }
         }
 
         private static string GetOrCreateStableSessionId()
@@ -956,6 +985,13 @@ namespace QuestMmdPlayer
         {
             var detail = request == null ? "request unavailable" : request.error;
             var code = request == null ? 0 : request.responseCode;
+            if (request != null && TryReadBridgeError(
+                    request.downloadHandler == null ? string.Empty : request.downloadHandler.text,
+                    out var bridgeCode,
+                    out _))
+            {
+                return operation + " failed: " + bridgeCode;
+            }
             return operation + " failed (HTTP " + code + "): " + detail;
         }
 
@@ -1045,6 +1081,7 @@ namespace QuestMmdPlayer
         private sealed class SessionProtectedContext
         {
             public bool authorized;
+            public string reason;
         }
 
         [Serializable]

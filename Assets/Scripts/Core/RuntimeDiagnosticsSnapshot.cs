@@ -19,6 +19,21 @@ namespace QuestMmdPlayer
         Unknown
     }
 
+    public enum BackendChainState
+    {
+        Unavailable,
+        Unknown,
+        EventBusEligible,
+        EventBusReady,
+        DirectProviderFallback,
+        IdentityNotBound,
+        PairingIdentityInvalid,
+        ClientMismatch,
+        PlatformUnavailable,
+        AuthorizationTimeout,
+        AuthorizationDenied
+    }
+
     [Serializable]
     public sealed class RuntimeDiagnosticsSnapshot
     {
@@ -201,7 +216,7 @@ namespace QuestMmdPlayer
         public bool Available { get; }
         public bool Configured { get; }
         public bool Connected { get; }
-        public string ChainStatus { get; }
+        public BackendChainState ChainStatus { get; }
         public int QueuedInputAudioBytes { get; }
         public bool AudioUploadInProgress { get; }
 
@@ -210,9 +225,40 @@ namespace QuestMmdPlayer
             Available = backend != null;
             Configured = backend != null && backend.IsConfigured;
             Connected = backend != null && backend.IsConnected;
-            ChainStatus = backend == null ? "unavailable" : backend.BackendChainStatus;
+            ChainStatus = ClassifyChainStatus(
+                backend == null ? "unavailable" : backend.BackendChainStatus);
             QueuedInputAudioBytes = backend == null ? 0 : Mathf.Max(0, backend.QueuedInputAudioBytes);
             AudioUploadInProgress = backend != null && backend.AudioUploadInProgress;
+        }
+
+        private static BackendChainState ClassifyChainStatus(string value)
+        {
+            switch (value)
+            {
+                case "unavailable": return BackendChainState.Unavailable;
+                case "EventBus eligible": return BackendChainState.EventBusEligible;
+                case "EventBus ready": return BackendChainState.EventBusReady;
+                case "direct provider fallback": return BackendChainState.DirectProviderFallback;
+                case "owner_not_configured":
+                case "quest_identity_not_allowlisted": return BackendChainState.IdentityNotBound;
+                case "invalid_bot_id":
+                case "invalid_user_id":
+                case "missing_bot_id":
+                case "missing_user_id": return BackendChainState.PairingIdentityInvalid;
+                case "client_id_mismatch":
+                case "invalid_client_id":
+                case "missing_client_id":
+                case "trusted_client_id_missing": return BackendChainState.ClientMismatch;
+                case "missing_platform_id":
+                case "trusted_platform_id_missing":
+                case "trusted_platform_not_configured":
+                case "trusted_platform_unavailable": return BackendChainState.PlatformUnavailable;
+                case "authorization_timeout": return BackendChainState.AuthorizationTimeout;
+                case "authorization_denied":
+                case "authorization_error":
+                case "protected_context_denied": return BackendChainState.AuthorizationDenied;
+                default: return BackendChainState.Unknown;
+            }
         }
     }
 

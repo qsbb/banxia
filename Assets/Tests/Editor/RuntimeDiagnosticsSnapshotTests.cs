@@ -19,7 +19,7 @@ namespace QuestMmdPlayer.Tests
             Assert.That(snapshot.Voice.Available, Is.False);
             Assert.That(snapshot.Conversation.Available, Is.False);
             Assert.That(snapshot.Backend.Available, Is.False);
-            Assert.That(snapshot.Backend.ChainStatus, Is.EqualTo("unavailable"));
+            Assert.That(snapshot.Backend.ChainStatus, Is.EqualTo(BackendChainState.Unavailable));
             Assert.That(snapshot.Audio.Available, Is.False);
             Assert.That(snapshot.Passthrough.Available, Is.False);
             Assert.That(snapshot.Placement.Available, Is.False);

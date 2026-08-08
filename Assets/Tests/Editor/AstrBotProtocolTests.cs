@@ -41,8 +41,11 @@ namespace QuestMmdPlayer.Tests
                 "{\"status\":\"ok\",\"data\":{\"protected_context\":{\"authorized\":true,\"reason\":\"authorized\"}}}"),
                 Is.EqualTo("EventBus eligible"));
             Assert.That(AstrBotBridge.ParseSessionChainStatus(
-                "{\"status\":\"ok\",\"data\":{\"protected_context\":{\"authorized\":false,\"reason\":\"denied\"}}}"),
-                Is.EqualTo("direct provider fallback"));
+                "{\"status\":\"ok\",\"data\":{\"protected_context\":{\"authorized\":false,\"reason\":\"owner_not_configured\"}}}"),
+                Is.EqualTo("owner_not_configured"));
+            Assert.That(AstrBotBridge.ParseSessionChainStatus(
+                "{\"status\":\"ok\",\"data\":{\"protected_context\":{\"authorized\":false,\"reason\":\"internal-secret\"}}}"),
+                Is.EqualTo("protected_context_denied"));
             Assert.That(AstrBotBridge.ParseSessionChainStatus("not json"), Is.EqualTo("chain unknown"));
             Assert.That(AstrBotBridge.ResolveBackendChainStatus("EventBus eligible", "ready"), Is.EqualTo("EventBus ready"));
             Assert.That(AstrBotBridge.ResolveBackendChainStatus("EventBus eligible", "unavailable"), Is.EqualTo("direct provider fallback"));
