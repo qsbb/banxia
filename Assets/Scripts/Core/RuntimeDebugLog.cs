@@ -306,6 +306,9 @@ namespace QuestMmdPlayer
             {
                 case "owner_not_configured": return "“序”尚未为这组 Quest 原始身份配置主人";
                 case "quest_identity_not_allowlisted": return "Quest 原始身份不在“序”的允许列表";
+                case "local_identity_not_configured": return "“临”的本地 Quest 身份尚未配置完整";
+                case "local_api_principal_mismatch": return "Quest 使用的 AstrBot API Key 与本地绑定不一致";
+                case "local_quest_identity_mismatch": return "Quest 客户端、平台、Bot 或主人用户与本地绑定不一致";
                 case "invalid_user_id": return "用户 ID 无效或仍是占位值";
                 case "missing_user_id": return "用户 ID 缺失";
                 case "invalid_bot_id": return "Bot ID 无效";
