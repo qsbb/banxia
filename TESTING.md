@@ -84,6 +84,6 @@ Android 构建后必须用 APK/Dex 分析确认 com.lingxi.banxia.filepicker.Ban
 | 音量驱动嘴型和对话注视 | 已完成降级实现 | AvatarConversationPresenter |
 | AstrBot HTTP/SSE、8520 配对、Quest 麦克风/VAD | 已接入，模型已选，待真机闭环 | AstrBotBridge、BackendPairingController、QuestMicrophoneInput |
 | 语音无事件/事件停滞恢复 | 已实现，待真实断网与后端超时验收 | ConversationController、ConversationStateMachine |
-| 脱敏运行诊断快照 | 已实现 | RuntimeDiagnosticsSnapshot、菜单调试区 |
+| 脱敏运行诊断快照与阶段时间线 | 已实现 | RuntimeDiagnosticsSnapshot、RuntimeDebugLog、菜单左侧调试区；覆盖配置、授权、SSE、麦克风、上传、STT、EventBus、LLM、TTS、播放和结束阶段 |
 | 连续手臂 IK 与自然注视 | 已实现，待真机调参 | AvatarPresence、AvatarController、AvatarTouchInteraction |
 | Quest 3 真机显示与性能 | 待测试 | 需要设备 |

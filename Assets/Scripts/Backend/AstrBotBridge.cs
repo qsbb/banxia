@@ -52,6 +52,13 @@ namespace QuestMmdPlayer
         private float audioUploadStartedAt;
         private float audioEndRequestedAt = -1f;
         private float nextSessionStartAt;
+        private RuntimeDebugLog diagnostics;
+        private float sseConnectStartedAt;
+        private int receivedTurnEventCount;
+        private int receivedReplyAudioChunks;
+        private int receivedReplyAudioBytes;
+        private bool receivedReplyText;
+        private string receivedErrorCode = string.Empty;
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
@@ -70,6 +77,7 @@ namespace QuestMmdPlayer
 
         private void Awake()
         {
+            diagnostics = GetComponent<RuntimeDebugLog>() ?? gameObject.AddComponent<RuntimeDebugLog>();
             LoadConfiguration();
         }
 
@@ -97,6 +105,7 @@ namespace QuestMmdPlayer
             {
                 if (AstrBotProtocol.TryMapSseEvent(sessionId, frame.EventName, frame.Data, out var message, out var error))
                 {
+                    RecordIncomingEvent(message);
                     EventReceived?.Invoke(message);
                 }
                 else if (!error.Contains("stale session"))
@@ -143,6 +152,8 @@ namespace QuestMmdPlayer
                     ? string.Empty
                     : userText.Substring(0, Math.Min(userText.Length, 8192))
             };
+            ResetReceivedTurnCounters();
+            RecordStage("eventbus", "processing");
             StartCoroutine(PostJson("turn/start", JsonUtility.ToJson(request), turnId, true));
         }
 
@@ -164,6 +175,8 @@ namespace QuestMmdPlayer
             audioEndRequestedAt = -1f;
             audioUploadRoutine = StartCoroutine(UploadAudioTurn(turnId));
             SetStatus("Recording voice for AstrBot");
+            ResetReceivedTurnCounters();
+            RecordStage("audio_upload", "ready");
             return true;
         }
 
@@ -184,6 +197,11 @@ namespace QuestMmdPlayer
                     ErrorCode = "audio_upload_backpressure",
                     Text = "Voice upload could not keep up with capture"
                 });
+                RecordStage(
+                    "audio_upload",
+                    "blocked",
+                    "audio_upload_backpressure",
+                    bytes: queuedInputAudioBytes);
                 CancelAudioUpload();
                 return false;
             }
@@ -205,6 +223,11 @@ namespace QuestMmdPlayer
             audioEndRequested = true;
             audioEndRequestedAt = Time.unscaledTime;
             SetStatus("Uploading voice to AstrBot");
+            RecordStage(
+                "audio_upload",
+                "uploading",
+                chunks: outgoingAudioChunks.Count,
+                bytes: queuedInputAudioBytes);
             return true;
         }
 
@@ -225,6 +248,7 @@ namespace QuestMmdPlayer
                 reason = "unity_interrupt"
             };
             StartCoroutine(PostJson("interrupt", JsonUtility.ToJson(request), turnId, false));
+            RecordStage("interrupt", "processing");
         }
 
         public string SendInteraction(
@@ -332,6 +356,8 @@ namespace QuestMmdPlayer
         {
             healthReady = false;
             SetStatus("Checking AstrBot health");
+            var startedAt = Time.unscaledTime;
+            RecordStage("health", "processing");
             using (var request = UnityWebRequest.Get(Endpoint("health")))
             {
                 ConfigureHeaders(request, false);
@@ -351,13 +377,30 @@ namespace QuestMmdPlayer
                                 : "unavailable";
                         healthReady = true;
                         SetStatus("AstrBot health check ready");
+                        RecordStage(
+                            "health",
+                            "ok",
+                            httpStatus: request.responseCode,
+                            elapsedMs: ElapsedMs(startedAt));
                         yield break;
                     }
                     SetStatus("AstrBot health response is incompatible");
+                    RecordStage(
+                        "health",
+                        "failed",
+                        "health_incompatible",
+                        request.responseCode,
+                        ElapsedMs(startedAt));
                 }
                 else
                 {
                     SetStatus(HttpFailure("Health check", request));
+                    RecordStage(
+                        "health",
+                        "failed",
+                        ReadFailureCode(request, "health_failed"),
+                        request.responseCode,
+                        ElapsedMs(startedAt));
                 }
             }
         }
@@ -377,6 +420,8 @@ namespace QuestMmdPlayer
 
             eventStreamReady = false;
             SetStatus("Starting AstrBot session");
+            var startedAt = Time.unscaledTime;
+            RecordStage("session", "processing");
             using (var request = CreateJsonRequest("session/start", JsonUtility.ToJson(payload)))
             {
                 yield return request.SendWebRequest();
@@ -387,6 +432,18 @@ namespace QuestMmdPlayer
                     BackendChainStatus = ResolveBackendChainStatus(
                         ParseSessionChainStatus(request.downloadHandler.text), healthPipelineStatus);
                     SetStatus("AstrBot session ready (" + BackendChainStatus + ")");
+                    var authorizationCode = AuthorizationCode(BackendChainStatus);
+                    RecordStage(
+                        "session",
+                        "ready",
+                        httpStatus: request.responseCode,
+                        elapsedMs: ElapsedMs(startedAt));
+                    RecordStage(
+                        "authorization",
+                        string.IsNullOrEmpty(authorizationCode) ? "authorized" : "limited",
+                        authorizationCode,
+                        request.responseCode,
+                        ElapsedMs(startedAt));
                     Debug.Log("[AstrBotBridge] Backend chain: " + BackendChainStatus, this);
                     Debug.Log("[AstrBotBridge] Session established.", this);
                 }
@@ -397,17 +454,35 @@ namespace QuestMmdPlayer
                     nextSessionStartAt = 0f;
                     sessionReady = true;
                     SetStatus("Existing AstrBot session found; reconnecting SSE");
+                    RecordStage(
+                        "session",
+                        "ready",
+                        "existing_session",
+                        request.responseCode,
+                        ElapsedMs(startedAt));
                 }
                 else if (IsSessionCapacityConflict(request.responseCode, request.downloadHandler.text))
                 {
                     sessionId = string.Empty;
                     nextSessionStartAt = Time.unscaledTime + 10f;
                     SetStatus("AstrBot session capacity is full; reload the bridge plugin");
+                    RecordStage(
+                        "session",
+                        "blocked",
+                        "session_capacity_full",
+                        request.responseCode,
+                        ElapsedMs(startedAt));
                 }
                 else
                 {
                     sessionId = string.Empty;
                     SetStatus(HttpFailure("Session start", request));
+                    RecordStage(
+                        "session",
+                        "failed",
+                        ReadFailureCode(request, "session_start_failed"),
+                        request.responseCode,
+                        ElapsedMs(startedAt));
                 }
             }
         }
@@ -431,6 +506,8 @@ namespace QuestMmdPlayer
             request.timeout = 0;
             activeSseRequest = request;
             SetStatus("Connecting AstrBot SSE");
+            sseConnectStartedAt = Time.unscaledTime;
+            RecordStage("sse", "processing");
 
             var operation = request.SendWebRequest();
             while (!operation.isDone && !shuttingDown)
@@ -458,10 +535,23 @@ namespace QuestMmdPlayer
                     sessionReady = false;
                     sessionId = string.Empty;
                     SetStatus("AstrBot session expired; recreating");
+                    RecordStage(
+                        "sse",
+                        "disconnected",
+                        "session_expired",
+                        request.responseCode,
+                        ElapsedMs(sseConnectStartedAt));
                 }
                 else
                 {
                     SetStatus(HttpFailure("SSE disconnected", request));
+                    RecordStage(
+                        "sse",
+                        "disconnected",
+                        ReadFailureCode(request, "sse_disconnected"),
+                        request.responseCode,
+                        ElapsedMs(sseConnectStartedAt),
+                        eventCount: receivedTurnEventCount);
                 }
             }
             request.Dispose();
@@ -538,6 +628,13 @@ namespace QuestMmdPlayer
                         Debug.Log($"[AstrBotBridge] Voice upload complete: {uploadedInputAudioBytes} B in " +
                             $"{uploadedInputBatchCount} batches, stream {Mathf.Max(0f, now - audioUploadStartedAt):F2}s, " +
                             $"final flush {(audioEndRequestedAt < 0f ? 0f : Mathf.Max(0f, now - audioEndRequestedAt)):F2}s.");
+                        RecordStage(
+                            "audio_upload",
+                            "completed",
+                            elapsedMs: ElapsedMs(audioUploadStartedAt),
+                            chunks: uploadedInputBatchCount,
+                            bytes: uploadedInputAudioBytes);
+                        RecordStage("stt", "processing");
                     }
                     ClearAudioUpload(turnId);
                     yield break;
@@ -567,6 +664,14 @@ namespace QuestMmdPlayer
                         ErrorCode = "audio_http_request_failed",
                         Text = HttpFailure(endpoint, request)
                     });
+                    RecordStage(
+                        "audio_upload",
+                        "failed",
+                        ReadFailureCode(request, "audio_http_request_failed"),
+                        request.responseCode,
+                        ElapsedMs(audioUploadStartedAt),
+                        uploadedInputBatchCount,
+                        uploadedInputAudioBytes);
                 }
                 completed?.Invoke(succeeded);
             }
@@ -663,6 +768,20 @@ namespace QuestMmdPlayer
                             TurnId = turnId
                         });
                     }
+                    if (endpoint == "turn/start")
+                    {
+                        RecordStage(
+                            "eventbus",
+                            "processing",
+                            httpStatus: request.responseCode);
+                    }
+                    else if (endpoint == "interrupt")
+                    {
+                        RecordStage(
+                            "interrupt",
+                            "completed",
+                            httpStatus: request.responseCode);
+                    }
                 }
                 else if (!string.IsNullOrEmpty(turnId))
                 {
@@ -673,6 +792,11 @@ namespace QuestMmdPlayer
                         ErrorCode = "http_request_failed",
                         Text = HttpFailure(endpoint, request)
                     });
+                    RecordStage(
+                        endpoint == "interrupt" ? "interrupt" : "eventbus",
+                        "failed",
+                        ReadFailureCode(request, "http_request_failed"),
+                        request.responseCode);
                 }
                 else
                 {
@@ -731,6 +855,7 @@ namespace QuestMmdPlayer
             if (!File.Exists(ConfigurationPath))
             {
                 SetStatus("AstrBot configuration missing");
+                RecordStage("configuration", "blocked", "configuration_missing");
                 return;
             }
 
@@ -740,6 +865,7 @@ namespace QuestMmdPlayer
                 if (!AstrBotProtocol.TryValidateSettings(settings, out var reason))
                 {
                     SetStatus("AstrBot config invalid: " + reason);
+                    RecordStage("configuration", "failed", "configuration_invalid");
                     return;
                 }
                 // This is the single transport-policy gate. Plain HTTP is accepted
@@ -747,11 +873,13 @@ namespace QuestMmdPlayer
                 settings.base_url = AstrBotProtocol.NormalizeBaseUrl(settings.base_url);
                 IsConfigured = true;
                 SetStatus("AstrBot config loaded");
+                RecordStage("configuration", "ready", "configuration_ready");
                 Debug.Log("[AstrBotBridge] Configuration loaded from " + ConfigurationPath);
             }
             catch (Exception exception)
             {
                 SetStatus("AstrBot config could not be read");
+                RecordStage("configuration", "failed", "configuration_invalid");
                 Debug.LogWarning("[AstrBotBridge] Configuration error: " + exception.Message);
             }
         }
@@ -960,6 +1088,131 @@ namespace QuestMmdPlayer
             return created;
         }
 
+        private void ResetReceivedTurnCounters()
+        {
+            receivedTurnEventCount = 0;
+            receivedReplyAudioChunks = 0;
+            receivedReplyAudioBytes = 0;
+            receivedReplyText = false;
+            receivedErrorCode = string.Empty;
+        }
+
+        private void RecordIncomingEvent(ConversationEvent message)
+        {
+            if (message == null) return;
+            receivedTurnEventCount++;
+            switch (message.Type)
+            {
+                case ConversationEventType.AsrFinal:
+                    RecordStage("stt", "completed", eventCount: receivedTurnEventCount);
+                    break;
+                case ConversationEventType.ReplyTextDelta:
+                    if (!receivedReplyText)
+                    {
+                        receivedReplyText = true;
+                        RecordStage("eventbus", "completed", eventCount: receivedTurnEventCount);
+                        RecordStage("llm", "completed", eventCount: receivedTurnEventCount);
+                    }
+                    break;
+                case ConversationEventType.AudioChunk:
+                    receivedReplyAudioChunks++;
+                    receivedReplyAudioBytes += message.Pcm16 == null ? 0 : message.Pcm16.Length * 2;
+                    break;
+                case ConversationEventType.Error:
+                    var code = string.IsNullOrWhiteSpace(message.ErrorCode)
+                        ? "bridge_error"
+                        : message.ErrorCode;
+                    receivedErrorCode = code;
+                    RecordStage(ErrorStage(code), "failed", code, eventCount: receivedTurnEventCount);
+                    break;
+                case ConversationEventType.ReplyEnd:
+                    if (receivedReplyAudioChunks > 0)
+                    {
+                        RecordStage(
+                            "tts",
+                            "completed",
+                            chunks: receivedReplyAudioChunks,
+                            bytes: receivedReplyAudioBytes,
+                            eventCount: receivedTurnEventCount);
+                    }
+                    RecordStage(
+                        "reply",
+                        message.TextSent || message.AudioSent ? "completed" : "failed",
+                        message.TextSent || message.AudioSent
+                            ? string.Empty
+                            : string.IsNullOrEmpty(receivedErrorCode) ? "empty_reply" : receivedErrorCode,
+                        chunks: receivedReplyAudioChunks,
+                        bytes: receivedReplyAudioBytes,
+                        eventCount: receivedTurnEventCount);
+                    break;
+            }
+        }
+
+        private static string ErrorStage(string code)
+        {
+            if (code.StartsWith("stt", StringComparison.Ordinal)) return "stt";
+            if (code.StartsWith("tts", StringComparison.Ordinal)) return "tts";
+            if (code.StartsWith("audio", StringComparison.Ordinal)) return "audio_upload";
+            if (code.Contains("pipeline") || code.Contains("owner") || code.Contains("identity") ||
+                code.Contains("platform")) return "eventbus";
+            return "reply";
+        }
+
+        private static string AuthorizationCode(string backendChainStatus)
+        {
+            switch (backendChainStatus)
+            {
+                case "EventBus ready":
+                case "EventBus eligible":
+                case "direct provider fallback":
+                    return string.Empty;
+                default:
+                    return string.IsNullOrWhiteSpace(backendChainStatus) || backendChainStatus == "chain unknown"
+                        ? "protected_context_denied"
+                        : backendChainStatus;
+            }
+        }
+
+        private static string ReadFailureCode(UnityWebRequest request, string fallback)
+        {
+            if (request != null && TryReadBridgeError(
+                    request.downloadHandler == null ? string.Empty : request.downloadHandler.text,
+                    out var bridgeCode,
+                    out _))
+            {
+                return string.IsNullOrWhiteSpace(bridgeCode) ? fallback : bridgeCode;
+            }
+            return fallback;
+        }
+
+        private static int ElapsedMs(float startedAt)
+        {
+            if (startedAt <= 0f) return -1;
+            return Mathf.Clamp(Mathf.RoundToInt((Time.unscaledTime - startedAt) * 1000f), 0, 3600000);
+        }
+
+        private void RecordStage(
+            string stage,
+            string status,
+            string code = "",
+            long httpStatus = 0,
+            int elapsedMs = -1,
+            int chunks = 0,
+            int bytes = 0,
+            int eventCount = 0)
+        {
+            diagnostics = diagnostics != null ? diagnostics : GetComponent<RuntimeDebugLog>();
+            diagnostics?.RecordStage(
+                stage,
+                status,
+                code,
+                httpStatus,
+                elapsedMs,
+                chunks,
+                bytes,
+                eventCount);
+        }
+
         private void MarkEventStreamReady()
         {
             if (eventStreamReady)
@@ -968,6 +1221,11 @@ namespace QuestMmdPlayer
             }
             eventStreamReady = true;
             SetStatus("AstrBot SSE connected");
+            RecordStage(
+                "sse",
+                "connected",
+                httpStatus: activeSseRequest == null ? 0 : activeSseRequest.responseCode,
+                elapsedMs: ElapsedMs(sseConnectStartedAt));
         }
 
         private void SetStatus(string value)

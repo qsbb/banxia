@@ -1,0 +1,67 @@
+#if UNITY_EDITOR
+using NUnit.Framework;
+using UnityEngine;
+
+namespace QuestMmdPlayer.Tests
+{
+    public sealed class RuntimeDebugLogTests
+    {
+        private GameObject owner;
+        private RuntimeDebugLog diagnostics;
+
+        [SetUp]
+        public void SetUp()
+        {
+            owner = new GameObject("RuntimeDebugLogTests");
+            diagnostics = owner.AddComponent<RuntimeDebugLog>();
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            Object.DestroyImmediate(owner);
+        }
+
+        [Test]
+        public void AuthorizationFailureRemainsRootCauseAfterSseConnects()
+        {
+            diagnostics.RecordStage(
+                "authorization",
+                "limited",
+                "owner_not_configured",
+                httpStatus: 201,
+                elapsedMs: 72);
+            diagnostics.RecordStage("sse", "connected", httpStatus: 200, elapsedMs: 35);
+
+            Assert.That(
+                diagnostics.CurrentRootCause,
+                Is.EqualTo("身份授权：“序”尚未为这组 Quest 原始身份配置主人"));
+            Assert.That(diagnostics.GetRecentTimelineText(5), Does.Contain("[身份授权] 受限"));
+            Assert.That(diagnostics.GetRecentTimelineText(5), Does.Contain("HTTP 201"));
+            Assert.That(diagnostics.GetRecentTimelineText(5), Does.Contain("[实时事件] 已连接"));
+        }
+
+        [Test]
+        public void SuccessfulRetryClearsSameStageRootCause()
+        {
+            diagnostics.RecordStage("stt", "failed", "stt_failed");
+            Assert.That(diagnostics.CurrentRootCause, Does.Contain("语音识别失败"));
+
+            diagnostics.RecordStage("stt", "completed", elapsedMs: 480);
+
+            Assert.That(diagnostics.CurrentRootCause, Is.EqualTo("未发现明确的失败阶段"));
+        }
+
+        [Test]
+        public void ClearRemovesTimelineAndRootCause()
+        {
+            diagnostics.RecordStage("reply", "failed", "llm_failed");
+
+            diagnostics.Clear();
+
+            Assert.That(diagnostics.GetRecentTimelineText(), Is.Empty);
+            Assert.That(diagnostics.CurrentRootCause, Is.EqualTo("未发现明确的失败阶段"));
+        }
+    }
+}
+#endif

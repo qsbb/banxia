@@ -47,6 +47,7 @@ namespace QuestMmdPlayer
         private VoiceActivityGate activityGate;
         private float nextMonitorAttemptAt;
         private bool permissionRequested;
+        private RuntimeDebugLog diagnostics;
 
         public bool IsRecording { get; private set; }
         public bool IsMonitoring { get; private set; }
@@ -72,6 +73,7 @@ namespace QuestMmdPlayer
         private void Awake()
         {
             conversation = GetComponent<ConversationController>();
+            diagnostics = GetComponent<RuntimeDebugLog>();
             alwaysListening = PlayerPrefs.GetInt(
                 AlwaysListeningPreferenceKey,
                 alwaysListening ? 1 : 0) != 0;
@@ -156,6 +158,7 @@ namespace QuestMmdPlayer
                 }
                 else
                 {
+                    RecordMicrophoneStage("cancelled", "no_speech_detected");
                     CancelRecording();
                     Status = alwaysListening ? "Listening for speech" : "No speech detected";
                 }
@@ -265,6 +268,7 @@ namespace QuestMmdPlayer
                     permissionRequested = true;
                 }
                 Status = "Microphone permission required";
+                RecordMicrophoneStage("blocked", "microphone_permission_missing");
                 Debug.LogWarning("[VoiceInput] Microphone permission is not available.", this);
                 return false;
             }
@@ -272,6 +276,7 @@ namespace QuestMmdPlayer
             if (Microphone.devices == null || Microphone.devices.Length == 0)
             {
                 Status = "Microphone unavailable";
+                RecordMicrophoneStage("unavailable", "microphone_device_missing");
                 Debug.LogWarning("[VoiceInput] No microphone device is available.", this);
                 return false;
             }
@@ -281,6 +286,7 @@ namespace QuestMmdPlayer
             if (recordingClip == null)
             {
                 Status = "Microphone could not start";
+                RecordMicrophoneStage("failed", "microphone_start_failed");
                 Debug.LogWarning("[VoiceInput] Microphone start failed.", this);
                 return false;
             }
@@ -294,6 +300,12 @@ namespace QuestMmdPlayer
             InputLevel = 0f;
             IsMonitoring = true;
             Status = alwaysListening ? "Listening for speech" : "Microphone ready";
+            diagnostics?.RecordStage(
+                "microphone",
+                "ready",
+                "monitoring",
+                sampleRate: sourceSampleRate,
+                channels: sourceChannels);
             Debug.Log("[VoiceInput] Microphone monitor started.", this);
             return true;
         }
@@ -309,6 +321,7 @@ namespace QuestMmdPlayer
             if (conversation == null || !conversation.CanStartVoiceInput)
             {
                 Status = "Conversation backend offline";
+                RecordMicrophoneStage("blocked", "bridge_disconnected");
                 Debug.LogWarning("[VoiceInput] Voice turn rejected because the backend is offline.", this);
                 return false;
             }
@@ -328,6 +341,7 @@ namespace QuestMmdPlayer
             if (conversation == null || !conversation.CanStartVoiceInput || !conversation.BeginVoiceInput())
             {
                 Status = "Conversation backend offline";
+                RecordMicrophoneStage("blocked", "voice_turn_rejected");
                 Debug.LogWarning("[VoiceInput] Backend rejected voice start.", this);
                 return false;
             }
@@ -346,6 +360,7 @@ namespace QuestMmdPlayer
             IsRecording = true;
             LastTurnCaptureSeconds = 0f;
             Status = "Recording voice";
+            RecordMicrophoneStage("processing", includePreRoll ? "speech_detected" : "manual_capture");
             Debug.Log(includePreRoll
                 ? "[VoiceInput] Speech detected; voice turn started."
                 : "[VoiceInput] Manual voice turn started.", this);
@@ -368,6 +383,7 @@ namespace QuestMmdPlayer
             {
                 CancelRecording();
                 Status = "Voice upload queue full";
+                RecordMicrophoneStage("failed", "audio_upload_backpressure");
                 Debug.LogWarning("[VoiceInput] PCM upload queue rejected a chunk.", this);
                 return;
             }
@@ -378,12 +394,22 @@ namespace QuestMmdPlayer
             if (accepted)
             {
                 Status = alwaysListening ? "Waiting for reply | mic live" : "Voice sent";
+                diagnostics?.RecordStage(
+                    "microphone",
+                    "completed",
+                    "capture_sent",
+                    elapsedMs: Mathf.RoundToInt(LastTurnCaptureSeconds * 1000f),
+                    chunks: LastTurnChunkCount,
+                    bytes: LastTurnPcmBytes,
+                    sampleRate: TargetSampleRate,
+                    channels: 1);
                 Debug.Log("[VoiceInput] Voice end accepted; waiting for reply.", this);
             }
             else
             {
                 conversation?.CancelVoiceInput();
                 Status = alwaysListening ? "Listening for speech" : "Voice send failed";
+                RecordMicrophoneStage("failed", "voice_end_rejected");
                 Debug.LogWarning("[VoiceInput] Backend rejected voice end.", this);
             }
         }
@@ -479,6 +505,7 @@ namespace QuestMmdPlayer
                     {
                         CancelRecording();
                         Status = "Voice upload queue full";
+                        RecordMicrophoneStage("failed", "audio_upload_backpressure");
                         Debug.LogWarning("[VoiceInput] PCM upload queue rejected a chunk.", this);
                         return;
                     }
@@ -620,6 +647,12 @@ namespace QuestMmdPlayer
                 voiceSilenceRms,
                 Mathf.Max(voiceSilenceRms, Mathf.Min(.018f, voiceSilenceRms * 2.5f)),
                 voiceActivationSeconds);
+        }
+
+        private void RecordMicrophoneStage(string status, string code = "")
+        {
+            diagnostics = diagnostics != null ? diagnostics : GetComponent<RuntimeDebugLog>();
+            diagnostics?.RecordStage("microphone", status, code);
         }
 
         private void OnDisable()

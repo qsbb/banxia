@@ -33,6 +33,7 @@ namespace QuestMmdPlayer
         private int replyAudioChunkCount;
         private string pendingLocalAction = string.Empty;
         private bool backendActionReceived;
+        private RuntimeDebugLog diagnostics;
         [SerializeField] private bool allowAutomaticMockTransport;
         [SerializeField] private bool sendInteractionEvents = true;
         [SerializeField, Range(8f, 90f)] private float firstResponseTimeoutSeconds = 35f;
@@ -67,6 +68,7 @@ namespace QuestMmdPlayer
 
         private void Awake()
         {
+            diagnostics = GetComponent<RuntimeDebugLog>();
             audioPlayer = GetComponent<Pcm16StreamAudioPlayer>() ?? gameObject.AddComponent<Pcm16StreamAudioPlayer>();
             presenter = GetComponent<AvatarConversationPresenter>() ?? gameObject.AddComponent<AvatarConversationPresenter>();
             var discovered = FindTransport();
@@ -81,6 +83,7 @@ namespace QuestMmdPlayer
             }
             else
             {
+                RecordStage("eventbus", "failed", "bridge_disconnected");
                 Debug.LogError("[Conversation] No AstrBot transport found; conversation is unavailable until pairing succeeds.", this);
             }
             RefreshLocalReactionMode();
@@ -128,6 +131,11 @@ namespace QuestMmdPlayer
             if (stateMachine.TryFinishAudio(audioPlayer == null || audioPlayer.IsDrained))
             {
                 audioDoneAt = Time.unscaledTime;
+                RecordStage(
+                    "audio_playback",
+                    "completed",
+                    elapsedMs: ElapsedMsValue(firstAudioAt, audioDoneAt),
+                    chunks: replyAudioChunkCount);
                 Debug.Log("[Conversation] Voice timing " + BuildTimingStatus(Time.unscaledTime), this);
                 NotifyStateChanged();
             }
@@ -190,6 +198,7 @@ namespace QuestMmdPlayer
         {
             if (!CanStartVoiceInput)
             {
+                RecordStage("microphone", "blocked", "voice_turn_rejected");
                 return false;
             }
 
@@ -212,6 +221,7 @@ namespace QuestMmdPlayer
             stateMachine.ResetToIdle();
             NotifyStateChanged();
             Debug.LogWarning("[Conversation] Voice input start rejected by transport.", this);
+            RecordStage("audio_upload", "failed", "voice_turn_rejected");
             return false;
         }
 
@@ -239,6 +249,7 @@ namespace QuestMmdPlayer
             Debug.Log(accepted
                 ? "[Conversation] Voice input end accepted."
                 : "[Conversation] Voice input end rejected.", this);
+            if (!accepted) RecordStage("audio_upload", "failed", "voice_end_rejected");
             return accepted;
         }
 
@@ -282,6 +293,7 @@ namespace QuestMmdPlayer
             NotifyStateChanged();
             transport.StartTurn(turnId, text);
             BeginResponseWait(Time.unscaledTime);
+            RecordStage("eventbus", "processing");
             Debug.Log("[Conversation] Text turn started.", this);
         }
 
@@ -298,6 +310,7 @@ namespace QuestMmdPlayer
             audioPlayer?.StopAndClear();
             interruptedUntil = Time.unscaledTime + .3f;
             NotifyStateChanged();
+            RecordStage("interrupt", "completed");
             Debug.Log("[Conversation] Turn interrupted.", this);
         }
 
@@ -410,6 +423,7 @@ namespace QuestMmdPlayer
                         : message.ErrorCode;
                     awaitingBackendResponse = false;
                     errorUntil = Time.unscaledTime + 1.25f;
+                    RecordStage("reply", "failed", LastErrorCode);
                     Debug.LogWarning("[Conversation] Voice/transport error code=" + LastErrorCode +
                         "; bridge=" + TransportStatus + "; timing=" + BuildTimingStatus(Time.unscaledTime), this);
                     break;
@@ -658,6 +672,7 @@ namespace QuestMmdPlayer
             audioPlayer?.StopAndClear();
             errorUntil = Time.unscaledTime + 1.25f;
             NotifyStateChanged();
+            RecordStage("reply", "failed", code);
             Debug.LogWarning("[Conversation] Voice/transport error code=" + code +
                 "; bridge=" + TransportStatus + "; timing=" + BuildTimingStatus(Time.unscaledTime), this);
         }
@@ -740,6 +755,29 @@ namespace QuestMmdPlayer
         private static string ElapsedMs(float start, float end)
         {
             return start < 0f || end < 0f ? "-" : Mathf.Max(0, Mathf.RoundToInt((end - start) * 1000f)).ToString();
+        }
+
+        private static int ElapsedMsValue(float start, float end)
+        {
+            return start < 0f || end < 0f
+                ? -1
+                : Mathf.Max(0, Mathf.RoundToInt((end - start) * 1000f));
+        }
+
+        private void RecordStage(
+            string stage,
+            string status,
+            string code = "",
+            int elapsedMs = -1,
+            int chunks = 0)
+        {
+            diagnostics = diagnostics != null ? diagnostics : GetComponent<RuntimeDebugLog>();
+            diagnostics?.RecordStage(
+                stage,
+                status,
+                code,
+                elapsedMs: elapsedMs,
+                chunks: chunks);
         }
 
         private void SubscribeTransport()

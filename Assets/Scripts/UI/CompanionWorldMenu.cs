@@ -1633,26 +1633,24 @@ namespace QuestMmdPlayer
             var conversation = snapshot.Conversation;
             var backend = snapshot.Backend;
             var audio = snapshot.Audio;
-            var interaction = snapshot.Interaction;
-            var room = snapshot.Room;
-            var placement = snapshot.Placement;
-            var passthrough = snapshot.Passthrough;
-            var motion = snapshot.Motion;
             var error = owner.Conversation == null || string.IsNullOrEmpty(owner.Conversation.LastErrorCode)
                 ? string.Empty
-                : " err=" + owner.Conversation.LastErrorCode;
-            var history = owner.DebugLog == null ? string.Empty : owner.DebugLog.GetRecentText(14);
+                : "，错误=" + RuntimeDebugLog.CodeLabel(owner.Conversation.LastErrorCode);
+            var rootCause = owner.DebugLog == null
+                ? "诊断组件不可用"
+                : owner.DebugLog.CurrentRootCause;
+            var timeline = owner.DebugLog == null
+                ? string.Empty
+                : owner.DebugLog.GetRecentTimelineText(11);
             debugLogText.text =
-                $"语音：监听={OnOff(voice.Monitoring)}，录音={OnOff(voice.Recording)}，常开={OnOff(voice.AlwaysListening)}，检测到说话={OnOff(voice.SpeechDetected)}\n" +
-                $"输入电平：{voice.InputLevel:F4} / 阈值：{voice.ActivationThreshold:F4}，激活进度：{voice.ActivationProgress * 100f:F0}%\n" +
-                $"最近一轮：{voice.LastTurnCaptureSeconds:F2} 秒，{voice.LastTurnChunkCount} 个音频块，{voice.LastTurnPcmBytes} 字节\n" +
-                $"对话链路：{ConversationStateName(conversation.State)}，后端={OnOff(conversation.RealBackendConnected)}，等待={OnOff(conversation.AwaitingBackendResponse)}\n" +
-                $"响应耗时：首事件 {Ms(conversation.FirstEventMs)}，文字 {Ms(conversation.FirstTextMs)}，音频 {Ms(conversation.FirstAudioMs)}，结束 {Ms(conversation.ReplyEndMs)}{error}\n" +
-                $"播放：缓冲 {audio.BufferedSeconds:F2} 秒，欠载次数 {audio.UnderflowCount}；上传={OnOff(backend.AudioUploadInProgress)}\n" +
-                $"手部：追踪 {interaction.TrackedHandCount} 只，接触={OnOff(interaction.Touched)}，角色碰撞体 {interaction.ModelCollisionVolumeCount} 个\n" +
-                $"空间：彩透={passthrough.State}，相机={OnOff(passthrough.CameraSubsystemRunning)}，地面 {room.FloorCount}，座椅 {room.SeatCount}，桌面 {room.TableCount}\n" +
-                $"动作：VMD 播放={OnOff(motion.VmdPlaying)}，保持结束姿势={OnOff(motion.HoldingEndPose)}，过渡={OnOff(motion.BlendingOut)}，待机={motion.IdlePreset}" +
-                (string.IsNullOrEmpty(history) ? string.Empty : "\n" + history);
+                $"当前根因：{rootCause}\n" +
+                $"链路：{backend.ChainStatus}，连接={OnOff(backend.Connected)}，等待回复={OnOff(conversation.AwaitingBackendResponse)}{error}\n" +
+                $"麦克风：监听={OnOff(voice.Monitoring)}，录音={OnOff(voice.Recording)}，常开={OnOff(voice.AlwaysListening)}，说话={OnOff(voice.SpeechDetected)}\n" +
+                $"输入：{voice.InputLevel:F4}/{voice.ActivationThreshold:F4}，上轮 {voice.LastTurnCaptureSeconds:F2}s · {voice.LastTurnChunkCount}块/{voice.LastTurnPcmBytes}B\n" +
+                $"耗时：事件 {Ms(conversation.FirstEventMs)} · 文字 {Ms(conversation.FirstTextMs)} · 音频 {Ms(conversation.FirstAudioMs)} · 结束 {Ms(conversation.ReplyEndMs)}\n" +
+                $"播放：缓冲 {audio.BufferedSeconds:F2}s · 欠载 {audio.UnderflowCount} · 上传={OnOff(backend.AudioUploadInProgress)}\n" +
+                "阶段时间线（最新在下）" +
+                (string.IsNullOrEmpty(timeline) ? "\n暂无记录" : "\n" + timeline);
         }
 
         private RuntimeMenuLayer ResolveActiveLayer()
