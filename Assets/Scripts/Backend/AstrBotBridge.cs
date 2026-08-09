@@ -53,7 +53,8 @@ namespace QuestMmdPlayer
         private float audioEndRequestedAt = -1f;
         private float nextSessionStartAt;
         private RuntimeDebugLog diagnostics;
-        private float sseConnectStartedAt;
+        private long sseConnectStartedAt;
+        private long audioUploadDiagnosticStartedAt;
         private int receivedTurnEventCount;
         private int receivedReplyAudioChunks;
         private int receivedReplyAudioBytes;
@@ -172,6 +173,7 @@ namespace QuestMmdPlayer
             uploadedInputAudioBytes = 0;
             uploadedInputBatchCount = 0;
             audioUploadStartedAt = Time.unscaledTime;
+            audioUploadDiagnosticStartedAt = DiagnosticTimestamp();
             audioEndRequestedAt = -1f;
             audioUploadRoutine = StartCoroutine(UploadAudioTurn(turnId));
             SetStatus("Recording voice for AstrBot");
@@ -356,7 +358,7 @@ namespace QuestMmdPlayer
         {
             healthReady = false;
             SetStatus("Checking AstrBot health");
-            var startedAt = Time.unscaledTime;
+            var startedAt = DiagnosticTimestamp();
             RecordStage("health", "processing");
             using (var request = UnityWebRequest.Get(Endpoint("health")))
             {
@@ -420,7 +422,7 @@ namespace QuestMmdPlayer
 
             eventStreamReady = false;
             SetStatus("Starting AstrBot session");
-            var startedAt = Time.unscaledTime;
+            var startedAt = DiagnosticTimestamp();
             RecordStage("session", "processing");
             using (var request = CreateJsonRequest("session/start", JsonUtility.ToJson(payload)))
             {
@@ -506,7 +508,7 @@ namespace QuestMmdPlayer
             request.timeout = 0;
             activeSseRequest = request;
             SetStatus("Connecting AstrBot SSE");
-            sseConnectStartedAt = Time.unscaledTime;
+            sseConnectStartedAt = DiagnosticTimestamp();
             RecordStage("sse", "processing");
 
             var operation = request.SendWebRequest();
@@ -631,7 +633,7 @@ namespace QuestMmdPlayer
                         RecordStage(
                             "audio_upload",
                             "completed",
-                            elapsedMs: ElapsedMs(audioUploadStartedAt),
+                            elapsedMs: ElapsedMs(audioUploadDiagnosticStartedAt),
                             chunks: uploadedInputBatchCount,
                             bytes: uploadedInputAudioBytes);
                         RecordStage("stt", "processing");
@@ -669,7 +671,7 @@ namespace QuestMmdPlayer
                         "failed",
                         ReadFailureCode(request, "audio_http_request_failed"),
                         request.responseCode,
-                        ElapsedMs(audioUploadStartedAt),
+                        ElapsedMs(audioUploadDiagnosticStartedAt),
                         uploadedInputBatchCount,
                         uploadedInputAudioBytes);
                 }
@@ -732,6 +734,7 @@ namespace QuestMmdPlayer
             uploadedInputAudioBytes = 0;
             uploadedInputBatchCount = 0;
             audioEndRequestedAt = -1f;
+            audioUploadDiagnosticStartedAt = 0L;
             outgoingAudioChunks.Clear();
         }
 
@@ -750,6 +753,7 @@ namespace QuestMmdPlayer
             uploadedInputAudioBytes = 0;
             uploadedInputBatchCount = 0;
             audioEndRequestedAt = -1f;
+            audioUploadDiagnosticStartedAt = 0L;
             outgoingAudioChunks.Clear();
         }
 
@@ -1185,10 +1189,17 @@ namespace QuestMmdPlayer
             return fallback;
         }
 
-        private static int ElapsedMs(float startedAt)
+        private static long DiagnosticTimestamp()
         {
-            if (startedAt <= 0f) return -1;
-            return Mathf.Clamp(Mathf.RoundToInt((Time.unscaledTime - startedAt) * 1000f), 0, 3600000);
+            return System.Diagnostics.Stopwatch.GetTimestamp();
+        }
+
+        private static int ElapsedMs(long startedAt)
+        {
+            if (startedAt <= 0L) return -1;
+            var elapsed = System.Diagnostics.Stopwatch.GetTimestamp() - startedAt;
+            var milliseconds = elapsed * 1000d / System.Diagnostics.Stopwatch.Frequency;
+            return Mathf.Clamp((int)Math.Round(milliseconds), 0, 3600000);
         }
 
         private void RecordStage(
