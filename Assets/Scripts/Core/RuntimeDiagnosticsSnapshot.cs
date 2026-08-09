@@ -15,6 +15,7 @@ namespace QuestMmdPlayer
         Appearance,
         Quality,
         Voice,
+        TextInput,
         Debug,
         Unknown
     }

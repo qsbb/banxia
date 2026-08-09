@@ -282,6 +282,10 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(root.transform.Find("Main Menu Layer/语音"), Is.Not.Null);
                 Assert.That(root.transform.Find("Voice Layer/常开监听"), Is.Not.Null);
                 Assert.That(root.transform.Find("Voice Layer/开始说话"), Is.Not.Null);
+                Assert.That(root.transform.Find("Voice Layer/文字对话"), Is.Not.Null);
+                Assert.That(root.transform.Find("Text Conversation Layer/打开键盘"), Is.Not.Null);
+                Assert.That(root.transform.Find("Text Conversation Layer/发送"), Is.Not.Null);
+                Assert.That(root.transform.Find("Text Conversation Layer/链路测试"), Is.Not.Null);
                 Assert.That(root.transform.Find("Debug Layer/清空记录"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/刷新外部动作"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/导入文件"), Is.Not.Null);
@@ -303,12 +307,30 @@ namespace QuestMmdPlayer.Tests
                 InvokeTargetMethod(menu, "ToggleDebugMode");
                 Assert.That(mainLayer.gameObject.activeSelf, Is.True);
                 Assert.That(debugLayer.gameObject.activeSelf, Is.False);
+
+                InvokeTargetMethod(menu, "ShowTextInputPanel");
+                var textInputLayer = root.transform.Find("Text Conversation Layer");
+                Assert.That(textInputLayer.gameObject.activeSelf, Is.True);
+                Assert.That(menu.ActiveLayer, Is.EqualTo(RuntimeMenuLayer.TextInput));
+                Assert.That(mainLayer.gameObject.activeSelf, Is.False);
             }
             finally
             {
                 Object.DestroyImmediate(ownerObject);
                 Object.DestroyImmediate(cameraObject);
             }
+        }
+
+        [Test]
+        public void ConversationInputIsBoundedAndSingleLine()
+        {
+            Assert.That(
+                CompanionWorldMenu.NormalizeConversationInput("  你好\r\n世界  "),
+                Is.EqualTo("你好  世界"));
+            Assert.That(
+                CompanionWorldMenu.NormalizeConversationInput(new string('a', 700)).Length,
+                Is.EqualTo(512));
+            Assert.That(CompanionWorldMenu.NormalizeConversationInput(null), Is.Empty);
         }
     }
 }

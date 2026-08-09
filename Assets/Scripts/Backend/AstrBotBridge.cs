@@ -824,7 +824,7 @@ namespace QuestMmdPlayer
 
         private void ConfigureHeaders(UnityWebRequest request, bool eventStream)
         {
-            request.SetRequestHeader("Authorization", "Bearer " + settings.astrbot_api_key);
+            request.SetRequestHeader("Authorization", "ApiKey " + settings.astrbot_api_key);
             request.SetRequestHeader("X-Quest-Avatar-Key", settings.bridge_api_key);
             request.SetRequestHeader("Accept", eventStream ? "text/event-stream" : "application/json");
         }

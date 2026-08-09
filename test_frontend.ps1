@@ -221,6 +221,16 @@ if (Test-Path -LiteralPath $bridgePath) {
     } else {
         Pass "AstrBotBridge delegates private-LAN HTTP policy to AstrBotProtocol"
     }
+    if ($bridgeSource.Contains('SetRequestHeader("Authorization", "ApiKey "')) {
+        Pass "AstrBotBridge uses the AstrBot API-key authentication scheme"
+    } else {
+        Fail "AstrBotBridge does not use the AstrBot API-key authentication scheme"
+    }
+    if ($bridgeSource.Contains('SetRequestHeader("Authorization", "Bearer "')) {
+        Fail "AstrBotBridge incorrectly sends an AstrBot API key as a Dashboard bearer token"
+    } else {
+        Pass "AstrBotBridge does not send the AstrBot API key as a Dashboard bearer token"
+    }
 }
 
 $projectSettingsPath = Join-Path $projectRoot "ProjectSettings/ProjectSettings.asset"
