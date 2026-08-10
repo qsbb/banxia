@@ -100,10 +100,18 @@ namespace QuestMmdPlayer.Tests
                 TrackedHandContactProbe.Palm,
                 AvatarContactRegion.Body,
                 false));
-            Assert.IsFalse(QuestTrackedHandVisualizer.ShouldReportContact(
+            Assert.IsTrue(QuestTrackedHandVisualizer.ShouldReportContact(
+                TrackedHandContactProbe.Palm,
+                AvatarContactRegion.Hair,
+                false));
+            Assert.IsTrue(QuestTrackedHandVisualizer.ShouldReportContact(
+                TrackedHandContactProbe.Palm,
+                AvatarContactRegion.Limb,
+                false));
+            Assert.IsTrue(QuestTrackedHandVisualizer.ShouldReportContact(
                 TrackedHandContactProbe.Palm,
                 AvatarContactRegion.Face,
-                true));
+                false));
             Assert.IsTrue(QuestTrackedHandVisualizer.ShouldReportContact(
                 TrackedHandContactProbe.PinchTip,
                 AvatarContactRegion.Face,
@@ -112,10 +120,14 @@ namespace QuestMmdPlayer.Tests
                 TrackedHandContactProbe.PinchTip,
                 AvatarContactRegion.Face,
                 false));
-            Assert.IsFalse(QuestTrackedHandVisualizer.ShouldReportContact(
+            Assert.IsTrue(QuestTrackedHandVisualizer.ShouldReportContact(
                 TrackedHandContactProbe.PinchTip,
                 AvatarContactRegion.Head,
-                true));
+                false));
+            Assert.IsTrue(QuestTrackedHandVisualizer.ShouldReportContact(
+                TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Hair,
+                false));
         }
 
         [Test]
@@ -173,7 +185,7 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void PmxVolumeClassificationKeepsAnatomyAndRejectsHairPhysics()
+        public void PmxVolumeClassificationKeepsAnatomyAndIncludesHairPhysics()
         {
             avatarObject = new GameObject("PmxClassificationAvatar");
             var boneObject = new GameObject("Bone");
@@ -183,13 +195,39 @@ namespace QuestMmdPlayer.Tests
             body.relatedBone = bone;
 
             bone.boneName = "Hair_03";
-            Assert.AreEqual(AvatarContactRegion.None, AvatarTouchInteraction.ClassifyPmxContactRegion(body));
+            Assert.AreEqual(AvatarContactRegion.Hair, AvatarTouchInteraction.ClassifyPmxContactRegion(body));
 
             bone.boneName = "\u53f3\u624b\u9996";
             Assert.AreEqual(AvatarContactRegion.Hand, AvatarTouchInteraction.ClassifyPmxContactRegion(body));
 
             bone.boneName = "Head";
             Assert.AreEqual(AvatarContactRegion.Head, AvatarTouchInteraction.ClassifyPmxContactRegion(body));
+        }
+
+        [Test]
+        public void HairPmxVolumeIsReturnedAsTouchableRegion()
+        {
+            avatarObject = new GameObject("HairTouchAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+
+            var hair = new GameObject("HairBone");
+            hair.transform.SetParent(avatarObject.transform, false);
+            hair.transform.localPosition = new Vector3(0f, .35f, 0f);
+            var bone = hair.AddComponent<MMDBoneTransform>();
+            bone.boneName = "Hair_03";
+            var body = hair.AddComponent<MMDRigidBody>();
+            body.relatedBone = bone;
+            body.shape = PMXRigidBody.Shape.Sphere;
+            body.size = new Unity.Mathematics.float3(.08f, 0f, 0f);
+
+            serviceObject = new GameObject("HairTouchService");
+            var touch = serviceObject.AddComponent<AvatarTouchInteraction>();
+            touch.Bind(controller);
+            Physics.SyncTransforms();
+
+            Assert.IsTrue(touch.TryGetContactRegion(hair.transform.position, .01f, out var region));
+            Assert.AreEqual(AvatarContactRegion.Hair, region);
         }
 
         [Test]

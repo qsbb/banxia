@@ -47,6 +47,45 @@ namespace QuestMmdPlayer
 
         public string Status { get; private set; } = "代理手等待 XR 输入";
         public int TrackedHandCount { get; private set; }
+        public const int PhysicsProbeCount = 12;
+
+        private static readonly int[] PhysicsProbeJointIndices = { 1, 5, 10, 15, 20, 25 };
+
+        /// <summary>
+        /// Returns the palm and five fingertip probes used by the UMT Bullet
+        /// adapter. The method is allocation-free and exposes no scene object.
+        /// </summary>
+        public bool TryGetPhysicsProbe(
+            int probeIndex,
+            out Vector3 position,
+            out float radius,
+            out bool active)
+        {
+            position = Vector3.zero;
+            radius = 0f;
+            active = false;
+            if (probeIndex < 0 || probeIndex >= PhysicsProbeCount)
+            {
+                return false;
+            }
+
+            var visual = probeIndex < 6 ? left : right;
+            var jointIndex = PhysicsProbeJointIndices[probeIndex % 6];
+            if (visual.joints == null || visual.contactColliders == null || visual.jointTracked == null ||
+                visual.joints[jointIndex] == null || visual.contactColliders[jointIndex] == null)
+            {
+                return false;
+            }
+
+            var collider = visual.contactColliders[jointIndex];
+            position = visual.joints[jointIndex].transform.position;
+            radius = collider is SphereCollider sphere
+                ? sphere.radius * MaximumScale(collider.transform.lossyScale)
+                : jointRadius;
+            active = visual.root != null && visual.root.activeInHierarchy &&
+                     collider.enabled && visual.jointTracked[jointIndex];
+            return true;
+        }
 
         private sealed class HandVisual
         {
@@ -69,6 +108,7 @@ namespace QuestMmdPlayer
             internal bool pinching;
             internal Vector3 collisionCorrection;
             internal float lastTrackedPoseAt = float.NegativeInfinity;
+            internal string inputSource = "none";
 
             internal HandVisual(string name, XRNode node, Color color)
             {
@@ -124,7 +164,8 @@ namespace QuestMmdPlayer
             tracked += UpdateTrackedHand(left, subsystem == null ? default(XRHand) : subsystem.leftHand, subsystem != null);
             tracked += UpdateTrackedHand(right, subsystem == null ? default(XRHand) : subsystem.rightHand, subsystem != null);
             TrackedHandCount = tracked;
-            Status = tracked == 2 ? "双手追踪" : tracked == 1 ? "单手追踪" : "控制器或无 XR 输入";
+            var trackingLabel = tracked == 2 ? "双手追踪" : tracked == 1 ? "单手追踪" : "控制器或无 XR 输入";
+            Status = trackingLabel + " | 左:" + left.inputSource + " 右:" + right.inputSource;
         }
 
         private void FixedUpdate()
@@ -248,6 +289,7 @@ namespace QuestMmdPlayer
         {
             if (hasSubsystem && hand.isTracked && TryGetHandPose(hand, visual))
             {
+                SetInputSource(visual, "hand_tracking");
                 SetVisible(visual, true, visual.meshRoot != null);
                 return 1;
             }
@@ -257,6 +299,7 @@ namespace QuestMmdPlayer
             {
                 var rotation = Quaternion.identity;
                 device.TryGetFeatureValue(CommonUsages.deviceRotation, out rotation);
+                SetInputSource(visual, "controller");
                 SetControllerPose(visual, World(position), WorldRotation(rotation));
                 SetVisible(visual, true, false);
                 visual.pinching = device.TryGetFeatureValue(CommonUsages.trigger, out var trigger) && trigger > .78f;
@@ -265,6 +308,7 @@ namespace QuestMmdPlayer
             }
 
             visual.DisableContacts();
+            SetInputSource(visual, "none");
             if (IsTrackingGraceActive(Time.unscaledTime, visual.lastTrackedPoseAt, trackingLossVisualGrace))
             {
                 SetVisible(visual, true, visual.meshRoot != null);
@@ -272,6 +316,39 @@ namespace QuestMmdPlayer
             }
             SetVisible(visual, false, false);
             return 0;
+        }
+
+        private void SetInputSource(HandVisual visual, string source)
+        {
+            if (string.Equals(visual.inputSource, source, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var previous = visual.inputSource;
+            if (previous == "hand_tracking" && source != "hand_tracking")
+            {
+                ResetVisualCollisionCorrection(visual);
+            }
+            visual.inputSource = source;
+            if (source == "hand_tracking" && visual.meshRoot == null)
+            {
+                visual.meshRoot = LoadOfficialMesh(visual);
+                ApplyOfficialMeshMaterial(visual);
+            }
+            Debug.Log(
+                "[HandTracking] " + visual.name + " input source: " + previous + " -> " + source +
+                (source == "hand_tracking" && visual.meshRoot == null ? " (proxy mesh)" : ""),
+                this);
+        }
+
+        private static void ResetVisualCollisionCorrection(HandVisual visual)
+        {
+            if (visual.meshRoot != null && visual.collisionCorrection.sqrMagnitude > .000001f)
+            {
+                visual.meshRoot.transform.position -= visual.collisionCorrection;
+            }
+            visual.collisionCorrection = Vector3.zero;
         }
 
         private bool TryGetHandPose(XRHand hand, HandVisual visual)
@@ -452,6 +529,11 @@ namespace QuestMmdPlayer
 
         private void SetVisible(HandVisual visual, bool visible, bool showOfficialMesh)
         {
+            if (showOfficialMesh && visual.meshRoot == null)
+            {
+                visual.meshRoot = LoadOfficialMesh(visual);
+                ApplyOfficialMeshMaterial(visual);
+            }
             visual.visible = visible && showHands;
             visual.root.SetActive(visual.visible);
             UpdateOfficialMeshParent(visual);
@@ -538,11 +620,25 @@ namespace QuestMmdPlayer
             {
                 return region == AvatarContactRegion.Body ||
                        region == AvatarContactRegion.Head ||
-                       region == AvatarContactRegion.Hand;
+                       region == AvatarContactRegion.Face ||
+                       region == AvatarContactRegion.Hand ||
+                       region == AvatarContactRegion.Hair ||
+                       region == AvatarContactRegion.Limb;
             }
-            return probe == TrackedHandContactProbe.PinchTip &&
-                   region == AvatarContactRegion.Face &&
-                   pinching;
+            if (probe != TrackedHandContactProbe.PinchTip)
+            {
+                return false;
+            }
+
+            // A fingertip can touch hair and body parts even without a pinch.
+            // Pinching never moves the avatar; it only changes face contact to
+            // the cheek-pinch semantic in AvatarHumanInteraction.
+            return (region == AvatarContactRegion.Face && pinching) ||
+                   region == AvatarContactRegion.Head ||
+                   region == AvatarContactRegion.Hair ||
+                   region == AvatarContactRegion.Body ||
+                   region == AvatarContactRegion.Limb ||
+                   region == AvatarContactRegion.Hand;
         }
 
         private Vector3 World(Vector3 value)

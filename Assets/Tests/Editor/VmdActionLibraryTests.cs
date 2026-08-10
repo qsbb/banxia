@@ -169,6 +169,25 @@ namespace QuestMmdPlayer.Tests
             Assert.IsTrue(VmdActionLibrary.IsPreparedActionExpired(10f, 40f, 30f));
             Assert.IsFalse(VmdActionLibrary.IsPreparedActionExpired(10f, 9f, 30f));
         }
+
+        [Test]
+        public void RecommendedDanceFallsBackToValidatedCustomActionWhenNameIsGeneric()
+        {
+            var selected = VmdActionLibrary.SelectRecommendedDance(new[]
+            {
+                new VmdActionInfo("greeting_motion", 10, 1, 30, 1f),
+                new VmdActionInfo("wave_dance", 10, 1, 30, 1f)
+            });
+
+            Assert.That(selected, Is.Not.Null);
+            Assert.That(selected.Id, Is.EqualTo("wave_dance"));
+
+            selected = VmdActionLibrary.SelectRecommendedDance(new[]
+            {
+                new VmdActionInfo("greeting_motion", 10, 1, 30, 1f)
+            });
+            Assert.That(selected.Id, Is.EqualTo("greeting_motion"));
+        }
         private static void WriteVmd(string path, uint[] boneFrames, uint[] morphFrames)
         {
             using var stream = File.Create(path);

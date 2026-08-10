@@ -793,7 +793,9 @@ namespace QuestMmdPlayer
                 case AvatarContactRegion.Face: return 5;
                 case AvatarContactRegion.Head: return 4;
                 case AvatarContactRegion.Hand: return 3;
-                case AvatarContactRegion.Body: return 2;
+                case AvatarContactRegion.Hair: return 4;
+                case AvatarContactRegion.Body:
+                case AvatarContactRegion.Limb: return 2;
                 default: return 0;
             }
         }
@@ -827,6 +829,13 @@ namespace QuestMmdPlayer
             }
             var faceCenter = headCenter + avatar.transform.forward * headRadius * .72f;
             CreateSphereProxy("Face", AvatarContactRegion.Face, faceCenter, headRadius * .72f, headBone);
+            var hairBone = FindAvatarBone("hair", "hairfront", "bangs", "髪", "头发", "前发");
+            // Prefer PMX hair rigid bodies when available. The fallback sphere
+            // keeps models without hair physics touchable.
+            if (!HasProxyRegion(AvatarContactRegion.Hair) && hairBone != null)
+            {
+                CreateSphereProxy("Hair", AvatarContactRegion.Hair, hairBone.position, headRadius * .75f, hairBone);
+            }
             var handRadius = Mathf.Clamp(bounds.size.y * .035f, .035f, .075f);
             var leftBone = FindAvatarBone("lefthand", "hand_l", "\u5DE6\u624B\u9996");
             var rightBone = FindAvatarBone("righthand", "hand_r", "\u53F3\u624B\u9996");
@@ -921,6 +930,10 @@ namespace QuestMmdPlayer
             }
             var value = NormalizeBoneName(
                 body.relatedBone.boneName + " " + body.originalName + " " + body.renamedName);
+            if (ContainsAny(value, "hair", "hairfront", "bang", "bangs", "ponytail", "twintail", "髪", "头发", "前发", "发束", "发梢"))
+            {
+                return AvatarContactRegion.Hair;
+            }
             if (ContainsAny(value, "lefthand", "righthand", "handl", "handr", "\u5de6\u624b\u9996", "\u53f3\u624b\u9996"))
             {
                 return AvatarContactRegion.Hand;
@@ -936,7 +949,11 @@ namespace QuestMmdPlayer
                     "\u4e0a\u534a\u8eab", "\u4e0b\u534a\u8eab", "\u9996", "\u80a9", "\u8155", "\u8098",
                     "\u8170", "\u9acb", "\u8db3", "\u819d"))
             {
-                return AvatarContactRegion.Body;
+                var limb = ContainsAny(
+                    value,
+                    "arm", "elbow", "wrist", "hand", "leg", "thigh", "knee", "ankle", "foot",
+                    "手臂", "手肘", "手腕", "腿", "大腿", "膝", "脚");
+                return limb ? AvatarContactRegion.Limb : AvatarContactRegion.Body;
             }
             return AvatarContactRegion.None;
         }
@@ -1152,7 +1169,9 @@ namespace QuestMmdPlayer
         Body,
         Head,
         Face,
-        Hand
+        Hand,
+        Hair,
+        Limb
     }
 
     internal sealed class AvatarContactProxy : MonoBehaviour

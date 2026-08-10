@@ -7,7 +7,7 @@ using UnityEngine.XR.Hands;
 
 namespace QuestMmdPlayer
 {
-    public enum HumanInteractionKind { None, Handshake, HeadPat, CheekPinch }
+    public enum HumanInteractionKind { None, Handshake, HeadPat, CheekPinch, BodyTouch }
 
     [DisallowMultipleComponent]
     [DefaultExecutionOrder(11000)]
@@ -41,6 +41,7 @@ namespace QuestMmdPlayer
         HumanInteractionKind backendReactionKind;
         float backendReactionUntil;
         HumanInteractionKind trackedContactKind;
+        AvatarContactRegion trackedContactRegion;
         float trackedContactUntil;
         Vector3 trackedContactTarget;
         bool handshakeUsesRightArm;
@@ -177,6 +178,7 @@ namespace QuestMmdPlayer
             backendReactionKind = HumanInteractionKind.None;
             backendReactionUntil = 0f;
             trackedContactKind = HumanInteractionKind.None;
+            trackedContactRegion = AvatarContactRegion.None;
             trackedContactUntil = 0f;
             trackedContactTarget = Vector3.zero;
             hasHandshakeArm = false;
@@ -406,10 +408,19 @@ namespace QuestMmdPlayer
         {
             var kind = ClassifyPhysicalContact(region, pinching);
             if (kind == HumanInteractionKind.None) return;
+            var changed = trackedContactKind != kind;
             trackedContactKind = kind;
+            trackedContactRegion = region;
             trackedContactTarget = point;
             trackedContactUntil = Time.unscaledTime + .14f;
             if (kind == HumanInteractionKind.Handshake) AcquireHandshakeTarget(point);
+            if (changed)
+            {
+                Debug.Log(
+                    "[HumanInteraction] Physical contact region=" + region +
+                    " pinching=" + pinching + " semantic=" + Name(kind),
+                    this);
+            }
         }
 
         public static HumanInteractionKind ClassifyPhysicalContact(
@@ -420,13 +431,20 @@ namespace QuestMmdPlayer
             {
                 return HumanInteractionKind.CheekPinch;
             }
-            if (region == AvatarContactRegion.Head && !pinching)
+            if (region == AvatarContactRegion.Hair ||
+                (region == AvatarContactRegion.Head && !pinching))
             {
                 return HumanInteractionKind.HeadPat;
             }
             if (region == AvatarContactRegion.Hand)
             {
                 return HumanInteractionKind.Handshake;
+            }
+            if (region == AvatarContactRegion.Face ||
+                region == AvatarContactRegion.Body ||
+                region == AvatarContactRegion.Limb)
+            {
+                return HumanInteractionKind.BodyTouch;
             }
             return HumanInteractionKind.None;
         }
@@ -495,6 +513,8 @@ namespace QuestMmdPlayer
                     ? Quaternion.Euler(-1.2f, 0f, 1.4f + settle * .25f)
                     : kind == HumanInteractionKind.CheekPinch
                         ? Quaternion.Euler(0f, -1.8f, -1.2f)
+                        : kind == HumanInteractionKind.BodyTouch
+                            ? ContactBodyOffset(settle)
                         : Quaternion.identity;
                 bones.upperBody.localRotation = Quaternion.Slerp(
                     bones.upperBodyRotation,
@@ -508,6 +528,8 @@ namespace QuestMmdPlayer
                     ? Quaternion.Euler(-4.5f + settle * .65f, 0f, 3.5f)
                     : kind == HumanInteractionKind.CheekPinch
                         ? Quaternion.Euler(0f, -4.5f, -3.5f)
+                        : kind == HumanInteractionKind.BodyTouch
+                            ? ContactHeadOffset(settle)
                         : Quaternion.identity;
                 bones.head.localRotation = Quaternion.Slerp(
                     bones.headRotation,
@@ -584,6 +606,34 @@ namespace QuestMmdPlayer
             lower.rotation = Quaternion.Slerp(lower.rotation, Quaternion.FromToRotation(lowerFrom, lowerTo) * lower.rotation, clampedWeight);
             return true;
         }
+        private Quaternion ContactBodyOffset(float settle)
+        {
+            switch (trackedContactRegion)
+            {
+                case AvatarContactRegion.Limb:
+                    return Quaternion.Euler(0f, 0f, settle * .9f);
+                case AvatarContactRegion.Face:
+                    return Quaternion.Euler(0f, -1.1f, settle * .45f);
+                case AvatarContactRegion.Hair:
+                    return Quaternion.Euler(-.8f, 0f, settle * .55f);
+                default:
+                    return Quaternion.Euler(0f, 0f, settle * .7f);
+            }
+        }
+
+        private Quaternion ContactHeadOffset(float settle)
+        {
+            switch (trackedContactRegion)
+            {
+                case AvatarContactRegion.Face:
+                    return Quaternion.Euler(0f, -4.5f, -3.5f + settle * .45f);
+                case AvatarContactRegion.Hair:
+                    return Quaternion.Euler(-2.2f, 0f, settle * .4f);
+                default:
+                    return Quaternion.Euler(0f, 0f, settle * .35f);
+            }
+        }
+
         void ApplyMorphs(HumanInteractionKind kind, float amount)
         {
             for (var i = 0; i < morphs.Count; i++)
@@ -591,7 +641,8 @@ namespace QuestMmdPlayer
                 var morph = morphs[i];
                 var add = kind == HumanInteractionKind.Handshake && morph.kind == 0 ? 28f :
                     kind == HumanInteractionKind.HeadPat ? (morph.kind == 0 ? 36f : morph.kind == 1 ? 12f : morph.kind == 3 ? 38f : 0f) :
-                    kind == HumanInteractionKind.CheekPinch ? (morph.kind == 1 ? 45f : morph.kind == 2 ? 14f : morph.kind == 3 ? 16f : 0f) : 0f;
+                    kind == HumanInteractionKind.CheekPinch ? (morph.kind == 1 ? 45f : morph.kind == 2 ? 14f : morph.kind == 3 ? 16f : 0f) :
+                    kind == HumanInteractionKind.BodyTouch && trackedContactRegion == AvatarContactRegion.Face && morph.kind == 1 ? 8f : 0f;
                 morph.renderer.SetBlendShapeWeight(morph.index, Mathf.Clamp(morph.baseWeight + add * amount, 0f, 100f));
             }
         }
@@ -655,6 +706,6 @@ namespace QuestMmdPlayer
         void OnDestroy() { if (touch != null) touch.TouchStateChanged -= HandleTouchStateChanged; }
         static bool Button(InputDevice d, InputFeatureUsage<bool> digital, InputFeatureUsage<float> analog) { return (d.TryGetFeatureValue(digital, out var value) && value) || Analog(d, analog) >= .65f; }
         static float Analog(InputDevice d, InputFeatureUsage<float> usage) { return d.TryGetFeatureValue(usage, out var value) ? value : 0f; }
-        static string Name(HumanInteractionKind kind) { return kind == HumanInteractionKind.Handshake ? "Handshake" : kind == HumanInteractionKind.HeadPat ? "Head pat" : kind == HumanInteractionKind.CheekPinch ? "Cheek pinch" : "None"; }
+        static string Name(HumanInteractionKind kind) { return kind == HumanInteractionKind.Handshake ? "Handshake" : kind == HumanInteractionKind.HeadPat ? "Head pat" : kind == HumanInteractionKind.CheekPinch ? "Cheek pinch" : kind == HumanInteractionKind.BodyTouch ? "Body touch" : "None"; }
     }
 }

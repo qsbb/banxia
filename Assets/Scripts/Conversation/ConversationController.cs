@@ -22,6 +22,7 @@ namespace QuestMmdPlayer
         private float turnStartedAt = -1f;
         private float firstInputChunkAt = -1f;
         private float inputEndedAt = -1f;
+        private float asrFinalAt = -1f;
         private float firstEventAt = -1f;
         private float firstTextAt = -1f;
         private float firstAudioAt = -1f;
@@ -32,6 +33,7 @@ namespace QuestMmdPlayer
         private bool awaitingBackendResponse;
         private int replyAudioChunkCount;
         private string pendingLocalAction = string.Empty;
+        private bool localActionStarted;
         private bool backendActionReceived;
         private RuntimeDebugLog diagnostics;
         [SerializeField] private bool allowAutomaticMockTransport;
@@ -207,6 +209,7 @@ namespace QuestMmdPlayer
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
             pendingLocalAction = string.Empty;
+            localActionStarted = false;
             backendActionReceived = false;
             var turnId = stateMachine.Begin(string.Empty);
             ResetTurnTiming();
@@ -286,6 +289,7 @@ namespace QuestMmdPlayer
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
             pendingLocalAction = string.Empty;
+            localActionStarted = false;
             backendActionReceived = false;
             TryQueueLocalAction(text);
             var turnId = stateMachine.Begin(text);
@@ -526,6 +530,7 @@ namespace QuestMmdPlayer
                 case HumanInteractionKind.Handshake: return "handshake";
                 case HumanInteractionKind.HeadPat: return "head_pat";
                 case HumanInteractionKind.CheekPinch: return "cheek_pinch";
+                case HumanInteractionKind.BodyTouch: return string.Empty;
                 default: return "none";
             }
         }
@@ -606,6 +611,7 @@ namespace QuestMmdPlayer
             turnStartedAt = Time.unscaledTime;
             firstInputChunkAt = -1f;
             inputEndedAt = -1f;
+            asrFinalAt = -1f;
             firstEventAt = -1f;
             firstTextAt = -1f;
             firstAudioAt = -1f;
@@ -624,20 +630,32 @@ namespace QuestMmdPlayer
             {
                 pendingLocalAction = detectedAction;
                 Debug.Log("[Conversation] Explicit action request detected: " + detectedAction, this);
+                // Start explicit local actions immediately. AstrBot remains
+                // authoritative when it later emits avatar.intent, but a
+                // dance request still works when the reply has no action event.
+                if (presenter != null)
+                {
+                    presenter.PlayLocalAction(detectedAction);
+                    localActionStarted = true;
+                    pendingLocalAction = string.Empty;
+                    diagnostics?.Record("AvatarAction", "显式请求立即执行本地动作：" + detectedAction);
+                }
             }
         }
 
         private void TryRunLocalActionFallback()
         {
-            if (string.IsNullOrEmpty(pendingLocalAction) || backendActionReceived)
+            if (localActionStarted || string.IsNullOrEmpty(pendingLocalAction) || backendActionReceived)
             {
                 pendingLocalAction = string.Empty;
+                localActionStarted = false;
                 return;
             }
 
             var action = pendingLocalAction;
             pendingLocalAction = string.Empty;
             presenter?.PlayLocalAction(action);
+            localActionStarted = true;
             Debug.Log("[Conversation] Local action fallback executed: " + action +
                 " (AstrBot reply had no executable avatar.intent).", this);
         }
@@ -717,22 +735,68 @@ namespace QuestMmdPlayer
             if (firstEventAt < 0f)
             {
                 firstEventAt = now;
+                RecordStage(
+                    "eventbus",
+                    "processing",
+                    "first_event",
+                    ElapsedMsValue(inputEndedAt >= 0f ? inputEndedAt : turnStartedAt, firstEventAt));
+            }
+            if (message.Type == ConversationEventType.AsrFinal && asrFinalAt < 0f)
+            {
+                asrFinalAt = now;
+                RecordStage(
+                    "stt",
+                    "completed",
+                    "asr_final",
+                    ElapsedMsValue(inputEndedAt >= 0f ? inputEndedAt : turnStartedAt, asrFinalAt));
             }
             if (message.Type == ConversationEventType.ReplyTextDelta && firstTextAt < 0f)
             {
                 firstTextAt = now;
+                RecordStage(
+                    "llm",
+                    "processing",
+                    "first_text",
+                    ElapsedMsValue(inputEndedAt >= 0f ? inputEndedAt : turnStartedAt, firstTextAt));
+                if (asrFinalAt >= 0f)
+                {
+                    RecordStage(
+                        "llm",
+                        "completed",
+                        "asr_to_first_text",
+                        ElapsedMsValue(asrFinalAt, firstTextAt));
+                }
             }
             if (message.Type == ConversationEventType.AudioChunk)
             {
                 if (firstAudioAt < 0f)
                 {
                     firstAudioAt = now;
+                    RecordStage(
+                        "tts",
+                        "processing",
+                        "first_audio",
+                        ElapsedMsValue(inputEndedAt >= 0f ? inputEndedAt : turnStartedAt, firstAudioAt));
+                    if (firstTextAt >= 0f)
+                    {
+                        RecordStage(
+                            "tts",
+                            "processing",
+                            "text_to_first_audio",
+                            ElapsedMsValue(firstTextAt, firstAudioAt));
+                    }
                 }
                 replyAudioChunkCount++;
             }
             else if (message.Type == ConversationEventType.ReplyEnd)
             {
                 replyEndedAt = now;
+                RecordStage(
+                    "reply",
+                    "completed",
+                    "reply_end",
+                    ElapsedMsValue(inputEndedAt >= 0f ? inputEndedAt : turnStartedAt, replyEndedAt),
+                    replyAudioChunkCount);
             }
         }
 

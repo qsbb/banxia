@@ -11,6 +11,10 @@ CandidumGames/UnityMMDTools 0.5.0. It is distributed under the MIT License.
 The package retains its own `LICENSE.md` and `Third Party Notices.md`, including
 the notices for bundled dictionaries and native components.
 
+This repository carries a local managed-code patch to `MMDPhysicsManager` that
+adds tracked-hand kinematic spheres through the existing UMT native rigid-body
+ABI. The bundled native binaries are unchanged.
+
 ## Unity and Meta packages
 
 Packages resolved by Unity Package Manager remain subject to their own package

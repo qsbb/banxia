@@ -21,12 +21,12 @@ namespace QuestMmdPlayer
 
     public sealed class VmdActionInfo
     {
-        internal VmdActionInfo(string id, long byteLength, int keyframeCount, uint lastFrame, float durationSeconds)
+        public VmdActionInfo(string id, long byteLength, int keyframeCount, uint lastFrame, float durationSeconds)
             : this(id, byteLength, keyframeCount, lastFrame, durationSeconds, false)
         {
         }
 
-        internal VmdActionInfo(string id, long byteLength, int keyframeCount, uint lastFrame, float durationSeconds, bool hasFacialTrack)
+        public VmdActionInfo(string id, long byteLength, int keyframeCount, uint lastFrame, float durationSeconds, bool hasFacialTrack)
         {
             Id = id;
             DisplayName = id;
@@ -423,6 +423,8 @@ namespace QuestMmdPlayer
         private readonly SemaphoreSlim conversionGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim refreshGate = new SemaphoreSlim(1, 1);
         private VmdActionInfo[] actions = Array.Empty<VmdActionInfo>();
+        private string actionDirectoryFingerprint = string.Empty;
+        private bool hasRefreshSnapshot;
         private PMXModel boundModel;
         private Transform boundRoot;
         private AvatarController boundAvatar;
@@ -486,6 +488,14 @@ namespace QuestMmdPlayer
                 try
                 {
                     Directory.CreateDirectory(MotionsDirectory);
+                    var fingerprint = BuildActionDirectoryFingerprint(MotionsDirectory);
+                    if (hasRefreshSnapshot && string.Equals(
+                            fingerprint,
+                            actionDirectoryFingerprint,
+                            StringComparison.Ordinal))
+                    {
+                        return actions;
+                    }
                     var files = Directory.GetFiles(MotionsDirectory, "*", SearchOption.TopDirectoryOnly)
                         .Where(path => string.Equals(Path.GetExtension(path), ".vmd", StringComparison.OrdinalIgnoreCase))
                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
@@ -597,6 +607,19 @@ namespace QuestMmdPlayer
                     actionPaths.Add(pair.Key, pair.Value);
                 }
                 actions = discovered.ToArray();
+                try
+                {
+                    actionDirectoryFingerprint = BuildActionDirectoryFingerprint(MotionsDirectory);
+                    hasRefreshSnapshot = true;
+                }
+                catch (Exception exception) when (
+                    exception is IOException ||
+                    exception is UnauthorizedAccessException ||
+                    exception is ArgumentException)
+                {
+                    hasRefreshSnapshot = false;
+                    ReportFailure("Unable to fingerprint VMD action directory: " + exception.Message);
+                }
                 ActionsChanged?.Invoke();
                 return actions;
             }
@@ -604,6 +627,26 @@ namespace QuestMmdPlayer
             {
                 refreshGate.Release();
             }
+        }
+
+        private static string BuildActionDirectoryFingerprint(string directory)
+        {
+            var root = Path.GetFullPath(directory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var builder = new StringBuilder();
+            var files = Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
+            foreach (var path in files)
+            {
+                var info = new FileInfo(path);
+                builder.Append(path.Substring(root.Length))
+                    .Append(':')
+                    .Append(info.Length)
+                    .Append(':')
+                    .Append(info.LastWriteTimeUtc.Ticks)
+                    .Append('|');
+            }
+            return builder.ToString();
         }
         public void BindModel(PMXModel model, Transform modelRoot, AvatarController avatar)
         {
@@ -634,6 +677,8 @@ namespace QuestMmdPlayer
 
         public async Task<bool> PlayAsync(string actionId)
         {
+            var operationStartedAt = Time.realtimeSinceStartup;
+            var usedPreparedCache = false;
             if (IsLoading)
             {
                 ReportFailure("另一个 VMD 动作正在加载。");
@@ -666,6 +711,7 @@ namespace QuestMmdPlayer
                 if (preparedActions.TryGetValue(actionId, out var prepared) &&
                     string.Equals(prepared.sourceCacheKey, source.cacheKey, StringComparison.Ordinal))
                 {
+                    usedPreparedCache = true;
                     prepared.lastUsedAt = Time.unscaledTime;
                     info = prepared.info;
                     nextBones = prepared.bones;
@@ -763,6 +809,11 @@ namespace QuestMmdPlayer
                 IsPlaying = true;
                 boundAvatar?.PlayAction("vmd");
                 ProgressChanged?.Invoke("正在播放 " + info.DisplayName);
+                Debug.Log(
+                    "[VmdActionLibrary] Playback ready: action=" + info.Id +
+                    " cache=" + usedPreparedCache +
+                    " elapsed_ms=" + Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)),
+                    this);
                 PlaybackChanged?.Invoke();
                 return true;
             }
@@ -774,6 +825,11 @@ namespace QuestMmdPlayer
                 exception is OverflowException)
             {
                 ReportFailure("VMD 动作加载失败：" + exception.Message);
+                Debug.LogWarning(
+                    "[VmdActionLibrary] Playback failed: action=" + actionId +
+                    " elapsed_ms=" + Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)) +
+                    " reason=" + exception.Message,
+                    this);
                 return false;
             }
             finally
@@ -794,12 +850,43 @@ namespace QuestMmdPlayer
 
         public async Task<bool> PlayRecommendedDanceAsync()
         {
-            var candidate = actions
+            // Refresh at request time so newly imported files are eligible;
+            // unchanged directories return the cached catalog immediately.
+            await RefreshAsync();
+
+            var candidate = SelectRecommendedDance(actions);
+            if (candidate == null)
+            {
+                Debug.LogWarning("[VmdActionLibrary] No imported action is available for the dance request.", this);
+                return false;
+            }
+
+            Debug.Log("[VmdActionLibrary] Recommended dance selected imported action: " + candidate.Id, this);
+            return await PlayAsync(candidate.Id);
+        }
+
+        public static VmdActionInfo SelectRecommendedDance(IEnumerable<VmdActionInfo> available)
+        {
+            var valid = (available ?? Enumerable.Empty<VmdActionInfo>())
+                .Where(info => info != null)
+                .ToArray();
+            var candidate = valid
                 .Where(info => info != null && IsDanceLikeName(info.Id))
                 .OrderByDescending(info => DanceNameScore(info.Id))
                 .ThenBy(info => info.Id, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
-            return candidate != null && await PlayAsync(candidate.Id);
+
+            // Imported actions are user-authored and are not required to use a
+            // dance-related filename. If no semantic filename is available,
+            // choose the first validated custom action instead of silently
+            // falling back to the rigid built-in pose.
+            if (candidate == null)
+            {
+                candidate = valid
+                    .OrderBy(info => info.Id, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+            }
+            return candidate;
         }
 
         public static bool IsDanceLikeName(string value)

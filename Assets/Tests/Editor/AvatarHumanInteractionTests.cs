@@ -112,17 +112,23 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void BodyContactDoesNotBecomeHandshakeWithoutHandGrip()
+        public void BodyContactProducesLocalBodyTouchWithoutBecomingHandshake()
         {
             Assert.AreEqual(
-                HumanInteractionKind.None,
+                HumanInteractionKind.BodyTouch,
                 AvatarHumanInteraction.ClassifyPhysicalContact(AvatarContactRegion.Body, false));
             Assert.AreEqual(
-                HumanInteractionKind.None,
+                HumanInteractionKind.BodyTouch,
                 AvatarHumanInteraction.ClassifyPhysicalContact(AvatarContactRegion.Face, false));
             Assert.AreEqual(
                 HumanInteractionKind.HeadPat,
                 AvatarHumanInteraction.ClassifyPhysicalContact(AvatarContactRegion.Head, false));
+            Assert.AreEqual(
+                HumanInteractionKind.HeadPat,
+                AvatarHumanInteraction.ClassifyPhysicalContact(AvatarContactRegion.Hair, true));
+            Assert.AreEqual(
+                HumanInteractionKind.BodyTouch,
+                AvatarHumanInteraction.ClassifyPhysicalContact(AvatarContactRegion.Limb, false));
             Assert.AreEqual(
                 HumanInteractionKind.CheekPinch,
                 AvatarHumanInteraction.ClassifyPhysicalContact(AvatarContactRegion.Face, true));

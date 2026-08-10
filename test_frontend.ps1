@@ -36,6 +36,8 @@ $requiredFiles = @(
     "Assets/Scripts/Core/AvatarCommand.cs",
     "Assets/Scripts/Core/AvatarController.cs",
     "Assets/Scripts/Core/AvatarTouchInteraction.cs",
+    "Assets/Scripts/Core/AvatarMmdPhysicsAdapter.cs",
+    "Packages/com.candidumgames.unitymmdtools/Runtime/MMDRuntime/MMDPhysicsManager.cs",
     "Assets/Scripts/Core/QuestMmdPlayerBootstrap.cs",
     "Assets/Scripts/Core/QuestQualitySettings.cs",
     "Assets/Scripts/Core/RuntimeDiagnosticsSnapshot.cs",
@@ -69,6 +71,7 @@ $requiredFiles = @(
     "Assets/Plugins/Android/arm64-v8a/libc++_shared.so",
     "Assets/Tests/Editor/AvatarCommandTests.cs",
     "Assets/Tests/Editor/AvatarHumanInteractionTests.cs",
+    "Assets/Tests/Editor/MmdPhysicsAdapterTests.cs",
     "Assets/Tests/Editor/ConversationStateMachineTests.cs",
     "Assets/Tests/Editor/ExternalInteractionTurnTests.cs",
     "Assets/Tests/Editor/Pcm16CaptureUtilityTests.cs",
@@ -160,7 +163,7 @@ $sourceChecks = @{
     "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("LoadFromFileAsync", "PMXImporter.BuildUnityObjectsAsync", "streamingAssetsPath", "textureBaseDirectory", "PreserveOriginalNames")
     "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VmdActionFilePolicy", "SearchOption.TopDirectoryOnly", "VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "DefaultExecutionOrder(11000)", "bakePhysicsToFK = true", "BeginPhysicsArbitration", "StopAndReturnToIdle")
     "Assets/Scripts/Core/QuestQualitySettings.cs" = @("XRSettings.eyeTextureResolutionScale", "XRSettings.renderViewportScale", "QuestQualityPreset.Clear", "UniversalRenderPipelineAsset", "PlayerPrefs.Save")
-    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel", "PlayerSettings.SetApplicationIdentifier", "com.lingxi.banxia", "Builds/Banxia.apk")
+    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel", "PlayerSettings.SetApplicationIdentifier", "PlayerSettings.bundleVersion = AndroidVersionName", "PlayerSettings.Android.bundleVersionCode = AndroidVersionCode", "com.lingxi.banxia", "0.1.4", "Builds/Banxia.apk")
     "Assets/Plugins/Android/AndroidManifest.xml" = @("com.unity3d.player.UnityPlayerActivity", "android.intent.action.MAIN", "android.intent.category.LAUNCHER")
     "Assets/Editor/QuestPrivateLanManifestPostprocessor.cs" = @("usesCleartextTraffic", "horizonos.permission.HAND_TRACKING", "EnsurePermission", "ConfigureFilePickerModule", "buildConfig = false")
     "Assets/Editor/QuestMmdPlayerRuntimeSmokeTest.cs" = @("PMXImporter.Import", "applyRenames = false", "Runtime PMX Smoke Test")
@@ -175,6 +178,8 @@ $sourceChecks = @{
     "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/main/java/com/lingxi/banxia/filepicker/BanxiaFilePickerActivity.java" = @("Intent.ACTION_OPEN_DOCUMENT", "Intent.EXTRA_ALLOW_MULTIPLE", "copyUris", "replaceAll", "Imports/Batches", "Class.forName", "UnitySendMessage")
     "Assets/Scripts/Core/AvatarController.cs" = @("Move", "Rotate", "Scale", "PlayAction", "TogglePlayback", "CaptureActionPose", "rightUpperArm", "ApplyWave", "ApplyBow")
     "Assets/Scripts/Core/AvatarTouchInteraction.cs" = @("InputDevices.GetDeviceAtXRNode", "TouchStateChanged", "ApplyDualGrab", "primaryButton", "triggerButton", "XRHandJointID.IndexTip", "SetSemanticInteractionLock")
+    "Assets/Scripts/Core/AvatarMmdPhysicsAdapter.cs" = @("ConfigureExternalKinematicSpheres", "SetExternalKinematicSpherePose", "PhysicsProbeCount")
+    "Packages/com.candidumgames.unitymmdtools/Runtime/MMDRuntime/MMDPhysicsManager.cs" = @("ConfigureExternalKinematicSpheres", "SetExternalKinematicSpherePose", "CreateExternalKinematicSphereData", "collisionGroupMask = -1")
     "Assets/Scripts/Core/QuestMmdPlayerBootstrap.cs" = @("AndroidTaskLabel", "ActivityManager$TaskDescription", "setTaskDescription", "AvatarTouchInteraction", "AvatarHumanInteraction", "ConversationController", "QuestMicrophoneInput", "RoomUnderstandingService", "QuestFileImportService", "FileImport.Initialize", "BindInteractions", "handshake", "head_pat", "cheek_pinch")
     "Assets/Scripts/Core/AvatarHumanInteraction.cs" = @("XRHandSubsystem", "XRHandJointID.Palm", "HumanInteractionKind.Handshake", "HumanInteractionKind.HeadPat", "HumanInteractionKind.CheekPinch", "SimulateInteraction", "SetLocalReactionsEnabled", "PlayReaction", "SetSemanticInteractionLock")
     "Assets/Tests/Editor/AvatarCommandTests.cs" = @("JsonCommandIsAcceptedByBridge", "InvalidJsonIsRejected")

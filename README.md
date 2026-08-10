@@ -11,7 +11,7 @@
 ## 当前实现
 
 - 运行时直接读取 PMX，不把模型预转换成 GLB。
-- 使用嵌入式 com.candidumgames.unitymmdtools 0.5.0 构建材质、贴图、骨骼、Morph、IK、刚体和关节。
+- 使用嵌入式 com.candidumgames.unitymmdtools 0.5.0（含伴夏手部外部刚体适配补丁）构建材质、贴图、骨骼、Morph、IK、刚体和关节。
 - 启动时把 Assets/StreamingAssets/MmdSamples/ForestBerry 解包到持久化目录，再从磁盘读取 PMX 和同目录贴图。
 - RuntimeMmdModelLoader.LoadFromFileAsync(pmxPath, textureBaseDirectory) 已作为后续文件选择器、网络下载或 AstrBot 桥接的统一入口。
 - 模型加载失败时显示本地回退人偶，便于继续测试 HUD 和命令流。
@@ -86,10 +86,11 @@ Assets/StreamingAssets/MmdSamples/ForestBerry 只用于本地冒烟测试，模�
 - 左手 A：鞠躬；左手 B：重置位置、旋转和缩放。
 - “语音 -> 文字对话”可打开系统键盘，或直接选择中文测试短句；发送始终使用当前真实 AstrBot transport，不会自动切换到 Mock。
 - 手掌靠近角色手部：握手；张开手掌靠近头顶：摸头；在脸旁捏合：捏脸。
+- 手掌和五个指尖会作为运动学球体加入角色现有的 UMT/Bullet 世界，能够推动模型自带的动态头发和衣物刚体；语义接触仍由独立代理判定。
 - 控制器模式下使用 Grip/Trigger 触发接触和拖动。
 - 单手拖动角色；双手移动、水平旋转并按双手距离缩放。
 - 编辑器左上角 HUD 可直接模拟三种真人式交互，不戴头显也能验证。
 
-当前接触传感已经可用，但 Unity 不再自行决定反应：它把 `handshake/head_pat/cheek_pinch` 的开始和结束上报给后端，再执行 AstrBot 返回的结构化意图。当前 Mock 可在无后端时验证这条链路；手臂仍是原型骨骼反馈，不是连续 Two Bone IK。
+当前接触传感会在本地立即给出物理和表情反馈，同时把 `handshake/head_pat/cheek_pinch` 的开始和结束上报给后端；AstrBot 返回的结构化意图可以继续补充动作。PMX 动态头发和衣物由同一个 Bullet 求解器响应，手臂仍是原型骨骼反馈，不是连续 Two Bone IK。
 
 开发机可在冷启动时通过 Android Intent 模拟一条客户端文字输入：`quest_debug_command=send_text` 与 `quest_debug_text=<测试文本>`。该入口等待真实 SSE 会话就绪后调用 `ConversationController.StartConversation`，不读取或打印正文，也不会绕过身份授权。

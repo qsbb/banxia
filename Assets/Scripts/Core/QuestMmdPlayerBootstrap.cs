@@ -26,6 +26,7 @@ namespace QuestMmdPlayer
         public AvatarTouchInteraction TouchInteraction { get; private set; }
         public AvatarHumanInteraction HumanInteraction { get; private set; }
         public QuestTrackedHandVisualizer TrackedHands { get; private set; }
+        public AvatarMmdPhysicsAdapter HandPhysics { get; private set; }
         public QuestAvatarRayInteraction AvatarRayInteraction { get; private set; }
         public CompanionWorldMenu Menu { get; private set; }
         public ConversationController Conversation { get; private set; }
@@ -68,6 +69,7 @@ namespace QuestMmdPlayer
                 HumanInteraction = gameObject.GetComponent<AvatarHumanInteraction>() ?? gameObject.AddComponent<AvatarHumanInteraction>();
             }
             TrackedHands = gameObject.GetComponent<QuestTrackedHandVisualizer>() ?? gameObject.AddComponent<QuestTrackedHandVisualizer>();
+            HandPhysics = gameObject.GetComponent<AvatarMmdPhysicsAdapter>() ?? gameObject.AddComponent<AvatarMmdPhysicsAdapter>();
             if (createConversationPrototype)
             {
                 Conversation = gameObject.GetComponent<ConversationController>() ?? gameObject.AddComponent<ConversationController>();
@@ -266,6 +268,7 @@ namespace QuestMmdPlayer
                 HumanInteraction.Bind(Avatar);
             }
             TrackedHands?.Bind(HumanInteraction);
+            HandPhysics?.Bind(Avatar, TrackedHands);
             if (AvatarRayInteraction != null)
             {
                 AvatarRayInteraction.Bind(Avatar, HumanInteraction, Menu);

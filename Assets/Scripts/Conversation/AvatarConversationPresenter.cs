@@ -31,6 +31,8 @@ namespace QuestMmdPlayer
         private AvatarHumanInteraction humanInteraction;
         private Pcm16StreamAudioPlayer audioPlayer;
         private VmdActionLibrary vmdActions;
+        private RuntimeDebugLog diagnostics;
+        private System.Threading.Tasks.Task activeDanceTask;
         private Transform head;
         private Transform jaw;
         private Quaternion headBaseRotation;
@@ -62,6 +64,7 @@ namespace QuestMmdPlayer
             humanInteraction = human;
             audioPlayer = streamPlayer;
             vmdActions = GetComponent<VmdActionLibrary>();
+            diagnostics = GetComponent<RuntimeDebugLog>();
             head = null;
             jaw = null;
             visemes.Clear();
@@ -126,8 +129,11 @@ namespace QuestMmdPlayer
                     Time.unscaledTime,
                     out var acceptedGesture))
             {
+                diagnostics?.Record("AvatarAction", "后端动作意图被本地仲裁阻止：" + gesture);
                 return;
             }
+
+            diagnostics?.Record("AvatarAction", "后端动作意图已接受：" + acceptedGesture);
 
             if (acceptedGesture == "handshake")
             {
@@ -169,6 +175,7 @@ namespace QuestMmdPlayer
             var normalized = string.IsNullOrWhiteSpace(action)
                 ? "idle"
                 : action.Trim().ToLowerInvariant();
+            diagnostics?.Record("AvatarAction", "本地动作回退执行：" + normalized);
             if (normalized == "dance")
             {
                 _ = PlayRecommendedDance();
@@ -183,23 +190,60 @@ namespace QuestMmdPlayer
 
         private async System.Threading.Tasks.Task PlayRecommendedDance()
         {
+            if (activeDanceTask != null && !activeDanceTask.IsCompleted)
+            {
+                diagnostics?.Record("AvatarAction", "舞蹈请求合并到正在加载的动作");
+                await activeDanceTask;
+                return;
+            }
+
+            activeDanceTask = PlayRecommendedDanceCore();
+            try
+            {
+                await activeDanceTask;
+            }
+            finally
+            {
+                activeDanceTask = null;
+            }
+        }
+
+        private async System.Threading.Tasks.Task PlayRecommendedDanceCore()
+        {
+            diagnostics?.Record("AvatarAction", "开始查找可播放的自定义舞蹈动作");
             if (vmdActions != null && vmdActions.BoundModel)
             {
                 try
                 {
-                    if (await vmdActions.PlayRecommendedDanceAsync())
+                    var played = await vmdActions.PlayRecommendedDanceAsync();
+                    diagnostics?.Record(
+                        "AvatarAction",
+                        played
+                            ? "舞蹈请求已播放导入动作：" + vmdActions.CurrentActionId
+                            : "舞蹈请求未找到可播放的导入动作");
+                    if (played)
                     {
                         return;
                     }
                 }
                 catch (Exception exception)
                 {
+                    diagnostics?.Record("AvatarAction", "导入舞蹈播放失败：" + exception.Message);
                     Debug.LogWarning("[ConversationPresenter] Dance motion fallback failed: " + exception.Message, this);
                 }
+            }
+            else
+            {
+                diagnostics?.Record(
+                    "AvatarAction",
+                    vmdActions == null
+                        ? "自定义动作库未绑定，改用内置舞蹈"
+                        : "角色模型未绑定到自定义动作库，改用内置舞蹈");
             }
 
             // A built-in fallback keeps the explicit request visible even when
             // no imported dance is installed or the VMD is not compatible.
+            diagnostics?.Record("AvatarAction", "播放内置舞蹈回退动作");
             avatar?.PlayAction("dance");
         }
 
@@ -242,6 +286,7 @@ namespace QuestMmdPlayer
                     UnityEngine.Random.value,
                     out var gesture))
             {
+                diagnostics?.Record("AvatarAction", "自动待机动作：" + gesture);
                 avatar.PlayAction(gesture);
             }
         }

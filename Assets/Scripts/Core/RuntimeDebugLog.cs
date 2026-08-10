@@ -22,9 +22,13 @@ namespace QuestMmdPlayer
             "[AstrBotBridge]",
             "[BackendPairing]",
             "[HumanInteraction]",
+            "[AvatarAction]",
+            "[ConversationPresenter]",
+            "[CompanionMenu]",
             "[TouchInteraction]",
             "[AvatarTouch]",
             "[HandTracking]",
+            "[MmdPhysicsAdapter]",
             "[IdlePose]",
             "[PcmStream]",
             "[AvatarPlacement]",
@@ -273,6 +277,7 @@ namespace QuestMmdPlayer
                 case "tts": return "语音合成";
                 case "audio_playback": return "音频播放";
                 case "reply": return "回复结束";
+                case "avatar_action": return "角色动作";
                 case "interrupt": return "打断";
                 default: return value;
             }
@@ -341,6 +346,13 @@ namespace QuestMmdPlayer
                 case "no_speech_detected": return "没有检测到说话";
                 case "response_first_event_timeout": return "后端接收后没有返回首个事件";
                 case "response_event_stall_timeout": return "后端事件流在回复结束前停滞";
+                case "asr_final": return "录音结束到识别完成";
+                case "asr_to_first_text": return "识别完成到首段回复";
+                case "first_event": return "录音结束到首个事件";
+                case "first_text": return "录音结束到首段回复";
+                case "first_audio": return "录音结束到首段语音";
+                case "text_to_first_audio": return "首段文字到首段语音";
+                case "reply_end": return "录音结束到回复结束";
                 case "empty_reply": return "后端结束了空回复";
                 case "empty_backend_reply": return "后端结束了空回复";
                 case "configuration_missing": return "尚未绑定后端";

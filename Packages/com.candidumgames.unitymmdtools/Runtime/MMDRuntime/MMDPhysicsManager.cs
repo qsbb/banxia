@@ -64,6 +64,10 @@ namespace UMT
             internal NativeArray<float4x4> previousKineticTargets;
             /// <summary>Scratch: current-frame kinetic-body world targets.</summary>
             internal NativeArray<float4x4> currentKineticTargets;
+            /// <summary>Marks kinematic bodies driven by external tracked objects rather than PMX bones.</summary>
+            internal NativeArray<bool> externalKinematicFlags;
+            /// <summary>World targets for externally driven kinematic bodies.</summary>
+            internal NativeArray<float4x4> externalKinematicTargets;
             /// <summary>Unconsumed simulation time carried between frames so variable frame times map onto whole fixed substeps without drifting.</summary>
             internal float timeAccumulator;
             /// <summary>Whether the initial bone-driven rigid-body pose has been applied.</summary>
@@ -74,6 +78,13 @@ namespace UMT
 
         /// <summary>Transform access array over the rigid-body owner objects driving the flush transform job, rebuilt with the runtime data.</summary>
         private TransformAccessArray m_RigidBodyTransformAccess;
+        private float[] m_ExternalKinematicSphereRadii = Array.Empty<float>();
+        private bool[] m_ExternalKinematicActive = Array.Empty<bool>();
+        private NativeArray<float4x4> m_ExternalPoseScratchTransforms;
+        private NativeArray<int> m_ExternalPoseScratchIndices;
+
+        /// <summary>Number of runtime hand/contact spheres appended to the native Bullet world.</summary>
+        public int externalKinematicSphereCount => m_ExternalKinematicSphereRadii.Length;
 
         /// <summary>
         /// Writes each rigid body's world transform onto its owner object's Unity transform.
@@ -121,6 +132,87 @@ namespace UMT
         }
 
         /// <summary>
+        /// Appends spherical kinematic colliders to the same native Bullet
+        /// world as the model rigid bodies. This is used by the Quest hand
+        /// adapter; changing the radii rebuilds the context, while pose updates
+        /// only update one existing kinematic body.
+        /// </summary>
+        public void ConfigureExternalKinematicSpheres(float[] radii)
+        {
+            var sanitized = radii == null ? Array.Empty<float>() : new float[radii.Length];
+            for (int i = 0; i < sanitized.Length; ++i)
+            {
+                sanitized[i] = math.clamp(math.abs(radii[i]), 0.004f, 0.08f);
+            }
+
+            if (m_ExternalKinematicSphereRadii.Length == sanitized.Length)
+            {
+                bool equal = true;
+                for (int i = 0; i < sanitized.Length; ++i)
+                {
+                    if (math.abs(m_ExternalKinematicSphereRadii[i] - sanitized[i]) > 0.0001f)
+                    {
+                        equal = false;
+                        break;
+                    }
+                }
+                if (equal) return;
+            }
+
+            m_ExternalKinematicSphereRadii = sanitized;
+            m_ExternalKinematicActive = new bool[sanitized.Length];
+            if (isActiveAndEnabled && Application.isPlaying)
+            {
+                Initialize();
+            }
+        }
+
+        /// <summary>Moves one external sphere. Inactive spheres are teleported below the scene and have their velocity cleared.</summary>
+        public bool SetExternalKinematicSpherePose(int sphereIndex, Vector3 worldPosition, bool active)
+        {
+            if (sphereIndex < 0 || sphereIndex >= m_ExternalKinematicSphereRadii.Length ||
+                !m_PhysicsSolverContext.externalKinematicTargets.IsCreated)
+            {
+                return false;
+            }
+
+            int bodyIndex = rigidBodies.Length + sphereIndex;
+            float3 position = active && IsFinite(worldPosition)
+                ? (float3)worldPosition
+                : new float3(0.0f, -1000.0f - sphereIndex, 0.0f);
+            float4x4 target = float4x4.Translate(position);
+            m_PhysicsSolverContext.externalKinematicTargets[bodyIndex] = target;
+
+            bool stateChanged = m_ExternalKinematicActive[sphereIndex] != active;
+            m_ExternalKinematicActive[sphereIndex] = active;
+            if (stateChanged)
+            {
+                // Activation changes must teleport instead of sweeping from the
+                // offscreen parking position. Continuous tracked motion keeps
+                // the previous frame target so the fixed substeps interpolate it.
+                int kineticSlot = FindKineticSlot(bodyIndex, in m_PhysicsSolverContext.kineticRigidBodyIndices);
+                if (kineticSlot >= 0 && m_PhysicsSolverContext.previousKineticTargets.IsCreated)
+                {
+                    m_PhysicsSolverContext.previousKineticTargets[kineticSlot] = target;
+                    m_PhysicsSolverContext.currentKineticTargets[kineticSlot] = target;
+                }
+
+                if (m_PhysicsSolverContext.bulletPhysicsContext.isValid &&
+                    m_ExternalPoseScratchTransforms.IsCreated && m_ExternalPoseScratchIndices.IsCreated)
+                {
+                    m_ExternalPoseScratchTransforms[0] = target;
+                    m_ExternalPoseScratchIndices[0] = bodyIndex;
+                    m_PhysicsSolverContext.bulletPhysicsContext.SetRigidBodyTransforms(
+                        1,
+                        m_ExternalPoseScratchTransforms,
+                        m_ExternalPoseScratchIndices,
+                        true);
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Resets the native simulation with <see cref="physicsSeed"/>, restores simulated bones to their initial pose, and clears the initial-pose-applied flag.
         /// </summary>
         internal void ResetPhysics()
@@ -161,6 +253,13 @@ namespace UMT
             ResizePersistent(ref runtimeContext.rigidBodySimulationData, model.rigidBodies.Length);
             ResizePersistent(ref runtimeContext.worldTransforms, model.rigidBodies.Length);
             ResizePersistent(ref runtimeContext.rigidBodyIndices, model.rigidBodies.Length);
+            ResizePersistent(ref runtimeContext.externalKinematicFlags, model.rigidBodies.Length);
+            ResizePersistent(ref runtimeContext.externalKinematicTargets, model.rigidBodies.Length);
+            for (int i = 0; i < model.rigidBodies.Length; ++i)
+            {
+                runtimeContext.externalKinematicFlags[i] = false;
+                runtimeContext.externalKinematicTargets[i] = float4x4.identity;
+            }
 
             for (int i = 0; i < model.rigidBodies.Length; ++i)
             {
@@ -260,7 +359,61 @@ namespace UMT
             DisposeNativeArray(ref runtimeContext.rigidBodySimulationData);
             DisposeNativeArray(ref runtimeContext.previousKineticTargets);
             DisposeNativeArray(ref runtimeContext.currentKineticTargets);
+            DisposeNativeArray(ref runtimeContext.externalKinematicFlags);
+            DisposeNativeArray(ref runtimeContext.externalKinematicTargets);
             runtimeContext = default;
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
+                   !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
+                   !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+        }
+
+        private static int FindKineticSlot(int bodyIndex, in NativeArray<int> kineticIndices)
+        {
+            for (int i = 0; i < kineticIndices.Length; ++i)
+            {
+                if (kineticIndices[i] == bodyIndex) return i;
+            }
+            return -1;
+        }
+
+        /// <summary>Creates validated native data for one externally tracked sphere.</summary>
+        public static MMDRigidBody.RigidBodySimulationData CreateExternalKinematicSphereData(
+            int rigidBodyIndex,
+            float radius,
+            Vector3 worldPosition)
+        {
+            float safeRadius = math.clamp(math.abs(radius), 0.004f, 0.08f);
+            float3 safePosition = IsFinite(worldPosition) ? (float3)worldPosition : new float3(0.0f, -1000.0f, 0.0f);
+            return new MMDRigidBody.RigidBodySimulationData
+            {
+                rigidBodyIndex = math.max(0, rigidBodyIndex),
+                relatedBoneIndex = -1,
+                groupIndex = 15,
+                // UMT forwards this value directly to Bullet's collision mask.
+                // All bits must be enabled so tracked hands can contact PMX
+                // dynamic bodies regardless of their authored group.
+                collisionGroupMask = -1,
+                shape = PMXRigidBody.Shape.Sphere,
+                size = new float3(safeRadius, 0.0f, 0.0f),
+                position = safePosition,
+                rotation = float3.zero,
+                mass = 0.0f,
+                linearDamping = 1.0f,
+                angularDamping = 1.0f,
+                restitution = 0.0f,
+                friction = 0.65f,
+                mode = PMXRigidBody.Mode.Kinetic,
+                initialTransform = float4x4.identity,
+                hasRelatedBone = false,
+                boneLocalTransform = float4x4.identity,
+                boneModelPosition = float3.zero,
+                initialWorldTransform = float4x4.identity,
+                boneTransformLevel = -1,
+            };
         }
 
         /// <summary>
@@ -308,6 +461,10 @@ namespace UMT
             DisposeNativeArray(ref m_PhysicsSolverContext.rigidBodySimulationData);
             DisposeNativeArray(ref m_PhysicsSolverContext.previousKineticTargets);
             DisposeNativeArray(ref m_PhysicsSolverContext.currentKineticTargets);
+            DisposeNativeArray(ref m_PhysicsSolverContext.externalKinematicFlags);
+            DisposeNativeArray(ref m_PhysicsSolverContext.externalKinematicTargets);
+            DisposeNativeArray(ref m_ExternalPoseScratchTransforms);
+            DisposeNativeArray(ref m_ExternalPoseScratchIndices);
         }
 
         private void OnDestroy()
@@ -321,9 +478,13 @@ namespace UMT
         /// <exception cref="InvalidOperationException">Thrown when a rigid-body or joint array element is null.</exception>
         internal void RebuildRuntimeData()
         {
-            ResizePersistent(ref m_PhysicsSolverContext.rigidBodySimulationData, rigidBodies.Length);
+            int modelBodyCount = rigidBodies.Length;
+            int totalBodyCount = modelBodyCount + m_ExternalKinematicSphereRadii.Length;
+            ResizePersistent(ref m_PhysicsSolverContext.rigidBodySimulationData, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.externalKinematicFlags, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.externalKinematicTargets, totalBodyCount);
 
-            for (int i = 0; i < rigidBodies.Length; ++i)
+            for (int i = 0; i < modelBodyCount; ++i)
             {
                 MMDRigidBody rigidBody = rigidBodies[i];
                 if (rigidBody == null)
@@ -333,10 +494,22 @@ namespace UMT
 
                 rigidBody.InitializeRuntimeData();
                 m_PhysicsSolverContext.rigidBodySimulationData[i] = rigidBody.runtimeData;
+                m_PhysicsSolverContext.externalKinematicFlags[i] = false;
+                m_PhysicsSolverContext.externalKinematicTargets[i] = float4x4.identity;
+            }
+
+            for (int i = 0; i < m_ExternalKinematicSphereRadii.Length; ++i)
+            {
+                int bodyIndex = modelBodyCount + i;
+                float3 offscreenPosition = new float3(0.0f, -1000.0f - i, 0.0f);
+                m_PhysicsSolverContext.rigidBodySimulationData[bodyIndex] =
+                    CreateExternalKinematicSphereData(bodyIndex, m_ExternalKinematicSphereRadii[i], offscreenPosition);
+                m_PhysicsSolverContext.externalKinematicFlags[bodyIndex] = true;
+                m_PhysicsSolverContext.externalKinematicTargets[bodyIndex] = float4x4.Translate(offscreenPosition);
             }
 
             PhysicsMath.ComputeRigidBodyTransforms(ref m_PhysicsSolverContext.rigidBodySimulationData);
-            for (int i = 0; i < rigidBodies.Length; ++i)
+            for (int i = 0; i < modelBodyCount; ++i)
             {
                 rigidBodies[i].runtimeData = m_PhysicsSolverContext.rigidBodySimulationData[i];
             }
@@ -352,8 +525,11 @@ namespace UMT
                 joint.InitializeRuntimeData();
             }
 
-            ReallocateArraysIfNeeded(rigidBodies.Length);
+            ReallocateArraysIfNeeded(totalBodyCount);
             PhysicsMath.BuildStaticRigidBodyLists(ref m_PhysicsSolverContext);
+            ResizePersistent(ref m_ExternalPoseScratchTransforms, 1);
+            ResizePersistent(ref m_ExternalPoseScratchIndices, 1);
+            Array.Clear(m_ExternalKinematicActive, 0, m_ExternalKinematicActive.Length);
 
             if (m_RigidBodyTransformAccess.isCreated)
             {
@@ -662,8 +838,12 @@ namespace UMT
             {
                 for (int i = 0; i < runtimeContext.kineticRigidBodyIndices.Length; ++i)
                 {
-                    MMDRigidBody.RigidBodySimulationData rigidBody = runtimeContext.rigidBodySimulationData[runtimeContext.kineticRigidBodyIndices[i]];
-                    targets[i] = ComputeRigidBodyWorldTransform(rigidBody, in transformManagerContext.boneStateData);
+                    int bodyIndex = runtimeContext.kineticRigidBodyIndices[i];
+                    MMDRigidBody.RigidBodySimulationData rigidBody = runtimeContext.rigidBodySimulationData[bodyIndex];
+                    targets[i] = runtimeContext.externalKinematicFlags.IsCreated &&
+                        runtimeContext.externalKinematicFlags[bodyIndex]
+                        ? runtimeContext.externalKinematicTargets[bodyIndex]
+                        : ComputeRigidBodyWorldTransform(rigidBody, in transformManagerContext.boneStateData);
                 }
             }
 
@@ -672,7 +852,10 @@ namespace UMT
                 for (int i = 0; i < runtimeContext.rigidBodySimulationData.Length; ++i)
                 {
                     MMDRigidBody.RigidBodySimulationData rigidBody = runtimeContext.rigidBodySimulationData[i];
-                    runtimeContext.worldTransforms[i] = ComputeRigidBodyWorldTransform(rigidBody, in transformManagerContext.boneStateData);
+                    runtimeContext.worldTransforms[i] = runtimeContext.externalKinematicFlags.IsCreated &&
+                        runtimeContext.externalKinematicFlags[i]
+                        ? runtimeContext.externalKinematicTargets[i]
+                        : ComputeRigidBodyWorldTransform(rigidBody, in transformManagerContext.boneStateData);
                 }
 
                 runtimeContext.bulletPhysicsContext.SetRigidBodyTransforms(runtimeContext.rigidBodySimulationData.Length, runtimeContext.worldTransforms, runtimeContext.rigidBodyIndices, true);

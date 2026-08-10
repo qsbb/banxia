@@ -49,6 +49,10 @@ namespace QuestMmdPlayer
         private const string StableSessionPreferenceKey = "banxia.astrbot.session_id.v1";
         private int uploadedInputAudioBytes;
         private int uploadedInputBatchCount;
+        private int audioHttpRequestCount;
+        private int audioHttpRequestTotalMs;
+        private int audioHttpRequestMaxMs;
+        private int audioQueuedPeakBytes;
         private float audioUploadStartedAt;
         private float audioEndRequestedAt = -1f;
         private float nextSessionStartAt;
@@ -172,6 +176,10 @@ namespace QuestMmdPlayer
             queuedInputAudioBytes = 0;
             uploadedInputAudioBytes = 0;
             uploadedInputBatchCount = 0;
+            audioHttpRequestCount = 0;
+            audioHttpRequestTotalMs = 0;
+            audioHttpRequestMaxMs = 0;
+            audioQueuedPeakBytes = 0;
             audioUploadStartedAt = Time.unscaledTime;
             audioUploadDiagnosticStartedAt = DiagnosticTimestamp();
             audioEndRequestedAt = -1f;
@@ -212,6 +220,7 @@ namespace QuestMmdPlayer
             Buffer.BlockCopy(pcm16, 0, copy, 0, pcm16.Length);
             outgoingAudioChunks.Enqueue(copy);
             queuedInputAudioBytes += copy.Length;
+            audioQueuedPeakBytes = Mathf.Max(audioQueuedPeakBytes, queuedInputAudioBytes);
             return true;
         }
 
@@ -629,7 +638,14 @@ namespace QuestMmdPlayer
                         var now = Time.unscaledTime;
                         Debug.Log($"[AstrBotBridge] Voice upload complete: {uploadedInputAudioBytes} B in " +
                             $"{uploadedInputBatchCount} batches, stream {Mathf.Max(0f, now - audioUploadStartedAt):F2}s, " +
-                            $"final flush {(audioEndRequestedAt < 0f ? 0f : Mathf.Max(0f, now - audioEndRequestedAt)):F2}s.");
+                            $"final flush {(audioEndRequestedAt < 0f ? 0f : Mathf.Max(0f, now - audioEndRequestedAt)):F2}s, " +
+                            $"http requests={audioHttpRequestCount} max_ms={audioHttpRequestMaxMs} " +
+                            $"queue_peak={audioQueuedPeakBytes} B.");
+                        diagnostics?.Record(
+                            "AstrBotBridge",
+                            "语音上传网络统计：请求 " + audioHttpRequestCount +
+                            " 次，平均 " + (audioHttpRequestCount == 0 ? 0 : audioHttpRequestTotalMs / audioHttpRequestCount) +
+                            "ms，最长 " + audioHttpRequestMaxMs + "ms，队列峰值 " + audioQueuedPeakBytes + "B");
                         RecordStage(
                             "audio_upload",
                             "completed",
@@ -648,6 +664,7 @@ namespace QuestMmdPlayer
 
         private IEnumerator PostAudioJson(string endpoint, string json, string turnId, Action<bool> completed)
         {
+            var startedAt = DiagnosticTimestamp();
             using (var request = CreateJsonRequest(endpoint, json))
             {
                 activeAudioRequest = request;
@@ -655,6 +672,17 @@ namespace QuestMmdPlayer
                 if (ReferenceEquals(activeAudioRequest, request))
                 {
                     activeAudioRequest = null;
+                }
+                var elapsedMs = ElapsedMs(startedAt);
+                audioHttpRequestCount++;
+                audioHttpRequestTotalMs += elapsedMs;
+                audioHttpRequestMaxMs = Mathf.Max(audioHttpRequestMaxMs, elapsedMs);
+                if (endpoint == "audio/end" || elapsedMs >= 500)
+                {
+                    diagnostics?.Record(
+                        "AstrBotBridge",
+                        "语音请求 " + endpoint + " 耗时 " + elapsedMs + "ms" +
+                        (Succeeded(request) ? "（成功）" : "（失败）"));
                 }
                 var succeeded = Succeeded(request);
                 if (!succeeded && string.Equals(turnId, audioUploadTurnId, StringComparison.Ordinal))
@@ -733,6 +761,10 @@ namespace QuestMmdPlayer
             queuedInputAudioBytes = 0;
             uploadedInputAudioBytes = 0;
             uploadedInputBatchCount = 0;
+            audioHttpRequestCount = 0;
+            audioHttpRequestTotalMs = 0;
+            audioHttpRequestMaxMs = 0;
+            audioQueuedPeakBytes = 0;
             audioEndRequestedAt = -1f;
             audioUploadDiagnosticStartedAt = 0L;
             outgoingAudioChunks.Clear();
@@ -752,6 +784,10 @@ namespace QuestMmdPlayer
             queuedInputAudioBytes = 0;
             uploadedInputAudioBytes = 0;
             uploadedInputBatchCount = 0;
+            audioHttpRequestCount = 0;
+            audioHttpRequestTotalMs = 0;
+            audioHttpRequestMaxMs = 0;
+            audioQueuedPeakBytes = 0;
             audioEndRequestedAt = -1f;
             audioUploadDiagnosticStartedAt = 0L;
             outgoingAudioChunks.Clear();
@@ -759,6 +795,7 @@ namespace QuestMmdPlayer
 
         private IEnumerator PostJson(string endpoint, string json, string turnId, bool emitThinking)
         {
+            var startedAt = DiagnosticTimestamp();
             using (var request = CreateJsonRequest(endpoint, json))
             {
                 yield return request.SendWebRequest();
@@ -777,14 +814,16 @@ namespace QuestMmdPlayer
                         RecordStage(
                             "eventbus",
                             "processing",
-                            httpStatus: request.responseCode);
+                            httpStatus: request.responseCode,
+                            elapsedMs: ElapsedMs(startedAt));
                     }
                     else if (endpoint == "interrupt")
                     {
                         RecordStage(
                             "interrupt",
                             "completed",
-                            httpStatus: request.responseCode);
+                            httpStatus: request.responseCode,
+                            elapsedMs: ElapsedMs(startedAt));
                     }
                 }
                 else if (!string.IsNullOrEmpty(turnId))
@@ -800,7 +839,8 @@ namespace QuestMmdPlayer
                         endpoint == "interrupt" ? "interrupt" : "eventbus",
                         "failed",
                         ReadFailureCode(request, "http_request_failed"),
-                        request.responseCode);
+                        request.responseCode,
+                        ElapsedMs(startedAt));
                 }
                 else
                 {

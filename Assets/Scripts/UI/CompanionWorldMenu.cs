@@ -670,6 +670,7 @@ namespace QuestMmdPlayer
             }
 
             SetTransientStatus(ActionDisplayName(normalized) + "已触发", 2.8f);
+            owner.DebugLog?.Record("AvatarAction", "手动选择内置动作：" + normalized);
             Debug.Log("[CompanionMenu] Action requested: " + normalized, this);
         }
 
@@ -748,7 +749,12 @@ namespace QuestMmdPlayer
             {
                 externalActionText.text = "正在加载 " + library.Actions[externalActionIndex].DisplayName;
             }
-            await library.PlayAsync(library.Actions[externalActionIndex].Id);
+            var actionId = library.Actions[externalActionIndex].Id;
+            var played = await library.PlayAsync(actionId);
+            owner.DebugLog?.Record(
+                "AvatarAction",
+                "手动选择导入动作：" + actionId +
+                (played ? "（已开始）" : "（播放失败）"));
             RefreshExternalActionText();
             RefreshActionList();
         }

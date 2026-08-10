@@ -6,6 +6,7 @@ namespace QuestMmdPlayer.Tests
     public sealed class ConversationActionIntentTests
     {
         [TestCase("帮我跳个舞", "dance")]
+        [TestCase("随便跳个舞", "dance")]
         [TestCase("请挥手", "wave")]
         [TestCase("鞠躬一下", "bow")]
         [TestCase("点点头", "nod")]
