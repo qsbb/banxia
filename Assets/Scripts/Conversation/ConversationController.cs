@@ -40,6 +40,7 @@ namespace QuestMmdPlayer
         private bool backendDecisionReported;
         private bool backendTtsReported;
         private bool backendTotalReported;
+        private int activePlaybackGeneration = -1;
         private RuntimeDebugLog diagnostics;
         [SerializeField] private bool allowAutomaticMockTransport;
         [SerializeField] private bool sendInteractionEvents = true;
@@ -130,7 +131,7 @@ namespace QuestMmdPlayer
             }
             if (audioPlayer != null)
             {
-                audioPlayer.StopAndClear();
+                StopAudioStream();
             }
             stateMachine.ResetToIdle();
             awaitingBackendResponse = false;
@@ -218,7 +219,7 @@ namespace QuestMmdPlayer
             }
 
             CancelCurrentTurn(false);
-            audioPlayer?.BeginStream();
+            BeginAudioStream();
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
             pendingLocalAction = string.Empty;
@@ -233,7 +234,7 @@ namespace QuestMmdPlayer
                 return true;
             }
 
-            audioPlayer?.StopAndClear();
+            StopAudioStream();
             stateMachine.ResetToIdle();
             NotifyStateChanged();
             Debug.LogWarning("[Conversation] Voice input start rejected by transport.", this);
@@ -298,7 +299,7 @@ namespace QuestMmdPlayer
 
             var text = string.IsNullOrWhiteSpace(userText) ? "你好，能听见我吗？" : userText.Trim();
             CancelCurrentTurn(false);
-            audioPlayer?.BeginStream();
+            BeginAudioStream();
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
             pendingLocalAction = string.Empty;
@@ -324,7 +325,7 @@ namespace QuestMmdPlayer
             awaitingBackendResponse = false;
             pendingLocalAction = string.Empty;
             transport?.Interrupt(stateMachine.TurnId);
-            audioPlayer?.StopAndClear();
+            StopAudioStream();
             interruptedUntil = Time.unscaledTime + .3f;
             NotifyStateChanged();
             RecordStage("interrupt", "completed");
@@ -387,7 +388,7 @@ namespace QuestMmdPlayer
                         }
                         return;
                     }
-                    audioPlayer?.BeginStream();
+                    BeginAudioStream();
                     stateMachine.BeginExternal(message.TurnId);
                     NotifyStateChanged();
                 }
@@ -402,7 +403,7 @@ namespace QuestMmdPlayer
             {
                 TryQueueLocalAction(message.Text);
             }
-            if (message.Type != ConversationEventType.AvatarIntent)
+            if (message.Type != ConversationEventType.AvatarIntent && !message.IsSyntheticTransportEvent)
             {
                 lastBackendProgressAt = Time.unscaledTime;
             }
@@ -412,14 +413,17 @@ namespace QuestMmdPlayer
             {
                 case ConversationEventType.AudioChunk:
                     audioPlayer?.Enqueue(message.Pcm16, message.SampleRate);
-                    RecordStage(
-                        "audio_buffer",
-                        "queued",
-                        "pcm_chunk",
-                        chunks: replyAudioChunkCount,
-                        bytes: message.Pcm16 == null ? 0 : message.Pcm16.Length * 2,
-                        queueDepth: audioPlayer == null ? -1 : audioPlayer.QueuedChunkCount,
-                        bufferedMs: audioPlayer == null ? -1 : Mathf.RoundToInt(audioPlayer.BufferedSeconds * 1000f));
+                    if (replyAudioChunkCount == 1)
+                    {
+                        RecordStage(
+                            "audio_buffer",
+                            "queued",
+                            "first_pcm_chunk",
+                            chunks: replyAudioChunkCount,
+                            bytes: message.Pcm16 == null ? 0 : message.Pcm16.Length * 2,
+                            queueDepth: audioPlayer == null ? -1 : audioPlayer.QueuedChunkCount,
+                            bufferedMs: audioPlayer == null ? -1 : Mathf.RoundToInt(audioPlayer.BufferedSeconds * 1000f));
+                    }
                     break;
                 case ConversationEventType.ReplyEnd:
                     if (string.IsNullOrWhiteSpace(stateMachine.ReplyText) && replyAudioChunkCount == 0)
@@ -448,7 +452,7 @@ namespace QuestMmdPlayer
                         message.Emotion, message.Gesture, message.LookAt, message.Intensity, message.DurationMs);
                     break;
                 case ConversationEventType.Error:
-                    audioPlayer?.StopAndClear();
+                    StopAudioStream();
                     LastErrorCode = string.IsNullOrWhiteSpace(message.ErrorCode)
                         ? "conversation_error"
                         : message.ErrorCode;
@@ -571,12 +575,12 @@ namespace QuestMmdPlayer
             }
             if (stateMachine.State == ConversationState.Idle)
             {
-                audioPlayer?.StopAndClear();
+                StopAudioStream();
                 return;
             }
 
             transport?.Interrupt(stateMachine.TurnId);
-            audioPlayer?.StopAndClear();
+            StopAudioStream();
             if (showInterrupted)
             {
                 stateMachine.Interrupt();
@@ -719,7 +723,7 @@ namespace QuestMmdPlayer
             awaitingBackendResponse = false;
             LastErrorCode = code;
             transport?.Interrupt(turnId);
-            audioPlayer?.StopAndClear();
+            StopAudioStream();
             errorUntil = Time.unscaledTime + 1.25f;
             NotifyStateChanged();
             RecordStage("reply", "failed", code);
@@ -761,10 +765,25 @@ namespace QuestMmdPlayer
             return true;
         }
 
+        private void BeginAudioStream()
+        {
+            activePlaybackGeneration = audioPlayer == null ? -1 : audioPlayer.BeginStream();
+        }
+
+        private void StopAudioStream()
+        {
+            audioPlayer?.StopAndClear();
+            activePlaybackGeneration = -1;
+        }
+
         private void RecordEventTiming(ConversationEvent message)
         {
             var now = Time.unscaledTime;
             RecordBackendTiming(message);
+            if (message.IsSyntheticTransportEvent)
+            {
+                return;
+            }
             if (firstEventAt < 0f)
             {
                 firstEventAt = now;
@@ -832,16 +851,6 @@ namespace QuestMmdPlayer
                     replyAudioChunkCount);
             }
 
-            if (message.TransportQueueDelayMs >= 0 &&
-                (message.Type != ConversationEventType.AudioChunk || replyAudioChunkCount <= 1 ||
-                 message.TransportQueueDelayMs >= 25))
-            {
-                RecordStage(
-                    "sse_dispatch",
-                    "completed",
-                    "main_thread_queue",
-                    elapsedMs: message.TransportQueueDelayMs);
-            }
         }
 
         private string BuildTimingStatus(float now)
@@ -903,6 +912,10 @@ namespace QuestMmdPlayer
 
         private void HandlePlaybackTelemetry(PlaybackTelemetry telemetry)
         {
+            if (telemetry.Generation != activePlaybackGeneration)
+            {
+                return;
+            }
             playbackStartedAt = Time.unscaledTime;
             RecordStage(
                 "audio_playback",

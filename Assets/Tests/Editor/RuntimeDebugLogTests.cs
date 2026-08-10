@@ -79,7 +79,7 @@ namespace QuestMmdPlayer.Tests
                 bufferedMs: 120);
 
             Assert.That(trace, Does.Not.Contain(rawTurnId));
-            Assert.That(trace, Does.Match("^t[0-9a-f]{6}$"));
+            Assert.That(trace, Does.Match("^t[0-9a-f]{8}$"));
             Assert.That(diagnostics.GetRecentTimelineText(), Does.Contain("#" + trace));
             Assert.That(diagnostics.GetRecentTimelineText(), Does.Contain("队列3"));
             Assert.That(diagnostics.GetRecentTimelineText(), Does.Contain("缓冲120ms"));

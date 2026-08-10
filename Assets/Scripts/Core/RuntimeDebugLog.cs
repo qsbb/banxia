@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 using System.Text;
 using UnityEngine;
 
@@ -12,6 +13,7 @@ namespace QuestMmdPlayer
 
         private readonly Queue<string> entries = new Queue<string>();
         private readonly Queue<StageEntry> stageEntries = new Queue<StageEntry>();
+        private static readonly byte[] TraceKey = Guid.NewGuid().ToByteArray();
         private string rootCauseStage = string.Empty;
         private string rootCauseCode = string.Empty;
         private static readonly string[] AllowedPrefixes =
@@ -244,19 +246,14 @@ namespace QuestMmdPlayer
             return builder.ToString();
         }
 
-        /// <summary>Creates a stable, non-reversible short label without exposing the raw turn id.</summary>
+        /// <summary>Creates a process-local keyed label without exposing the raw turn id.</summary>
         public static string TraceLabel(string value)
         {
             if (string.IsNullOrEmpty(value)) return string.Empty;
-            unchecked
+            using (var hmac = new HMACSHA256(TraceKey))
             {
-                uint hash = 2166136261;
-                for (var index = 0; index < value.Length; index++)
-                {
-                    hash ^= value[index];
-                    hash *= 16777619;
-                }
-                return "t" + (hash & 0x00ffffffu).ToString("x6");
+                var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(value));
+                return "t" + BitConverter.ToString(hash, 0, 4).Replace("-", string.Empty).ToLowerInvariant();
             }
         }
 
@@ -394,6 +391,8 @@ namespace QuestMmdPlayer
                 case "server_timing": return "服务端耗时摘要";
                 case "main_thread_queue": return "主线程排队";
                 case "pcm_chunk": return "PCM 分块";
+                case "first_pcm_chunk": return "首个 PCM 分块";
+                case "pcm_max_chunk": return "最慢 PCM 编码块";
                 case "turn_start_http": return "turn/start 请求";
                 case "audio_chunk_http": return "audio/chunk 请求";
                 case "audio_end_http": return "audio/end 请求";

@@ -41,6 +41,8 @@ namespace QuestMmdPlayer
         public int SampleRate;
         public bool TextSent;
         public bool AudioSent;
+        /// <summary>True for a local transport acknowledgement, not a backend SSE event.</summary>
+        public bool IsSyntheticTransportEvent;
         /// <summary>Monotonic timestamp captured by the transport when an SSE frame arrived.</summary>
         public long TransportReceivedAtTicks;
         /// <summary>Delay from transport receipt to Unity main-thread dispatch, in milliseconds.</summary>

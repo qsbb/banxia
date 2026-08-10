@@ -126,6 +126,32 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void SyntheticTransportAckDoesNotCountAsFirstBackendEvent()
+        {
+            owner = new GameObject("Synthetic transport timing test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.StartConversation("hello");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.Thinking,
+                TurnId = controller.TurnId,
+                IsSyntheticTransportEvent = true
+            });
+            Assert.That(controller.TurnTimingStatus, Does.Contain("firstEvent=-ms"));
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AsrFinal,
+                TurnId = controller.TurnId,
+                Text = "hello"
+            });
+            Assert.That(controller.TurnTimingStatus, Does.Not.Contain("firstEvent=-ms"));
+        }
+
+        [Test]
         public void LocalTouchReactionsRemainImmediateWhenBackendConnectsOrDisconnects()
         {
             owner = new GameObject("Conversation fallback test");
@@ -307,6 +333,19 @@ namespace QuestMmdPlayer.Tests
             Assert.IsFalse(Pcm16StreamAudioPlayer.ShouldStartPlayback(1200, 24000, false, .12f));
             Assert.IsTrue(Pcm16StreamAudioPlayer.ShouldStartPlayback(2880, 24000, false, .12f));
             Assert.IsTrue(Pcm16StreamAudioPlayer.ShouldStartPlayback(1200, 24000, true, .12f));
+        }
+
+        [Test]
+        public void PcmStreamGenerationChangesAcrossCancellationAndRestart()
+        {
+            owner = new GameObject("PCM generation test");
+            var player = owner.AddComponent<Pcm16StreamAudioPlayer>();
+
+            var first = player.BeginStream();
+            player.StopAndClear();
+            var second = player.BeginStream();
+
+            Assert.That(second, Is.GreaterThan(first));
         }
         [Test]
         public void VoiceActivationRmsSeparatesSpeechFromSilence()

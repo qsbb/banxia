@@ -396,6 +396,9 @@ namespace QuestMmdPlayer
             }
 
             LastTurnCaptureSeconds = Mathf.Max(0f, Time.unscaledTime - recordingStartedAt);
+            var hadDetectedSpeech = detectedSpeech;
+            var trailingSilenceMs = Mathf.RoundToInt(
+                Mathf.Max(0f, Time.unscaledTime - lastVoiceAt) * 1000f);
             var accepted = conversation != null && conversation.EndVoiceInput();
             ResetActiveVoiceCapture();
             if (accepted)
@@ -410,11 +413,14 @@ namespace QuestMmdPlayer
                     bytes: LastTurnPcmBytes,
                     sampleRate: TargetSampleRate,
                     channels: 1);
-                diagnostics?.RecordStage(
-                    "microphone",
-                    "completed",
-                    "vad_trailing_silence",
-                    elapsedMs: Mathf.RoundToInt(Mathf.Max(0f, Time.unscaledTime - lastVoiceAt) * 1000f));
+                if (hadDetectedSpeech)
+                {
+                    diagnostics?.RecordStage(
+                        "microphone",
+                        "completed",
+                        "vad_trailing_silence",
+                        elapsedMs: trailingSilenceMs);
+                }
                 diagnostics?.RecordStage(
                     "audio_encode",
                     "completed",
@@ -422,6 +428,14 @@ namespace QuestMmdPlayer
                     elapsedMs: pcmEncodeTotalMs,
                     chunks: pcmEncodeCount,
                     bytes: LastTurnPcmBytes);
+                if (pcmEncodeMaxMs > 0)
+                {
+                    diagnostics?.RecordStage(
+                        "audio_encode",
+                        "completed",
+                        "pcm_max_chunk",
+                        elapsedMs: pcmEncodeMaxMs);
+                }
                 Debug.Log("[VoiceInput] Voice end accepted; waiting for reply.", this);
             }
             else

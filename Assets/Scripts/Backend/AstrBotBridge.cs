@@ -118,13 +118,9 @@ namespace QuestMmdPlayer
                 {
                     message.TransportReceivedAtTicks = frame.ReceivedAtTicks;
                     message.TransportQueueDelayMs = queueDelayMs;
-                    message.TransportDispatchedAtTicks = DiagnosticTimestamp();
-                    if (!string.IsNullOrEmpty(message.TurnId))
-                    {
-                        currentTraceId = RuntimeDebugLog.TraceLabel(message.TurnId);
-                    }
+                    var messageTraceId = RuntimeDebugLog.TraceLabel(message.TurnId);
                     sseFramesDispatched++;
-                    sseQueueDelayMaxMs = Mathf.Max(sseQueueDelayMaxMs, Mathf.Max(0, queueDelayMs));
+                    UpdateMaximum(ref sseQueueDelayMaxMs, Mathf.Max(0, queueDelayMs));
                     var firstAudioFrame = message.Type == ConversationEventType.AudioChunk && receivedReplyAudioChunks == 0;
                     if (message.Type != ConversationEventType.AudioChunk || firstAudioFrame || queueDelayMs >= 25)
                     {
@@ -134,19 +130,22 @@ namespace QuestMmdPlayer
                             "sse_queue",
                             elapsedMs: queueDelayMs,
                             eventCount: sseFramesDispatched,
+                            traceId: messageTraceId,
                             queueDepth: incomingFrames.Count);
                     }
-                    RecordIncomingEvent(message);
+                    RecordIncomingEvent(message, messageTraceId);
                     if (message.Type == ConversationEventType.ReplyEnd)
                     {
                         RecordStage(
                             "sse_dispatch",
                             "completed",
                             "sse_queue_summary",
-                            elapsedMs: sseQueueDelayMaxMs,
+                            elapsedMs: Volatile.Read(ref sseQueueDelayMaxMs),
                             eventCount: sseFramesDispatched,
-                            queueDepth: sseQueueDepthPeak);
+                            traceId: messageTraceId,
+                            queueDepth: Volatile.Read(ref sseQueueDepthPeak));
                     }
+                    message.TransportDispatchedAtTicks = DiagnosticTimestamp();
                     EventReceived?.Invoke(message);
                 }
                 else if (!error.Contains("stale session"))
@@ -678,7 +677,8 @@ namespace QuestMmdPlayer
                         EventReceived?.Invoke(new ConversationEvent
                         {
                             Type = ConversationEventType.Thinking,
-                            TurnId = turnId
+                            TurnId = turnId,
+                            IsSyntheticTransportEvent = true
                         });
                         SetStatus("AstrBot is processing voice");
                         var now = Time.unscaledTime;
@@ -737,15 +737,19 @@ namespace QuestMmdPlayer
                         (Succeeded(request) ? "（成功）" : "（失败）"));
                 }
                 var succeeded = Succeeded(request);
-                RecordStage(
-                    "audio_upload",
-                    succeeded ? "ok" : "failed",
-                    AudioRequestCode(endpoint),
-                    request.responseCode,
-                    elapsedMs,
-                    sequence >= 0 ? sequence + 1 : 0,
-                    payloadBytes,
-                    queueDepth: outgoingAudioChunks.Count);
+                if (!string.Equals(endpoint, "audio/chunk", StringComparison.Ordinal) ||
+                    sequence == 0 || !succeeded || elapsedMs >= 250)
+                {
+                    RecordStage(
+                        "audio_upload",
+                        succeeded ? "ok" : "failed",
+                        AudioRequestCode(endpoint),
+                        request.responseCode,
+                        elapsedMs,
+                        sequence >= 0 ? sequence + 1 : 0,
+                        payloadBytes,
+                        queueDepth: outgoingAudioChunks.Count);
+                }
                 if (!succeeded && string.Equals(turnId, audioUploadTurnId, StringComparison.Ordinal))
                 {
                     EventReceived?.Invoke(new ConversationEvent
@@ -867,7 +871,8 @@ namespace QuestMmdPlayer
                         EventReceived?.Invoke(new ConversationEvent
                         {
                             Type = ConversationEventType.Thinking,
-                            TurnId = turnId
+                            TurnId = turnId,
+                            IsSyntheticTransportEvent = true
                         });
                     }
                     if (endpoint == "turn/start")
@@ -1202,8 +1207,8 @@ namespace QuestMmdPlayer
             receivedErrorCode = string.Empty;
             Interlocked.Exchange(ref sseFramesReceived, 0);
             sseFramesDispatched = 0;
-            sseQueueDepthPeak = 0;
-            sseQueueDelayMaxMs = 0;
+            Interlocked.Exchange(ref sseQueueDepthPeak, 0);
+            Interlocked.Exchange(ref sseQueueDelayMaxMs, 0);
         }
 
         private static string AudioRequestCode(string endpoint)
@@ -1228,21 +1233,21 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void RecordIncomingEvent(ConversationEvent message)
+        private void RecordIncomingEvent(ConversationEvent message, string traceId)
         {
             if (message == null) return;
             receivedTurnEventCount++;
             switch (message.Type)
             {
                 case ConversationEventType.AsrFinal:
-                    RecordStage("stt", "completed", eventCount: receivedTurnEventCount);
+                    RecordStage("stt", "completed", eventCount: receivedTurnEventCount, traceId: traceId);
                     break;
                 case ConversationEventType.ReplyTextDelta:
                     if (!receivedReplyText)
                     {
                         receivedReplyText = true;
-                        RecordStage("eventbus", "completed", eventCount: receivedTurnEventCount);
-                        RecordStage("llm", "completed", eventCount: receivedTurnEventCount);
+                        RecordStage("eventbus", "completed", eventCount: receivedTurnEventCount, traceId: traceId);
+                        RecordStage("llm", "completed", eventCount: receivedTurnEventCount, traceId: traceId);
                     }
                     break;
                 case ConversationEventType.AudioChunk:
@@ -1254,7 +1259,12 @@ namespace QuestMmdPlayer
                         ? "bridge_error"
                         : message.ErrorCode;
                     receivedErrorCode = code;
-                    RecordStage(ErrorStage(code), "failed", code, eventCount: receivedTurnEventCount);
+                    RecordStage(
+                        ErrorStage(code),
+                        "failed",
+                        code,
+                        eventCount: receivedTurnEventCount,
+                        traceId: traceId);
                     break;
                 case ConversationEventType.ReplyEnd:
                     if (receivedReplyAudioChunks > 0)
@@ -1264,7 +1274,8 @@ namespace QuestMmdPlayer
                             "completed",
                             chunks: receivedReplyAudioChunks,
                             bytes: receivedReplyAudioBytes,
-                            eventCount: receivedTurnEventCount);
+                            eventCount: receivedTurnEventCount,
+                            traceId: traceId);
                     }
                     RecordStage(
                         "reply",
@@ -1274,7 +1285,8 @@ namespace QuestMmdPlayer
                             : string.IsNullOrEmpty(receivedErrorCode) ? "empty_reply" : receivedErrorCode,
                         chunks: receivedReplyAudioChunks,
                         bytes: receivedReplyAudioBytes,
-                        eventCount: receivedTurnEventCount);
+                        eventCount: receivedTurnEventCount,
+                        traceId: traceId);
                     break;
             }
         }

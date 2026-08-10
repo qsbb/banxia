@@ -7,13 +7,15 @@ namespace QuestMmdPlayer
 {
     public readonly struct PlaybackTelemetry
     {
-        public PlaybackTelemetry(int bufferedMs, int callbackDelayMs, int underflowCount)
+        public PlaybackTelemetry(int generation, int bufferedMs, int callbackDelayMs, int underflowCount)
         {
+            Generation = generation;
             BufferedMs = bufferedMs;
             CallbackDelayMs = callbackDelayMs;
             UnderflowCount = underflowCount;
         }
 
+        public int Generation { get; }
         public int BufferedMs { get; }
         public int CallbackDelayMs { get; }
         public int UnderflowCount { get; }
@@ -40,9 +42,11 @@ namespace QuestMmdPlayer
         private int dspBufferLength = 1024;
         private int dspBufferCount = 4;
         private double audibleUntilDspTime;
-        private bool streamCompleted = true;
-        private bool playbackStarted;
+        private int streamCompletedFlag = 1;
+        private int playbackStartedFlag;
         private int underflowCount;
+        private int streamGeneration;
+        private int playbackGeneration;
         private long playbackRequestedAtTicks;
         private long firstAudioCallbackAtTicks;
         private bool playbackTelemetryReported;
@@ -61,17 +65,18 @@ namespace QuestMmdPlayer
             }
         }
 
-        public bool StreamCompleted => streamCompleted;
-        public bool PlaybackStarted => playbackStarted;
-        public int UnderflowCount => underflowCount;
+        public bool StreamCompleted => Volatile.Read(ref streamCompletedFlag) != 0;
+        public bool PlaybackStarted => Volatile.Read(ref playbackStartedFlag) != 0;
+        public int UnderflowCount => Volatile.Read(ref underflowCount);
         public int QueuedChunkCount
         {
             get
             {
-                lock (gate) return buffers.Count + (currentBuffer == null ? 0 : 1);
+                lock (gate) return buffers.Count +
+                    (currentBuffer != null && currentOffset < currentBuffer.Length ? 1 : 0);
             }
         }
-        public string DiagnosticStatus => $"buffer {BufferedSeconds:F2}s | started {playbackStarted} | underflows {underflowCount}";
+        public string DiagnosticStatus => $"buffer {BufferedSeconds:F2}s | started {PlaybackStarted} | underflows {UnderflowCount}";
 
         public event Action<PlaybackTelemetry> PlaybackTelemetryReady;
 
@@ -106,23 +111,24 @@ namespace QuestMmdPlayer
         {
             TryStartPlayback();
             ReportPlaybackTelemetry();
-            if (audioSource != null && audioSource.isPlaying && streamCompleted && IsDrained)
+            if (audioSource != null && audioSource.isPlaying && StreamCompleted && IsDrained)
             {
                 audioSource.Stop();
                 lock (gate) latestRms = 0f;
             }
         }
 
-        public void BeginStream()
+        public int BeginStream()
         {
             StopAndClear();
-            streamCompleted = false;
-            underflowCount = 0;
+            Volatile.Write(ref streamCompletedFlag, 0);
+            Interlocked.Exchange(ref underflowCount, 0);
+            return Volatile.Read(ref streamGeneration);
         }
 
         public void MarkStreamCompleted()
         {
-            streamCompleted = true;
+            Volatile.Write(ref streamCompletedFlag, 1);
             TryStartPlayback();
         }
         public void Enqueue(short[] pcm16, int sourceSampleRate)
@@ -149,6 +155,12 @@ namespace QuestMmdPlayer
 
         public void StopAndClear()
         {
+            Interlocked.Increment(ref streamGeneration);
+            ClearForFormatChange();
+        }
+
+        private void ClearForFormatChange()
+        {
             if (audioSource != null)
             {
                 audioSource.Stop();
@@ -161,10 +173,11 @@ namespace QuestMmdPlayer
                 queuedSamples = 0;
                 latestRms = 0f;
                 audibleUntilDspTime = 0d;
-                streamCompleted = true;
-                playbackStarted = false;
-                playbackRequestedAtTicks = 0L;
-                firstAudioCallbackAtTicks = 0L;
+                Volatile.Write(ref streamCompletedFlag, 1);
+                Volatile.Write(ref playbackStartedFlag, 0);
+                Volatile.Write(ref playbackGeneration, 0);
+                Interlocked.Exchange(ref playbackRequestedAtTicks, 0L);
+                Interlocked.Exchange(ref firstAudioCallbackAtTicks, 0L);
                 playbackTelemetryReported = false;
                 playbackStartBufferedMs = 0;
             }
@@ -188,9 +201,9 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            var wasCompleted = streamCompleted;
-            StopAndClear();
-            streamCompleted = wasCompleted;
+            var wasCompleted = StreamCompleted;
+            ClearForFormatChange();
+            Volatile.Write(ref streamCompletedFlag, wasCompleted ? 1 : 0);
             if (streamClip != null)
             {
                 Destroy(streamClip);
@@ -236,9 +249,9 @@ namespace QuestMmdPlayer
                 {
                     data[i] = 0f;
                 }
-                if (write < data.Length && playbackStarted && !streamCompleted)
+                if (write < data.Length && PlaybackStarted && !StreamCompleted)
                 {
-                    underflowCount++;
+                    Interlocked.Increment(ref underflowCount);
                 }
                 latestRms = data.Length == 0 ? 0f : Mathf.Sqrt(sumSquares / data.Length);
                 if (write > 0 && sampleRate > 0)
@@ -273,13 +286,14 @@ namespace QuestMmdPlayer
             }
             int buffered;
             lock (gate) buffered = queuedSamples;
-            if (!ShouldStartPlayback(buffered, sampleRate, streamCompleted, startupBufferSeconds))
+            if (!ShouldStartPlayback(buffered, sampleRate, StreamCompleted, startupBufferSeconds))
             {
                 return;
             }
-            playbackStarted = true;
-            playbackRequestedAtTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-            firstAudioCallbackAtTicks = 0L;
+            Volatile.Write(ref playbackStartedFlag, 1);
+            Volatile.Write(ref playbackGeneration, Volatile.Read(ref streamGeneration));
+            Interlocked.Exchange(ref playbackRequestedAtTicks, System.Diagnostics.Stopwatch.GetTimestamp());
+            Interlocked.Exchange(ref firstAudioCallbackAtTicks, 0L);
             playbackTelemetryReported = false;
             playbackStartBufferedMs = Mathf.RoundToInt(buffered * 1000f / Mathf.Max(1, sampleRate));
             audioSource.Play();
@@ -287,7 +301,7 @@ namespace QuestMmdPlayer
 
         private void OnAudioFilterRead(float[] data, int channels)
         {
-            if (!playbackStarted || data == null || data.Length == 0)
+            if (!PlaybackStarted || data == null || data.Length == 0)
             {
                 return;
             }
@@ -299,7 +313,8 @@ namespace QuestMmdPlayer
 
         private void ReportPlaybackTelemetry()
         {
-            if (!playbackStarted || playbackTelemetryReported || playbackRequestedAtTicks <= 0L)
+            var requestedAt = Interlocked.Read(ref playbackRequestedAtTicks);
+            if (!PlaybackStarted || playbackTelemetryReported || requestedAt <= 0L)
             {
                 return;
             }
@@ -311,12 +326,13 @@ namespace QuestMmdPlayer
             }
 
             playbackTelemetryReported = true;
-            var elapsed = (callbackAt - playbackRequestedAtTicks) * 1000d /
+            var elapsed = (callbackAt - requestedAt) * 1000d /
                 System.Diagnostics.Stopwatch.Frequency;
             PlaybackTelemetryReady?.Invoke(new PlaybackTelemetry(
+                Volatile.Read(ref playbackGeneration),
                 playbackStartBufferedMs,
                 Mathf.Clamp((int)Math.Round(elapsed), 0, 3600000),
-                underflowCount));
+                UnderflowCount));
         }
 
         private static void SetPosition(int position)
