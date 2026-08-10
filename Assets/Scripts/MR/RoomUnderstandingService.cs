@@ -29,7 +29,10 @@ namespace QuestMmdPlayer
     public enum RoomPlacementSurfaceKind
     {
         Floor,
-        Seat
+        Seat,
+        Couch,
+        Bed,
+        Table
     }
 
     [Serializable]
@@ -41,6 +44,7 @@ namespace QuestMmdPlayer
         public Pose SuggestedPose;
         public Vector2 Size;
         public bool SupportsSitting;
+        public bool SupportsLying;
 
         public RoomPlacementCandidate(
             string surfaceId,
@@ -48,7 +52,8 @@ namespace QuestMmdPlayer
             Pose surfacePose,
             Pose suggestedPose,
             Vector2 size,
-            bool supportsSitting)
+            bool supportsSitting,
+            bool supportsLying = false)
         {
             SurfaceId = surfaceId ?? string.Empty;
             Kind = kind;
@@ -56,6 +61,7 @@ namespace QuestMmdPlayer
             SuggestedPose = suggestedPose;
             Size = size;
             SupportsSitting = supportsSitting;
+            SupportsLying = supportsLying;
         }
     }
 
@@ -303,6 +309,60 @@ namespace QuestMmdPlayer
                 out selected);
         }
 
+        public bool TryFindNearestRestingSurface(Pose viewer, out RoomPlacementCandidate selected)
+        {
+            return TrySelectNearestRestingSurface(placementCandidates, viewer, out selected);
+        }
+
+        public static bool TrySelectNearestRestingSurface(
+            IReadOnlyList<RoomPlacementCandidate> candidates,
+            Pose viewer,
+            out RoomPlacementCandidate selected)
+        {
+            selected = default;
+            if (candidates == null)
+            {
+                return false;
+            }
+            var found = false;
+            var bestScore = float.PositiveInfinity;
+            var viewerForward = Vector3.ProjectOnPlane(viewer.rotation * Vector3.forward, Vector3.up).normalized;
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                var candidate = candidates[index];
+                if ((!candidate.SupportsSitting && !candidate.SupportsLying) ||
+                    !IsFinite(candidate.SuggestedPose.position) ||
+                    !IsFinite(candidate.SuggestedPose.rotation))
+                {
+                    continue;
+                }
+                var delta = Vector3.ProjectOnPlane(
+                    candidate.SuggestedPose.position - viewer.position,
+                    Vector3.up);
+                var score = delta.sqrMagnitude;
+                if (viewerForward.sqrMagnitude > .001f && delta.sqrMagnitude > .001f &&
+                    Vector3.Dot(viewerForward, delta.normalized) < 0f)
+                {
+                    score += 16f;
+                }
+                // Prefer an explicitly labelled bed for lying when candidates
+                // are at effectively the same distance.
+                if (candidate.Kind == RoomPlacementSurfaceKind.Bed)
+                {
+                    score -= .05f;
+                }
+                if (!found || score < bestScore - .0001f ||
+                    Mathf.Abs(score - bestScore) <= .0001f &&
+                    string.CompareOrdinal(candidate.SurfaceId, selected.SurfaceId) < 0)
+                {
+                    selected = candidate;
+                    bestScore = score;
+                    found = true;
+                }
+            }
+            return found;
+        }
+
         public static bool TrySelectNearestPlacementCandidate(
             IReadOnlyList<RoomPlacementCandidate> candidates,
             RoomPlacementSurfaceKind kind,
@@ -432,18 +492,23 @@ namespace QuestMmdPlayer
                 return false;
             }
 
-            RoomPlacementSurfaceKind kind;
-            var supportsSitting = false;
-            switch (surface.Classification)
+            if (!TryResolvePlacementSurfaceKind(surface.Classification, out var kind))
             {
-                case PlaneClassification.Floor:
+                return false;
+            }
+
+            var supportsSitting = false;
+            var supportsLying = false;
+            switch (kind)
+            {
+                case RoomPlacementSurfaceKind.Floor:
                     if (Mathf.Min(surface.Size.x, surface.Size.y) < Mathf.Max(.1f, minimumFloorExtent))
                     {
                         return false;
                     }
-                    kind = RoomPlacementSurfaceKind.Floor;
                     break;
-                case PlaneClassification.Seat:
+                case RoomPlacementSurfaceKind.Seat:
+                case RoomPlacementSurfaceKind.Couch:
                     var largest = Mathf.Max(surface.Size.x, surface.Size.y);
                     var smallest = Mathf.Min(surface.Size.x, surface.Size.y);
                     if (largest < Mathf.Max(.1f, minimumSeatWidth) ||
@@ -451,8 +516,27 @@ namespace QuestMmdPlayer
                     {
                         return false;
                     }
-                    kind = RoomPlacementSurfaceKind.Seat;
                     supportsSitting = true;
+                    // AR Foundation 5.2 collapses Meta couch/bed labels into
+                    // the public Seat classification. Advertise capability,
+                    // not an invented label: only a long and sufficiently
+                    // deep seat surface can become a lying target.
+                    supportsLying = largest >= 1.35f && smallest >= .55f;
+                    break;
+                case RoomPlacementSurfaceKind.Bed:
+                    if (Mathf.Max(surface.Size.x, surface.Size.y) < 1.35f ||
+                        Mathf.Min(surface.Size.x, surface.Size.y) < .55f)
+                    {
+                        return false;
+                    }
+                    supportsSitting = true;
+                    supportsLying = true;
+                    break;
+                case RoomPlacementSurfaceKind.Table:
+                    if (Mathf.Min(surface.Size.x, surface.Size.y) < Mathf.Max(.25f, minimumFloorExtent))
+                    {
+                        return false;
+                    }
                     break;
                 default:
                     return false;
@@ -470,8 +554,48 @@ namespace QuestMmdPlayer
                 surface.Pose,
                 suggestedPose,
                 surface.Size,
-                supportsSitting);
+                supportsSitting,
+                supportsLying);
             return true;
+        }
+
+        public static bool TryResolvePlacementSurfaceKind(
+            PlaneClassification classification,
+            out RoomPlacementSurfaceKind kind)
+        {
+            if (classification == PlaneClassification.Floor)
+            {
+                kind = RoomPlacementSurfaceKind.Floor;
+                return true;
+            }
+            if (classification == PlaneClassification.Seat)
+            {
+                kind = RoomPlacementSurfaceKind.Seat;
+                return true;
+            }
+            if (classification == PlaneClassification.Table)
+            {
+                kind = RoomPlacementSurfaceKind.Table;
+                return true;
+            }
+
+            // ARSubsystems versions differ in the extra Meta labels they
+            // expose. Resolve Couch/Bed by the public enum name so this code
+            // remains source-compatible with versions that omit either value.
+            var name = Enum.GetName(typeof(PlaneClassification), classification) ?? string.Empty;
+            if (name.IndexOf("couch", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("sofa", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                kind = RoomPlacementSurfaceKind.Couch;
+                return true;
+            }
+            if (name.IndexOf("bed", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                kind = RoomPlacementSurfaceKind.Bed;
+                return true;
+            }
+            kind = default;
+            return false;
         }
 
         public static string BuildSummary(IEnumerable<RoomSurfaceObservation> observations)

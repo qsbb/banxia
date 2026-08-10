@@ -33,6 +33,7 @@ namespace QuestMmdPlayer
         private readonly List<GameObject> actionListEntries = new List<GameObject>();
         private GameObject pairingLayer;
         private GameObject appearanceLayer;
+        private GameObject modelLayer;
         private GameObject qualityLayer;
         private GameObject voiceLayer;
         private GameObject textInputLayer;
@@ -50,6 +51,9 @@ namespace QuestMmdPlayer
         private Text idlePresetText;
         private Text outlineStatusText;
         private Text expressionButtonText;
+        private Text modelStatusText;
+        private readonly List<RuntimeMmdModelInfo> modelOptions = new List<RuntimeMmdModelInfo>();
+        private int modelIndex;
         private TouchScreenKeyboard pairingKeyboard;
         private TouchScreenKeyboard conversationKeyboard;
         private GameObject pairingKeyboardLayer;
@@ -327,6 +331,7 @@ namespace QuestMmdPlayer
             if (actionListLayer != null) actionListLayer.SetActive(false);
             if (pairingLayer != null) pairingLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
@@ -403,6 +408,7 @@ namespace QuestMmdPlayer
             rightPointer.line = CreatePointerLine("Right Menu Pointer");
             BuildActionPanel();
             BuildAppearancePanel();
+            BuildModelPanel();
             BuildQualityPanel();
             BuildVoicePanel();
             BuildTextInputPanel();
@@ -457,9 +463,11 @@ namespace QuestMmdPlayer
         private void BuildDebugPanel()
         {
             debugLayer = CreateUiObject("Debug Layer", menuRoot.transform, new Vector2(-610f, 0f), new Vector2(440f, 680f));
+            CreateImage("Sidebar Background", debugLayer.transform, Vector2.zero, new Vector2(440f, 680f), new Color(.035f, .055f, .06f, .985f));
             CreateImage("Accent", debugLayer.transform, new Vector2(0f, 335f), new Vector2(440f, 10f), new Color(.25f, .86f, .66f, 1f));
             CreateText("运行诊断", debugLayer.transform, new Vector2(0f, 292f), new Vector2(400f, 44f), 24, FontStyle.Bold, Color.white);
-            debugLogText = CreateText("", debugLayer.transform, new Vector2(0f, 22f), new Vector2(410f, 500f), 11, FontStyle.Normal, new Color(.66f, .95f, .78f, 1f));
+            CreateText("实时刷新  ·  主菜单可同时操作", debugLayer.transform, new Vector2(0f, 254f), new Vector2(400f, 26f), 12, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
+            debugLogText = CreateText("", debugLayer.transform, new Vector2(0f, 2f), new Vector2(410f, 454f), 11, FontStyle.Normal, new Color(.66f, .95f, .78f, 1f));
             debugLogText.alignment = TextAnchor.UpperLeft;
             CreateButton("清空记录", -132f, -282f, 120f, 48f, ClearDebugLog, debugLayer.transform);
             CreateButton("收起", 0f, -282f, 120f, 48f, ToggleDebugMode, debugLayer.transform);
@@ -513,6 +521,10 @@ namespace QuestMmdPlayer
             {
                 externalActionText.text = message;
             }
+            if (modelLayer != null && modelLayer.activeSelf)
+            {
+                RefreshInstalledModels();
+            }
             Status = message ?? string.Empty;
         }
 
@@ -529,15 +541,153 @@ namespace QuestMmdPlayer
             CreateButton("彩色透视", -224f, 70f, 204f, 62f, () => owner?.Passthrough?.Toggle(), appearanceLayer.transform);
             CreateButton("站立校准", 0f, 70f, 204f, 62f, () => owner?.Placement?.ResetHeightAndPlace(), appearanceLayer.transform);
             CreateButton("面对面放置", 224f, 70f, 204f, 62f, () => owner?.Placement?.FaceUserAndPlace(), appearanceLayer.transform);
-            CreateButton("重连后端", 0f, -8f, 204f, 62f, ReconnectBackend, appearanceLayer.transform);
+            CreateButton("角色模型", 0f, -8f, 204f, 62f, ShowModelPanel, appearanceLayer.transform);
             CreateButton("\u626b\u63cf\u623f\u95f4", -224f, -8f, 204f, 62f, () => owner?.RoomUnderstanding?.RequestSceneCapture(), appearanceLayer.transform);
             CreateButton("\u753b\u8d28", 224f, -8f, 204f, 62f, ShowQualityPanel, appearanceLayer.transform);
-            expressionButtonText = CreateButton("\u8868\u60c5\uff1a\u6a21\u578b\u9ed8\u8ba4", 0f, -78f, 250f, 52f, CycleExpression, appearanceLayer.transform).GetComponentInChildren<Text>();
+            expressionButtonText = CreateButton("\u8868\u60c5\uff1a\u6a21\u578b\u9ed8\u8ba4", -112f, -78f, 204f, 52f, CycleExpression, appearanceLayer.transform).GetComponentInChildren<Text>();
+            CreateButton("重连后端", 112f, -78f, 204f, 52f, ReconnectBackend, appearanceLayer.transform);
 
             outlineStatusText = CreateText("", appearanceLayer.transform, new Vector2(0f, -151f), new Vector2(650f, 72f), 13, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
             CreateButton("返回主菜单", -112f, -234f, 204f, 56f, ShowMainPanel, appearanceLayer.transform);
             CreateButton("关闭", 112f, -234f, 204f, 56f, Hide, appearanceLayer.transform);
             appearanceLayer.SetActive(false);
+        }
+
+        private void BuildModelPanel()
+        {
+            modelLayer = CreateUiObject("Model Library Layer", menuRoot.transform, Vector2.zero, new Vector2(720f, 680f));
+            CreateImage("Accent", modelLayer.transform, new Vector2(0f, 335f), new Vector2(720f, 10f), new Color(.25f, .86f, .66f, 1f));
+            CreateText("角色模型", modelLayer.transform, new Vector2(0f, 288f), new Vector2(640f, 50f), 29, FontStyle.Bold, Color.white);
+            CreateText("本机 PMX 模型导入与切换", modelLayer.transform, new Vector2(0f, 250f), new Vector2(640f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
+
+            CreateButton("上一个模型", -224f, 150f, 204f, 62f, () => SelectInstalledModel(-1), modelLayer.transform);
+            CreateButton("加载选中", 0f, 150f, 204f, 62f, LoadSelectedModel, modelLayer.transform);
+            CreateButton("下一个模型", 224f, 150f, 204f, 62f, () => SelectInstalledModel(1), modelLayer.transform);
+            CreateButton("导入模型", -112f, 72f, 204f, 62f, ImportFile, modelLayer.transform);
+            CreateButton("刷新列表", 112f, 72f, 204f, 62f, RefreshInstalledModels, modelLayer.transform);
+            modelStatusText = CreateText("", modelLayer.transform, new Vector2(0f, -48f), new Vector2(650f, 170f), 15, FontStyle.Normal, new Color(.74f, .86f, .82f, 1f));
+            modelStatusText.alignment = TextAnchor.UpperLeft;
+            CreateButton("返回外观", -112f, -214f, 204f, 62f, ShowAppearancePanel, modelLayer.transform);
+            CreateButton("关闭", 112f, -214f, 204f, 62f, Hide, modelLayer.transform);
+            modelLayer.SetActive(false);
+        }
+
+        private void ShowModelPanel()
+        {
+            if (modelLayer == null)
+            {
+                BuildModelPanel();
+            }
+            if (mainLayer != null) mainLayer.SetActive(false);
+            if (actionLayer != null) actionLayer.SetActive(false);
+            if (actionListLayer != null) actionListLayer.SetActive(false);
+            if (pairingLayer != null) pairingLayer.SetActive(false);
+            if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (qualityLayer != null) qualityLayer.SetActive(false);
+            if (voiceLayer != null) voiceLayer.SetActive(false);
+            if (textInputLayer != null) textInputLayer.SetActive(false);
+            modelLayer.SetActive(true);
+            FocusInputLayer(modelLayer);
+            Physics.SyncTransforms();
+            RefreshInstalledModels();
+            Status = "角色模型面板已打开";
+        }
+
+        private void RefreshInstalledModels()
+        {
+            var loader = owner?.ModelLoader;
+            modelOptions.Clear();
+            if (loader != null)
+            {
+                var discovered = loader.DiscoverInstalledModels();
+                for (var index = 0; index < discovered.Count; index++)
+                {
+                    modelOptions.Add(discovered[index]);
+                }
+            }
+            if (modelOptions.Count == 0)
+            {
+                modelIndex = 0;
+            }
+            else
+            {
+                var currentPath = loader?.CurrentModelPath ?? string.Empty;
+                var currentIndex = modelOptions.FindIndex(info =>
+                    string.Equals(info.Path, currentPath, StringComparison.OrdinalIgnoreCase));
+                modelIndex = currentIndex >= 0
+                    ? currentIndex
+                    : Mathf.Clamp(modelIndex, 0, modelOptions.Count - 1);
+            }
+            RefreshModelStatusText();
+        }
+
+        private void SelectInstalledModel(int direction)
+        {
+            if (modelOptions.Count == 0)
+            {
+                RefreshInstalledModels();
+                return;
+            }
+            modelIndex = (modelIndex + direction + modelOptions.Count) % modelOptions.Count;
+            RefreshModelStatusText();
+        }
+
+        private async void LoadSelectedModel()
+        {
+            var loader = owner?.ModelLoader;
+            if (loader == null || loader.IsLoading || modelOptions.Count == 0)
+            {
+                RefreshModelStatusText();
+                return;
+            }
+            modelIndex = Mathf.Clamp(modelIndex, 0, modelOptions.Count - 1);
+            var selected = modelOptions[modelIndex];
+            if (modelStatusText != null)
+            {
+                modelStatusText.text = "正在加载：" + selected.DisplayName;
+            }
+            owner?.DebugLog?.RecordStage("avatar_action", "processing", "model_switch_started");
+            try
+            {
+                await loader.LoadInstalledModelAsync(selected);
+                owner?.DebugLog?.RecordStage("avatar_action", "completed", "model_switch_completed");
+                RefreshInstalledModels();
+            }
+            catch (Exception exception)
+            {
+                owner?.DebugLog?.RecordStage("avatar_action", "failed", "model_switch_failed");
+                Debug.LogWarning("[CompanionMenu] Model switch failed: " + exception.Message, this);
+                if (modelStatusText != null)
+                {
+                    modelStatusText.text = "模型加载失败，请查看诊断日志";
+                }
+            }
+        }
+
+        private void RefreshModelStatusText()
+        {
+            if (modelStatusText == null)
+            {
+                return;
+            }
+            var loader = owner?.ModelLoader;
+            if (loader == null)
+            {
+                modelStatusText.text = "模型加载器不可用";
+                return;
+            }
+            if (modelOptions.Count == 0)
+            {
+                modelStatusText.text = "没有发现可切换的 PMX 模型\n点击“导入模型”添加角色文件";
+                return;
+            }
+            modelIndex = Mathf.Clamp(modelIndex, 0, modelOptions.Count - 1);
+            var selected = modelOptions[modelIndex];
+            var current = string.Equals(selected.Path, loader.CurrentModelPath, StringComparison.OrdinalIgnoreCase)
+                ? "（当前）"
+                : string.Empty;
+            modelStatusText.text = $"{modelIndex + 1}/{modelOptions.Count}  {selected.DisplayName}{current}\n" +
+                (loader.IsLoading ? "模型正在加载" : "选择后点击“加载选中”进行切换");
         }
 
         private void ToggleOutline()
@@ -693,6 +843,10 @@ namespace QuestMmdPlayer
                 case "bow": return "鞠躬动作";
                 case "nod": return "点头动作";
                 case "sway": return "轻摆动作";
+                case "raise_hand": return "抬手动作";
+                case "turn_half": return "转半圈动作";
+                case "refuse": return "拒绝动作";
+                case "step_back": return "后退动作";
                 case "idle": return "待机动作";
                 default: return "动作";
             }
@@ -781,7 +935,8 @@ namespace QuestMmdPlayer
         private void BuildActionListLayer()
         {
             actionListLayer = CreateUiObject("Added Actions List", actionLayer.transform, Vector2.zero, new Vector2(680f, 590f));
-            CreateImage("List Background", actionListLayer.transform, Vector2.zero, new Vector2(680f, 590f), new Color(.035f, .06f, .065f, .98f));
+            var background = CreateImage("List Background", actionListLayer.transform, Vector2.zero, new Vector2(680f, 590f), new Color(.035f, .06f, .065f, .98f));
+            AddModalBlocker(background.gameObject, new Vector2(680f, 590f));
             CreateText("已添加动作", actionListLayer.transform, new Vector2(0f, 250f), new Vector2(620f, 42f), 24, FontStyle.Bold, Color.white);
             CreateButton("删除当前动作", -112f, -252f, 204f, 52f, DeleteSelectedExternalAction, actionListLayer.transform);
             CreateButton("关闭列表", 112f, -252f, 204f, 52f, HideActionList, actionListLayer.transform);
@@ -898,11 +1053,10 @@ namespace QuestMmdPlayer
             mainLayer.SetActive(false);
             if (pairingLayer != null) pairingLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
-            if (debugLayer != null) debugLayer.SetActive(false);
-            DisableDebugDisplay();
             actionLayer.SetActive(true);
             SetDirectButtonColliders(actionLayer, true);
             if (actionListLayer != null) actionListLayer.SetActive(false);
@@ -931,11 +1085,10 @@ namespace QuestMmdPlayer
             if (actionLayer != null) actionLayer.SetActive(false);
             if (actionListLayer != null) actionListLayer.SetActive(false);
             if (pairingLayer != null) pairingLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
-            if (debugLayer != null) debugLayer.SetActive(false);
-            DisableDebugDisplay();
             appearanceLayer.SetActive(true);
             FocusInputLayer(appearanceLayer);
             Physics.SyncTransforms();
@@ -952,11 +1105,10 @@ namespace QuestMmdPlayer
             mainLayer.SetActive(false);
             if (actionLayer != null) actionLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
-            if (debugLayer != null) debugLayer.SetActive(false);
-            DisableDebugDisplay();
             pairingLayer.SetActive(true);
             HidePairingKeyboard();
             FocusInputLayer(pairingLayer);
@@ -973,6 +1125,7 @@ namespace QuestMmdPlayer
             if (actionListLayer != null) actionListLayer.SetActive(false);
             if (pairingLayer != null) pairingLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
@@ -993,10 +1146,9 @@ namespace QuestMmdPlayer
             if (actionListLayer != null) actionListLayer.SetActive(false);
             if (pairingLayer != null) pairingLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
-            if (debugLayer != null) debugLayer.SetActive(false);
-            DisableDebugDisplay();
             voiceLayer.SetActive(true);
             FocusInputLayer(voiceLayer);
             Physics.SyncTransforms();
@@ -1079,10 +1231,9 @@ namespace QuestMmdPlayer
             if (actionListLayer != null) actionListLayer.SetActive(false);
             if (pairingLayer != null) pairingLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
-            if (debugLayer != null) debugLayer.SetActive(false);
-            DisableDebugDisplay();
             textInputLayer.SetActive(true);
             FocusInputLayer(textInputLayer);
             Physics.SyncTransforms();
@@ -1209,21 +1360,17 @@ namespace QuestMmdPlayer
             {
                 BuildDebugPanel();
             }
-            if (mainLayer != null && !mainLayer.activeSelf)
+            var primaryFocus = focusedInputLayer == null || !focusedInputLayer.gameObject.activeInHierarchy
+                ? mainLayer
+                : focusedInputLayer.gameObject;
+            if (primaryFocus == null)
             {
-                if (actionLayer != null) actionLayer.SetActive(false);
-                if (actionListLayer != null) actionListLayer.SetActive(false);
-                if (pairingLayer != null) pairingLayer.SetActive(false);
-                if (appearanceLayer != null) appearanceLayer.SetActive(false);
-                if (qualityLayer != null) qualityLayer.SetActive(false);
-                if (voiceLayer != null) voiceLayer.SetActive(false);
-                if (textInputLayer != null) textInputLayer.SetActive(false);
-                mainLayer.SetActive(true);
+                return;
             }
             debugLayer.SetActive(true);
             debugMode = true;
             owner?.DebugLog?.SetDisplayEnabled(true);
-            FocusInputLayer(mainLayer);
+            FocusInputLayer(primaryFocus);
             Physics.SyncTransforms();
             UpdateDebugLogText();
             Status = "运行诊断已打开";
@@ -1285,10 +1432,9 @@ namespace QuestMmdPlayer
             if (actionListLayer != null) actionListLayer.SetActive(false);
             if (pairingLayer != null) pairingLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
-            if (debugLayer != null) debugLayer.SetActive(false);
-            DisableDebugDisplay();
             qualityLayer.SetActive(true);
             FocusInputLayer(qualityLayer);
             Physics.SyncTransforms();
@@ -1421,12 +1567,13 @@ namespace QuestMmdPlayer
                 pairingLayer.transform,
                 Vector2.zero,
                 new Vector2(690f, 620f));
-            CreateImage(
+            var background = CreateImage(
                 "Keyboard Background",
                 pairingKeyboardLayer.transform,
                 Vector2.zero,
                 new Vector2(690f, 620f),
                 new Color(.025f, .045f, .05f, .995f));
+            AddModalBlocker(background.gameObject, new Vector2(690f, 620f));
             CreateText(
                 "\u8f93\u5165\u57df\u540d\u6216 IP:\u7aef\u53e3",
                 pairingKeyboardLayer.transform,
@@ -1815,6 +1962,11 @@ namespace QuestMmdPlayer
                 RefreshAppearancePanel();
                 return;
             }
+            if (modelLayer != null && modelLayer.activeSelf)
+            {
+                RefreshModelStatusText();
+                return;
+            }
             if (voiceLayer != null && voiceLayer.activeSelf)
             {
                 RefreshVoicePanel();
@@ -1857,7 +2009,6 @@ namespace QuestMmdPlayer
             {
                 debugLayer.SetActive(false);
                 DisableDebugDisplay();
-                FocusInputLayer(mainLayer);
                 Physics.SyncTransforms();
                 return;
             }
@@ -1921,6 +2072,7 @@ namespace QuestMmdPlayer
                 case "Text Conversation Layer": return RuntimeMenuLayer.TextInput;
                 case "Debug Layer": return RuntimeMenuLayer.Debug;
                 case "Appearance Layer": return RuntimeMenuLayer.Appearance;
+                case "Model Library Layer": return RuntimeMenuLayer.Models;
                 case "Backend Pairing Layer": return RuntimeMenuLayer.Pairing;
                 case "Action Presets Layer": return RuntimeMenuLayer.Actions;
                 case "Main Menu Layer": return RuntimeMenuLayer.Main;
@@ -1968,6 +2120,16 @@ namespace QuestMmdPlayer
                     target.SetInteractive(enabled);
                 }
             }
+        }
+
+        private static void AddModalBlocker(GameObject background, Vector2 size)
+        {
+            if (background == null)
+            {
+                return;
+            }
+            var collider = background.AddComponent<BoxCollider>();
+            collider.size = new Vector3(size.x, size.y, 8f);
         }
         private void ClearHoverVisuals()
         {

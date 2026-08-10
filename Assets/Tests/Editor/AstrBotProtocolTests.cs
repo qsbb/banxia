@@ -97,6 +97,17 @@ namespace QuestMmdPlayer.Tests
             Assert.That(message.DurationMs, Is.EqualTo(30000));
         }
 
+        [TestCase("dance_next")]
+        [TestCase("raise_hand")]
+        [TestCase("turn_half")]
+        [TestCase("sit")]
+        [TestCase("lie")]
+        [TestCase("lie_down")]
+        public void ExecutableAvatarGesturesSurviveProtocolSanitization(string gesture)
+        {
+            Assert.That(AstrBotProtocol.SanitizeGesture(gesture), Is.EqualTo(gesture));
+        }
+
         [Test]
         public void Pcm16AudioIsDecodedLittleEndian()
         {

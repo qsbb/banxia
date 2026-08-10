@@ -329,8 +329,14 @@ namespace QuestMmdPlayer
                 case "refuse":
                 case "step_back":
                 case "dance":
+                case "dance_next":
                 case "nod":
                 case "sway":
+                case "raise_hand":
+                case "turn_half":
+                case "sit":
+                case "lie":
+                case "lie_down":
                     return value;
                 default:
                     return "idle";

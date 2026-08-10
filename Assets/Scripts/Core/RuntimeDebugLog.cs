@@ -341,6 +341,19 @@ namespace QuestMmdPlayer
         {
             switch (value)
             {
+                case "action_state_changed": return "\u52a8\u4f5c\u72b6\u6001\u5df2\u5207\u6362";
+                case "rest_target_found": return "\u5df2\u627e\u5230\u5339\u914d\u7684\u573a\u666f\u4f11\u606f\u76ee\u6807";
+                case "rest_target_missing": return "\u6ca1\u6709\u627e\u5230\u53ef\u7528\u7684\u5ea7\u4f4d\u6216\u8eba\u5367\u9762";
+                case "rest_target_capability_missing": return "\u6700\u8fd1\u7684\u573a\u666f\u76ee\u6807\u4e0d\u652f\u6301\u8be5\u52a8\u4f5c";
+                case "rest_target_unavailable": return "\u573a\u666f\u4f11\u606f\u76ee\u6807\u4e0d\u53ef\u7528";
+                case "rest_target_busy": return "\u89d2\u8272\u6b63\u5728\u5bf9\u9f50\u5176\u4ed6\u573a\u666f\u76ee\u6807";
+                case "rest_alignment_started": return "\u5f00\u59cb\u5e73\u6ed1\u5bf9\u9f50\u573a\u666f\u76ee\u6807";
+                case "rest_alignment_completed": return "\u573a\u666f\u76ee\u6807\u5bf9\u9f50\u5b8c\u6210";
+                case "rest_return_started": return "\u5f00\u59cb\u5e73\u6ed1\u8fd4\u56de\u7ad9\u7acb\u59ff\u6001";
+                case "rest_return_completed": return "\u5df2\u8fd4\u56de\u7ad9\u7acb\u59ff\u6001";
+            }
+            switch (value)
+            {
                 case "owner_not_configured": return "“序”尚未为这组 Quest 原始身份配置主人";
                 case "quest_identity_not_allowlisted": return "Quest 原始身份不在“序”的允许列表";
                 case "local_identity_not_configured": return "“临”的本地 Quest 身份尚未配置完整";
@@ -404,6 +417,24 @@ namespace QuestMmdPlayer
                 case "empty_backend_reply": return "后端结束了空回复";
                 case "configuration_missing": return "尚未绑定后端";
                 case "configuration_invalid": return "后端绑定配置无效";
+                case "vmd_request": return "开始准备导入动作";
+                case "vmd_cache_hit": return "命中动作内存缓存";
+                case "vmd_playback_cached": return "缓存动作已开始播放";
+                case "vmd_playback_prepared": return "动作转换完成并开始播放";
+                case "vmd_end_pose_hold": return "动作结束姿势保持中";
+                case "vmd_blend_out": return "正在平滑过渡回待机";
+                case "vmd_idle_restored": return "已恢复自然待机";
+                case "vmd_load_failed": return "导入动作加载失败";
+                case "vmd_model_bound": return "动作库已绑定当前模型";
+                case "vmd_model_unbound": return "动作库没有可用模型";
+                case "backend_intent_accepted": return "后端动作意图已接受";
+                case "action_arbitration_blocked": return "动作因当前状态被仲裁阻止";
+                case "local_action_fallback": return "后端无动作时执行本地兜底";
+                case "custom_dance_started": return "自定义舞蹈已开始播放";
+                case "custom_dance_unavailable": return "没有可播放的自定义舞蹈";
+                case "model_switch_started": return "开始切换角色模型";
+                case "model_switch_completed": return "角色模型切换完成";
+                case "model_switch_failed": return "角色模型切换失败";
                 default: return value;
             }
         }

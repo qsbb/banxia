@@ -40,6 +40,7 @@ namespace QuestMmdPlayer
         public AstrBotBridge AstrBot { get; private set; }
         public BackendPairingController Pairing { get; private set; }
         public VmdActionLibrary VmdActions { get; private set; }
+        public RuntimeMmdModelLoader ModelLoader => runtimeMmdLoader;
         public QuestQualitySettings Quality { get; private set; }
         public QuestFileImportService FileImport { get; private set; }
         public RuntimeDebugLog DebugLog { get; private set; }
@@ -332,7 +333,7 @@ namespace QuestMmdPlayer
             {
                 case "play_motion":
                 case "play":
-                    Avatar.PlayAction(command.motionId);
+                    PlayCommandAction(command.motionId);
                     break;
                 case "toggle_pause":
                 case "pause":
@@ -343,7 +344,10 @@ namespace QuestMmdPlayer
                     Avatar.SetEmotion(command.emotion);
                     break;
                 case "reset":
-                    Avatar.ResetTransform();
+                    if (Placement == null || !Placement.ResetAvatarToStanding())
+                    {
+                        Avatar.ResetTransform();
+                    }
                     break;
                 case "place":
                 case "place_avatar":
@@ -361,7 +365,7 @@ namespace QuestMmdPlayer
                     break;
                 case "set_action":
                 case "action":
-                    Avatar.PlayAction(command.motionId ?? command.text);
+                    PlayCommandAction(command.motionId ?? command.text);
                     break;
                 case "handshake":
                     HumanInteraction?.SimulateInteraction(HumanInteractionKind.Handshake);
@@ -380,6 +384,23 @@ namespace QuestMmdPlayer
                     Debug.LogWarning($"[QuestMmdPlayer] unsupported command: {command.name}");
                     break;
             }
+        }
+
+        private void PlayCommandAction(string action)
+        {
+            var normalized = string.IsNullOrWhiteSpace(action) ? "idle" : action.Trim().ToLowerInvariant();
+            var restingAction = normalized == "lie" ? "lie_down" : normalized;
+            if ((restingAction == "sit" || restingAction == "lie_down") &&
+                Placement != null && Placement.TryExecuteRestingAction(restingAction))
+            {
+                return;
+            }
+            if (Placement != null && Placement.IsRestingOrAligning &&
+                Placement.TryReturnToStanding(normalized))
+            {
+                return;
+            }
+            Avatar?.PlayAction(normalized);
         }
     }
 }

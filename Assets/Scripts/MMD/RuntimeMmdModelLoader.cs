@@ -9,6 +9,19 @@ using UnityEngine.Networking;
 
 namespace QuestMmdPlayer
 {
+    [Serializable]
+    public sealed class RuntimeMmdModelInfo
+    {
+        public string DisplayName { get; }
+        public string Path { get; }
+
+        public RuntimeMmdModelInfo(string displayName, string path)
+        {
+            DisplayName = displayName ?? string.Empty;
+            Path = path ?? string.Empty;
+        }
+    }
+
     /// <summary>
     /// Loads PMX models directly at runtime. The bundled sample is extracted to
     /// persistent storage first so UMT can resolve the PMX texture sidecars on
@@ -46,6 +59,74 @@ namespace QuestMmdPlayer
         public PMXModel CurrentMmdModel => currentResult == null ? null : currentResult.model;
         public bool IsLoading { get; private set; }
         public string CurrentModelPath { get; private set; }
+
+        public IReadOnlyList<RuntimeMmdModelInfo> DiscoverInstalledModels()
+        {
+            var root = System.IO.Path.Combine(Application.persistentDataPath, "MmdModels");
+            var results = new List<RuntimeMmdModelInfo>();
+            if (!Directory.Exists(root))
+            {
+                return results;
+            }
+
+            var rootFull = System.IO.Path.GetFullPath(root)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar) +
+                System.IO.Path.DirectorySeparatorChar;
+            string[] files;
+            try
+            {
+                files = Directory.GetFiles(rootFull, "*.pmx", SearchOption.AllDirectories);
+            }
+            catch (IOException)
+            {
+                return results;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return results;
+            }
+
+            Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+            var names = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < files.Length; index++)
+            {
+                string fullPath;
+                try
+                {
+                    fullPath = System.IO.Path.GetFullPath(files[index]);
+                }
+                catch (Exception exception) when (
+                    exception is ArgumentException ||
+                    exception is NotSupportedException ||
+                    exception is PathTooLongException)
+                {
+                    continue;
+                }
+                if (!fullPath.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase) ||
+                    !File.Exists(fullPath) || new FileInfo(fullPath).Length <= 0)
+                {
+                    continue;
+                }
+
+                var baseName = System.IO.Path.GetFileNameWithoutExtension(fullPath);
+                names.TryGetValue(baseName, out var duplicateIndex);
+                names[baseName] = duplicateIndex + 1;
+                var displayName = duplicateIndex == 0
+                    ? baseName
+                    : baseName + " (" + (duplicateIndex + 1) + ")";
+                results.Add(new RuntimeMmdModelInfo(displayName, fullPath));
+            }
+            return results;
+        }
+
+        public Task<AvatarController> LoadInstalledModelAsync(RuntimeMmdModelInfo model)
+        {
+            if (model == null || string.IsNullOrWhiteSpace(model.Path))
+            {
+                throw new ArgumentException("An installed model is required.", nameof(model));
+            }
+            return LoadFromFileAsync(model.Path, System.IO.Path.GetDirectoryName(model.Path));
+        }
 
         private async void Start()
         {

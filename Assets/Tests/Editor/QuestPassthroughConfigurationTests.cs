@@ -13,9 +13,9 @@ namespace QuestMmdPlayer.Tests
         {
             Assert.That(QuestMmdPlayerBootstrap.AndroidTaskLabel, Is.EqualTo("\u4F34\u590F"));
             Assert.That(PlayerSettings.productName, Is.EqualTo(QuestMmdPlayerBootstrap.AndroidTaskLabel));
-            Assert.That(Application.identifier, Is.EqualTo("com.lingxi.banxia"));
-            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.1.7"));
-            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(7));
+            Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.lingxi.banxia"));
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.1.8"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(8));
         }
 
         [Test]

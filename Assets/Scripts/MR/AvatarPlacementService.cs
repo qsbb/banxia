@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.XR.CoreUtils;
 using UnityEngine;
@@ -61,6 +62,18 @@ namespace QuestMmdPlayer
         private float calibratedFloorHeight;
         private bool hasHeightCalibration;
         private bool hasCalibratedFloor;
+        private RuntimeDebugLog diagnostics;
+        private bool restingAlignmentActive;
+        private bool returningToStanding;
+        private float restingAlignmentClock;
+        private const float RestingAlignmentSeconds = .8f;
+        private Pose standingPose;
+        private Pose restingAlignmentStartPose;
+        private Pose restingTargetPose;
+        private string restingAction = string.Empty;
+        private string pendingStandingAction = string.Empty;
+        private bool internalRestActionChange;
+        private bool hasRestingPose;
         public string Status { get; private set; } = "Waiting for avatar";
         public bool HasPlacement { get; private set; }
         public bool IsUsingFallback => usingFallback;
@@ -72,6 +85,11 @@ namespace QuestMmdPlayer
         public bool HasSavedPlacementBookmark => hasSavedPlacementBookmark;
         public bool HasPreparedSeatTarget { get; private set; }
         public RoomPlacementCandidate PreparedSeatTarget { get; private set; }
+        public bool HasPreparedRestingTarget { get; private set; }
+        public RoomPlacementCandidate PreparedRestingTarget { get; private set; }
+        public bool IsRestingOrAligning => hasRestingPose || restingAlignmentActive || returningToStanding ||
+            string.Equals(avatar == null ? string.Empty : avatar.CurrentAction, "sit", StringComparison.Ordinal) ||
+            string.Equals(avatar == null ? string.Empty : avatar.CurrentAction, "lie_down", StringComparison.Ordinal);
         private void Awake()
         {
             ResolveDependencies();
@@ -80,6 +98,7 @@ namespace QuestMmdPlayer
         private void Update()
         {
             ResolveDependencies();
+            UpdateRestingAlignment();
             ReadPlacementInput();
             if (avatar == null || !placementRequested)
             {
@@ -134,12 +153,24 @@ namespace QuestMmdPlayer
                 return;
             }
 
+            if (avatar != null)
+            {
+                avatar.ActionChanged -= HandleAvatarActionChanged;
+            }
             ReleaseSpatialAnchor();
             avatar = nextAvatar;
+            diagnostics = GetComponent<RuntimeDebugLog>();
             HasPlacement = false;
             usingFallback = false;
             placementRequested = false;
             restoreRequested = false;
+            HasPreparedSeatTarget = false;
+            PreparedSeatTarget = default;
+            HasPreparedRestingTarget = false;
+            PreparedRestingTarget = default;
+            hasRestingPose = false;
+            restingAlignmentActive = false;
+            returningToStanding = false;
             hasSavedPlacementBookmark = TryLoadPlacementBookmark(out savedPlacementBookmark);
 
             if (avatar == null)
@@ -147,6 +178,8 @@ namespace QuestMmdPlayer
                 Status = "Waiting for avatar";
                 return;
             }
+
+            avatar.ActionChanged += HandleAvatarActionChanged;
 
             if (placeAutomatically)
             {
@@ -414,6 +447,253 @@ namespace QuestMmdPlayer
             PreparedSeatTarget = target;
             HasPreparedSeatTarget = true;
             return true;
+        }
+
+        /// <summary>
+        /// Resolves a semantic seat/couch/bed target without moving the avatar.
+        /// An action system can inspect SupportsSitting/SupportsLying, choose a
+        /// matching animation, then commit placement at SuggestedPose.
+        /// </summary>
+        public bool TryPrepareNearestRestingTarget()
+        {
+            ResolveDependencies();
+            HasPreparedRestingTarget = false;
+            PreparedRestingTarget = default;
+            if (roomUnderstanding == null || headCamera == null)
+            {
+                return false;
+            }
+
+            if (!roomUnderstanding.HasRoomData)
+            {
+                roomUnderstanding.RefreshNow();
+            }
+            var viewer = new Pose(headCamera.transform.position, headCamera.transform.rotation);
+            if (!roomUnderstanding.TryFindNearestRestingSurface(viewer, out var target))
+            {
+                return false;
+            }
+
+            PreparedRestingTarget = target;
+            HasPreparedRestingTarget = true;
+            return true;
+        }
+
+        /// <summary>
+        /// Starts an explicit sit/lie request. Room understanding only supplies
+        /// a candidate; this method is the sole owner of movement into it.
+        /// Missing data or a capability mismatch fails closed and leaves the
+        /// avatar in its current pose.
+        /// </summary>
+        public bool TryExecuteRestingAction(string requestedAction)
+        {
+            var action = string.IsNullOrWhiteSpace(requestedAction)
+                ? string.Empty
+                : requestedAction.Trim().ToLowerInvariant();
+            if ((action != "sit" && action != "lie_down") ||
+                avatar == null || returningToStanding || hasRestingPose)
+            {
+                return false;
+            }
+
+            if (restingAlignmentActive)
+            {
+                diagnostics?.RecordStage("avatar_action", "blocked", "rest_target_busy");
+                return false;
+            }
+
+            var hasTarget = action == "sit"
+                ? TryPrepareNearestSeatTarget()
+                : TryPrepareNearestRestingTarget();
+            var target = action == "sit" ? PreparedSeatTarget : PreparedRestingTarget;
+            var capabilityMatches = hasTarget && (action == "sit" ? target.SupportsSitting : target.SupportsLying);
+            if (!capabilityMatches || !TryCreateRestingPose(
+                    target,
+                    headCamera == null
+                        ? new Pose(transform.position, transform.rotation)
+                        : new Pose(headCamera.transform.position, headCamera.transform.rotation),
+                    action,
+                    importedAvatarFacesNegativeZ,
+                    avatar.EstimateVisualHeight(),
+                    avatar.EstimateHipHeight(),
+                    out var pose))
+            {
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "limited",
+                    hasTarget ? "rest_target_capability_missing" : "rest_target_missing");
+                return false;
+            }
+
+            standingPose = new Pose(avatar.transform.position, avatar.transform.rotation);
+            restingAlignmentStartPose = standingPose;
+            restingTargetPose = pose;
+            restingAction = action;
+            pendingStandingAction = string.Empty;
+            restingAlignmentClock = 0f;
+            restingAlignmentActive = true;
+            returningToStanding = false;
+            diagnostics?.RecordStage("avatar_action", "ready", "rest_target_found");
+            diagnostics?.RecordStage("avatar_action", "processing", "rest_alignment_started");
+            return true;
+        }
+
+        public bool TryReturnToStanding(string nextAction = "idle")
+        {
+            if (avatar == null || (!IsRestingOrAligning && !restingAlignmentActive))
+            {
+                return false;
+            }
+            pendingStandingAction = string.IsNullOrWhiteSpace(nextAction) ? "idle" : nextAction.ToLowerInvariant();
+            restingAlignmentActive = false;
+            returningToStanding = true;
+            restingAlignmentStartPose = new Pose(avatar.transform.position, avatar.transform.rotation);
+            restingAlignmentClock = 0f;
+            if (!string.Equals(avatar.CurrentAction, "idle", StringComparison.Ordinal))
+            {
+                internalRestActionChange = true;
+                avatar.PlayAction("idle");
+                internalRestActionChange = false;
+            }
+            diagnostics?.RecordStage("avatar_action", "processing", "rest_return_started");
+            return true;
+        }
+
+        public bool ResetAvatarToStanding()
+        {
+            if (TryReturnToStanding("idle"))
+            {
+                return true;
+            }
+            avatar?.ResetTransform();
+            return false;
+        }
+
+        private void HandleAvatarActionChanged(string action)
+        {
+            if (internalRestActionChange || avatar == null || !IsRestingOrAligning)
+            {
+                return;
+            }
+            if (action == "sit" || action == "lie_down")
+            {
+                return;
+            }
+            TryReturnToStanding(action);
+        }
+
+        private void UpdateRestingAlignment()
+        {
+            if (avatar == null || (!restingAlignmentActive && !returningToStanding))
+            {
+                return;
+            }
+            restingAlignmentClock += Time.unscaledDeltaTime;
+            var amount = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(
+                restingAlignmentClock / RestingAlignmentSeconds));
+            var from = restingAlignmentStartPose;
+            var to = restingAlignmentActive ? restingTargetPose : standingPose;
+            avatar.transform.SetPositionAndRotation(
+                Vector3.Lerp(from.position, to.position, amount),
+                Quaternion.Slerp(from.rotation, to.rotation, amount));
+            if (amount < 1f)
+            {
+                return;
+            }
+
+            if (restingAlignmentActive)
+            {
+                restingAlignmentActive = false;
+                hasRestingPose = true;
+                internalRestActionChange = true;
+                avatar.PlayAction(restingAction);
+                internalRestActionChange = false;
+                diagnostics?.RecordStage("avatar_action", "completed", "rest_alignment_completed");
+                return;
+            }
+
+            returningToStanding = false;
+            hasRestingPose = false;
+            var next = pendingStandingAction;
+            pendingStandingAction = string.Empty;
+            diagnostics?.RecordStage("avatar_action", "completed", "rest_return_completed");
+            if (!string.IsNullOrWhiteSpace(next) && next != "idle")
+            {
+                internalRestActionChange = true;
+                avatar.PlayAction(next);
+                internalRestActionChange = false;
+            }
+        }
+
+        public static bool TryCreateRestingPose(
+            RoomPlacementCandidate candidate,
+            Pose viewer,
+            string action,
+            bool modelFacesNegativeZ,
+            float avatarHeight,
+            float hipHeight,
+            out Pose pose)
+        {
+            pose = default;
+            var normalized = string.IsNullOrWhiteSpace(action) ? string.Empty : action.ToLowerInvariant();
+            if ((normalized != "sit" && normalized != "lie_down") ||
+                !IsFinite(viewer.position) ||
+                !IsFinite(candidate.SurfacePose.position) || !IsFinite(candidate.SurfacePose.rotation) ||
+                !IsFinite(candidate.SuggestedPose.position) || !IsFinite(candidate.SuggestedPose.rotation) ||
+                candidate.Size.x <= .1f || candidate.Size.y <= .1f)
+            {
+                return false;
+            }
+            if ((normalized == "sit" && !candidate.SupportsSitting) ||
+                (normalized == "lie_down" && !candidate.SupportsLying))
+            {
+                return false;
+            }
+
+            var surfaceUp = candidate.SurfacePose.rotation * Vector3.up;
+            if (surfaceUp.sqrMagnitude < .5f || Vector3.Dot(surfaceUp.normalized, Vector3.up) < .65f)
+            {
+                return false;
+            }
+            surfaceUp.Normalize();
+            if (normalized == "sit")
+            {
+                var rotation = ComputeFacingRotation(
+                    candidate.SuggestedPose.position,
+                    viewer.position,
+                    modelFacesNegativeZ);
+                var position = candidate.SuggestedPose.position + surfaceUp * .015f;
+                // The placeholder pose bends at the hip, so keep the root near
+                // the room floor while putting the seat under the pelvis region.
+                position -= Vector3.up * Mathf.Clamp(hipHeight * .52f, .2f, .85f);
+                pose = new Pose(position, rotation);
+                return IsFinite(rotation) && IsWithinSurfaceBounds(candidate, position, .04f);
+            }
+
+            var localLongAxis = candidate.Size.x >= candidate.Size.y ? Vector3.right : Vector3.forward;
+            var bodyDirection = candidate.SurfacePose.rotation * localLongAxis;
+            bodyDirection = Vector3.ProjectOnPlane(bodyDirection, surfaceUp).normalized;
+            if (bodyDirection.sqrMagnitude < .5f)
+            {
+                return false;
+            }
+            var faceDirection = modelFacesNegativeZ ? -surfaceUp : surfaceUp;
+            var lieRotation = Quaternion.LookRotation(faceDirection, bodyDirection);
+            var margin = .08f;
+            var availableHalfLength = Mathf.Max(.05f, Mathf.Max(candidate.Size.x, candidate.Size.y) * .5f - margin);
+            var rootShift = Mathf.Min(Mathf.Max(.1f, avatarHeight * .5f), availableHalfLength * .8f);
+            var liePosition = candidate.SuggestedPose.position - bodyDirection * rootShift + surfaceUp * .035f;
+            pose = new Pose(liePosition, lieRotation);
+            return IsFinite(lieRotation) && IsWithinSurfaceBounds(candidate, liePosition, margin);
+        }
+
+        private static bool IsWithinSurfaceBounds(RoomPlacementCandidate candidate, Vector3 position, float margin)
+        {
+            var local = Quaternion.Inverse(candidate.SurfacePose.rotation) *
+                (position - candidate.SurfacePose.position);
+            var halfX = Mathf.Max(0f, candidate.Size.x * .5f - margin);
+            var halfY = Mathf.Max(0f, candidate.Size.y * .5f - margin);
+            return Mathf.Abs(local.x) <= halfX + .001f && Mathf.Abs(local.z) <= halfY + .001f;
         }
 
         public void ForgetSavedPlacement()
@@ -705,6 +985,10 @@ namespace QuestMmdPlayer
 
         private void OnDestroy()
         {
+            if (avatar != null)
+            {
+                avatar.ActionChanged -= HandleAvatarActionChanged;
+            }
             ReleaseSpatialAnchor();
         }
 
@@ -805,10 +1089,14 @@ namespace QuestMmdPlayer
 
         public static bool IsValidPlacementBookmark(AvatarPlacementBookmark bookmark)
         {
+            var classification = (PlaneClassification)bookmark.SurfaceClassification;
+            var hasSupportedSurface = RoomUnderstandingService.TryResolvePlacementSurfaceKind(
+                classification,
+                out var surfaceKind) &&
+                surfaceKind != RoomPlacementSurfaceKind.Table;
             return bookmark.Version == PlacementBookmarkVersion &&
                 !string.IsNullOrEmpty(bookmark.SurfaceId) && bookmark.SurfaceId.Length <= 128 &&
-                (bookmark.SurfaceClassification == (int)PlaneClassification.Floor ||
-                 bookmark.SurfaceClassification == (int)PlaneClassification.Seat) &&
+                hasSupportedSurface &&
                 IsFinite(bookmark.SurfacePositionInOrigin) &&
                 IsFinite(bookmark.SurfaceRotationInOrigin) &&
                 IsFinite(bookmark.SurfaceSize) && bookmark.SurfaceSize.x > 0f && bookmark.SurfaceSize.y > 0f &&

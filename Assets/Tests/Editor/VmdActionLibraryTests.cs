@@ -188,6 +188,21 @@ namespace QuestMmdPlayer.Tests
             });
             Assert.That(selected.Id, Is.EqualTo("greeting_motion"));
         }
+
+        [Test]
+        public void NextDanceCyclesAcrossValidatedImportedActions()
+        {
+            var actions = new[]
+            {
+                new VmdActionInfo("greeting_motion", 10, 1, 30, 1f),
+                new VmdActionInfo("dance_alpha", 10, 1, 30, 1f),
+                new VmdActionInfo("dance_beta", 10, 1, 30, 1f)
+            };
+
+            Assert.That(VmdActionLibrary.SelectNextDance(actions, "dance_alpha").Id, Is.EqualTo("dance_beta"));
+            Assert.That(VmdActionLibrary.SelectNextDance(actions, "dance_beta").Id, Is.EqualTo("greeting_motion"));
+            Assert.That(VmdActionLibrary.SelectNextDance(actions, "missing").Id, Is.EqualTo("dance_alpha"));
+        }
         private static void WriteVmd(string path, uint[] boneFrames, uint[] morphFrames)
         {
             using var stream = File.Create(path);

@@ -31,6 +31,7 @@ namespace QuestMmdPlayer
         private AvatarHumanInteraction humanInteraction;
         private Pcm16StreamAudioPlayer audioPlayer;
         private VmdActionLibrary vmdActions;
+        private AvatarPlacementService placement;
         private RuntimeDebugLog diagnostics;
         private System.Threading.Tasks.Task activeDanceTask;
         private Transform head;
@@ -43,10 +44,15 @@ namespace QuestMmdPlayer
         [SerializeField, Range(.5f, 6f)] private float idleGazeBlendSpeed = 2.25f;
         private float gazeBlend;
         private bool mouthWasActive;
+        private float smoothedMouthAmount;
         private string targetEmotion = "neutral";
         private float targetEmotionIntensity;
         private string manualExpression = "neutral";
+        private string lastLoggedAction = "idle";
         [SerializeField, Range(1f, 12f)] private float expressionBlendSpeed = 6f;
+        [SerializeField, Range(1f, 24f)] private float mouthAttackSpeed = 11f;
+        [SerializeField, Range(1f, 24f)] private float mouthReleaseSpeed = 7f;
+        [SerializeField, Range(2f, 10f)] private float visemeCyclesPerSecond = 5f;
 
         public int MatchedVisemeCount => visemes.Count;
         public string ManualExpression => manualExpression;
@@ -56,6 +62,10 @@ namespace QuestMmdPlayer
 
         public void Bind(AvatarController target, AvatarHumanInteraction human, Pcm16StreamAudioPlayer streamPlayer)
         {
+            if (avatar != null)
+            {
+                avatar.ActionChanged -= HandleAvatarActionChanged;
+            }
             RestoreMouth();
             RestoreExpressions();
             RestoreJaw();
@@ -64,6 +74,7 @@ namespace QuestMmdPlayer
             humanInteraction = human;
             audioPlayer = streamPlayer;
             vmdActions = GetComponent<VmdActionLibrary>();
+            placement = GetComponent<AvatarPlacementService>();
             diagnostics = GetComponent<RuntimeDebugLog>();
             head = null;
             jaw = null;
@@ -75,12 +86,16 @@ namespace QuestMmdPlayer
             gazeBlend = 0f;
             lookAtMode = "none";
             mouthWasActive = false;
+            smoothedMouthAmount = 0f;
             behavior.Reset(Time.unscaledTime, UnityEngine.Random.value);
 
             if (avatar == null)
             {
                 return;
             }
+
+            lastLoggedAction = avatar.CurrentAction;
+            avatar.ActionChanged += HandleAvatarActionChanged;
 
             head = FindHead(avatar);
             if (head != null)
@@ -114,7 +129,12 @@ namespace QuestMmdPlayer
             }
 
             emotion = AstrBotProtocol.SanitizeEmotion(emotion);
-            gesture = AstrBotProtocol.SanitizeGesture(gesture);
+            var requestedGesture = string.IsNullOrWhiteSpace(gesture) ? string.Empty : gesture.Trim().ToLowerInvariant();
+            // World-placement actions remain exact enum values. Free-form text
+            // never reaches AvatarPlacementService.
+            gesture = requestedGesture == "sit" || requestedGesture == "lie" || requestedGesture == "lie_down"
+                ? requestedGesture == "lie" ? "lie_down" : requestedGesture
+                : AstrBotProtocol.SanitizeGesture(gesture);
             lookAt = AstrBotProtocol.SanitizeLookAt(lookAt);
             avatar.SetEmotion(emotion);
             targetEmotion = emotion;
@@ -130,12 +150,25 @@ namespace QuestMmdPlayer
                     out var acceptedGesture))
             {
                 diagnostics?.Record("AvatarAction", "后端动作意图被本地仲裁阻止：" + gesture);
+                diagnostics?.RecordStage("avatar_action", "blocked", "action_arbitration_blocked");
                 return;
             }
 
             diagnostics?.Record("AvatarAction", "后端动作意图已接受：" + acceptedGesture);
+            diagnostics?.RecordStage("avatar_action", "processing", "backend_intent_accepted");
 
-            if (acceptedGesture == "handshake")
+            if (acceptedGesture == "sit" || acceptedGesture == "lie_down")
+            {
+                if (placement == null || !placement.TryExecuteRestingAction(acceptedGesture))
+                {
+                    diagnostics?.RecordStage("avatar_action", "limited", "rest_target_unavailable");
+                }
+            }
+            else if (placement != null && placement.IsRestingOrAligning && acceptedGesture != "talk")
+            {
+                placement.TryReturnToStanding(acceptedGesture);
+            }
+            else if (acceptedGesture == "handshake")
             {
                 humanInteraction?.PlayReaction(HumanInteractionKind.Handshake, reactionSeconds);
             }
@@ -148,12 +181,15 @@ namespace QuestMmdPlayer
                 humanInteraction?.PlayReaction(HumanInteractionKind.CheekPinch, reactionSeconds);
             }
             else if (acceptedGesture == "wave" || acceptedGesture == "bow" ||
-                acceptedGesture == "dance" || acceptedGesture == "nod" ||
-                acceptedGesture == "sway" || acceptedGesture == "idle")
+                acceptedGesture == "dance" || acceptedGesture == "dance_next" ||
+                acceptedGesture == "nod" || acceptedGesture == "sway" ||
+                acceptedGesture == "raise_hand" || acceptedGesture == "turn_half" ||
+                acceptedGesture == "refuse" || acceptedGesture == "step_back" ||
+                acceptedGesture == "idle")
             {
-                if (acceptedGesture == "dance")
+                if (acceptedGesture == "dance" || acceptedGesture == "dance_next")
                 {
-                    _ = PlayRecommendedDance();
+                    _ = PlayRecommendedDance(acceptedGesture == "dance_next");
                 }
                 else
                 {
@@ -176,9 +212,23 @@ namespace QuestMmdPlayer
                 ? "idle"
                 : action.Trim().ToLowerInvariant();
             diagnostics?.Record("AvatarAction", "本地动作回退执行：" + normalized);
-            if (normalized == "dance")
+            diagnostics?.RecordStage("avatar_action", "processing", "local_action_fallback");
+            if (normalized == "sit" || normalized == "lie_down")
             {
-                _ = PlayRecommendedDance();
+                if (placement == null || !placement.TryExecuteRestingAction(normalized))
+                {
+                    diagnostics?.RecordStage("avatar_action", "limited", "rest_target_unavailable");
+                }
+                return;
+            }
+            if (placement != null && placement.IsRestingOrAligning)
+            {
+                placement.TryReturnToStanding(normalized);
+                return;
+            }
+            if (normalized == "dance" || normalized == "dance_next")
+            {
+                _ = PlayRecommendedDance(normalized == "dance_next");
                 return;
             }
 
@@ -188,7 +238,7 @@ namespace QuestMmdPlayer
             }
         }
 
-        private async System.Threading.Tasks.Task PlayRecommendedDance()
+        private async System.Threading.Tasks.Task PlayRecommendedDance(bool selectNext = false)
         {
             if (activeDanceTask != null && !activeDanceTask.IsCompleted)
             {
@@ -197,7 +247,7 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            activeDanceTask = PlayRecommendedDanceCore();
+            activeDanceTask = PlayRecommendedDanceCore(selectNext);
             try
             {
                 await activeDanceTask;
@@ -208,19 +258,27 @@ namespace QuestMmdPlayer
             }
         }
 
-        private async System.Threading.Tasks.Task PlayRecommendedDanceCore()
+        private async System.Threading.Tasks.Task PlayRecommendedDanceCore(bool selectNext)
         {
-            diagnostics?.Record("AvatarAction", "开始查找可播放的自定义舞蹈动作");
+            diagnostics?.Record("AvatarAction", selectNext
+                ? "开始查找下一支可播放的自定义舞蹈动作"
+                : "开始查找可播放的自定义舞蹈动作");
             if (vmdActions != null && vmdActions.BoundModel)
             {
                 try
                 {
-                    var played = await vmdActions.PlayRecommendedDanceAsync();
+                    var played = selectNext
+                        ? await vmdActions.PlayNextDanceAsync()
+                        : await vmdActions.PlayRecommendedDanceAsync();
                     diagnostics?.Record(
                         "AvatarAction",
                         played
                             ? "舞蹈请求已播放导入动作：" + vmdActions.CurrentActionId
                             : "舞蹈请求未找到可播放的导入动作");
+                    diagnostics?.RecordStage(
+                        "avatar_action",
+                        played ? "completed" : "limited",
+                        played ? "custom_dance_started" : "custom_dance_unavailable");
                     if (played)
                     {
                         return;
@@ -298,6 +356,24 @@ namespace QuestMmdPlayer
                     vmdActions.IsHoldingEndPose || vmdActions.IsBlendingOut);
         }
 
+        private void HandleAvatarActionChanged(string nextAction)
+        {
+            var normalized = string.IsNullOrWhiteSpace(nextAction) ? "idle" : nextAction;
+            diagnostics?.Record(
+                "AvatarAction",
+                "\u52a8\u4f5c\u5207\u6362: " + lastLoggedAction + " -> " + normalized);
+            diagnostics?.RecordStage("avatar_action", "completed", "action_state_changed");
+            lastLoggedAction = normalized;
+        }
+
+        private void OnDestroy()
+        {
+            if (avatar != null)
+            {
+                avatar.ActionChanged -= HandleAvatarActionChanged;
+            }
+        }
+
         public static bool ShouldUseIdleUserGaze(ConversationState conversationState, bool semanticContact, bool enabled)
         {
             return enabled && !semanticContact && conversationState == ConversationState.Idle;
@@ -337,7 +413,14 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            var amount = Mathf.Clamp01((rms - .0025f) * 22f);
+            var targetAmount = Mathf.Clamp01((rms - .0025f) * 22f);
+            var amount = SmoothMouthAmount(
+                smoothedMouthAmount,
+                targetAmount,
+                Time.unscaledDeltaTime,
+                mouthAttackSpeed,
+                mouthReleaseSpeed);
+            smoothedMouthAmount = amount;
             if (amount <= .001f)
             {
                 if (mouthWasActive)
@@ -349,17 +432,40 @@ namespace QuestMmdPlayer
             }
 
             mouthWasActive = true;
-            var active = visemes.Count == 0 ? -1 : Mathf.FloorToInt(Time.unscaledTime * 8f) % visemes.Count;
+            var visemeClock = Time.unscaledTime * Mathf.Max(1f, visemeCyclesPerSecond);
+            var active = visemes.Count == 0 ? -1 : Mathf.FloorToInt(visemeClock) % visemes.Count;
+            var next = visemes.Count <= 1 ? active : (active + 1) % visemes.Count;
+            var crossfade = Mathf.SmoothStep(0f, 1f, visemeClock - Mathf.Floor(visemeClock));
             for (var i = 0; i < visemes.Count; i++)
             {
                 var viseme = visemes[i];
-                var add = i == active ? amount * 68f : 0f;
+                var influence = i == active
+                    ? 1f - crossfade
+                    : i == next
+                        ? crossfade
+                        : 0f;
+                var add = amount * influence * 68f;
                 viseme.Renderer.SetBlendShapeWeight(viseme.Index, Mathf.Clamp(viseme.BaseWeight + add, 0f, 100f));
             }
             if (jaw != null)
             {
                 jaw.localRotation = Quaternion.Slerp(jawBaseRotation, jawBaseRotation * Quaternion.Euler(amount * 13f, 0f, 0f), amount);
             }
+        }
+
+        public static float SmoothMouthAmount(
+            float current,
+            float target,
+            float deltaTime,
+            float attackSpeed,
+            float releaseSpeed)
+        {
+            var safeCurrent = Mathf.Clamp01(current);
+            var safeTarget = Mathf.Clamp01(target);
+            var speed = safeTarget > safeCurrent
+                ? Mathf.Max(.01f, attackSpeed)
+                : Mathf.Max(.01f, releaseSpeed);
+            return Mathf.MoveTowards(safeCurrent, safeTarget, Mathf.Max(0f, deltaTime) * speed);
         }
 
         private void CacheVisemes()

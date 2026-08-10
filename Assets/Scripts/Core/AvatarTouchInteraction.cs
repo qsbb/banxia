@@ -772,8 +772,11 @@ namespace QuestMmdPlayer
                 }
 
                 var priority = ContactPriority(proxy.Region);
-                if (priority < bestPriority ||
-                    priority == bestPriority && distance <= bestDistance)
+                // Choose the deepest overlap for physical separation. Semantic
+                // priority alone can select a shallow face proxy while the
+                // palm remains inside a larger torso volume.
+                if (distance < bestDistance - .000001f ||
+                    Mathf.Abs(distance - bestDistance) <= .000001f && priority <= bestPriority)
                 {
                     continue;
                 }
@@ -827,7 +830,8 @@ namespace QuestMmdPlayer
             {
                 CreateSphereProxy("Head", AvatarContactRegion.Head, headCenter, headRadius, headBone);
             }
-            var faceCenter = headCenter + avatar.transform.forward * headRadius * .72f;
+            var faceDirection = ResolveFaceDirection(headBone);
+            var faceCenter = headCenter + faceDirection * headRadius * .72f;
             CreateSphereProxy("Face", AvatarContactRegion.Face, faceCenter, headRadius * .72f, headBone);
             var hairBone = FindAvatarBone("hair", "hairfront", "bangs", "髪", "头发", "前发");
             // Prefer PMX hair rigid bodies when available. The fallback sphere
@@ -847,6 +851,22 @@ namespace QuestMmdPlayer
             {
                 CreateSphereProxy("Right Hand", AvatarContactRegion.Hand, rightBone.position, handRadius, rightBone);
             }
+            // Models without complete PMX rigid-body metadata still need
+            // touchable limb volumes. PMX volumes remain authoritative when
+            // present; these are only bone-following fallbacks.
+            CreateFallbackBoneProxy("Left Upper Arm", AvatarContactRegion.Limb, handRadius * 1.35f,
+                "leftupperarm", "leftarm", "arm_l", "左腕");
+            CreateFallbackBoneProxy("Right Upper Arm", AvatarContactRegion.Limb, handRadius * 1.35f,
+                "rightupperarm", "rightarm", "arm_r", "右腕");
+            CreateFallbackBoneProxy("Left Forearm", AvatarContactRegion.Limb, handRadius * 1.2f,
+                "leftforearm", "leftelbow", "forearm_l", "leftelbow", "左肘");
+            CreateFallbackBoneProxy("Right Forearm", AvatarContactRegion.Limb, handRadius * 1.2f,
+                "rightforearm", "rightelbow", "forearm_r", "rightelbow", "右肘");
+            CreateFallbackBoneProxy("Left Thigh", AvatarContactRegion.Limb, handRadius * 1.5f,
+                "leftthigh", "thigh_l", "左足");
+            CreateFallbackBoneProxy("Right Thigh", AvatarContactRegion.Limb, handRadius * 1.5f,
+                "rightthigh", "thigh_r", "右足");
+            CreateFallbackHairProxies(hairBone, headRadius * .52f);
             collisionGeometryReady = true;
             Debug.Log(
                 $"[AvatarTouch] Physical proxies ready; avatarScale={avatar.transform.lossyScale:F3}, " +
@@ -1042,6 +1062,74 @@ namespace QuestMmdPlayer
                 }
             }
             return null;
+        }
+
+        private Vector3 ResolveFaceDirection(Transform headBone)
+        {
+            var candidate = headBone == null ? avatar.transform.forward : headBone.forward;
+            candidate = Vector3.ProjectOnPlane(candidate, Vector3.up);
+            if (candidate.sqrMagnitude < .0001f)
+            {
+                candidate = avatar.transform.forward;
+            }
+
+            // A model can be authored with either +Z or -Z as its visual
+            // front. When a camera is available, choose the head direction
+            // facing the user so the face proxy cannot end up behind the head.
+            var reference = headBone == null ? avatar.transform.position : headBone.position;
+            var towardCamera = Camera.main == null
+                ? -avatar.transform.forward
+                : Vector3.ProjectOnPlane(Camera.main.transform.position - reference, Vector3.up);
+            if (towardCamera.sqrMagnitude > .0001f && Vector3.Dot(candidate, towardCamera) < 0f)
+            {
+                candidate = -candidate;
+            }
+            return candidate.normalized;
+        }
+
+        private void CreateFallbackBoneProxy(
+            string objectName,
+            AvatarContactRegion region,
+            float radius,
+            params string[] names)
+        {
+            var bone = FindAvatarBone(names);
+            if (bone == null || HasProxyFollowing(bone))
+            {
+                return;
+            }
+            CreateSphereProxy(objectName, region, bone.position, radius, bone);
+        }
+
+        private void CreateFallbackHairProxies(Transform primaryHairBone, float radius)
+        {
+            if (HasProxyRegion(AvatarContactRegion.Hair))
+            {
+                return;
+            }
+            var bones = avatar.GetComponentsInChildren<MMDBoneTransform>(true);
+            var added = 0;
+            for (var index = 0; index < bones.Length && added < 8; index++)
+            {
+                var bone = bones[index];
+                if (bone == null || bone.transform == primaryHairBone ||
+                    !ContainsAny(NormalizeBoneName(bone.boneName),
+                        "hair", "bang", "ponytail", "twintail", "髪", "头发", "前发"))
+                {
+                    continue;
+                }
+                if (HasProxyFollowing(bone.transform))
+                {
+                    continue;
+                }
+                CreateSphereProxy(
+                    "Avatar Hair Contact " + added,
+                    AvatarContactRegion.Hair,
+                    bone.transform.position,
+                    radius,
+                    bone.transform);
+                added++;
+            }
         }
 
         private static string NormalizeBoneName(string value)

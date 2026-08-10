@@ -304,6 +304,80 @@ namespace QuestMmdPlayer.Tests
                 out _), Is.False);
         }
 
+        [Test]
+        public void RestingPoseRejectsCapabilityMismatch()
+        {
+            var seatOnly = new RoomPlacementCandidate(
+                "seat",
+                RoomPlacementSurfaceKind.Seat,
+                new Pose(new Vector3(0f, .45f, 1f), Quaternion.identity),
+                new Pose(new Vector3(0f, .45f, 1f), Quaternion.identity),
+                new Vector2(.8f, .6f),
+                true,
+                false);
+
+            Assert.That(AvatarPlacementService.TryCreateRestingPose(
+                seatOnly,
+                new Pose(Vector3.zero, Quaternion.identity),
+                "lie_down",
+                true,
+                1.6f,
+                .82f,
+                out _), Is.False);
+        }
+
+        [Test]
+        public void LyingPoseRemainsInsideSurfaceAndFacesUpForNegativeZModel()
+        {
+            var bed = new RoomPlacementCandidate(
+                "bed",
+                RoomPlacementSurfaceKind.Bed,
+                new Pose(new Vector3(0f, .52f, 1.4f), Quaternion.Euler(0f, 25f, 0f)),
+                new Pose(new Vector3(0f, .52f, 1.4f), Quaternion.identity),
+                new Vector2(1.9f, .9f),
+                true,
+                true);
+
+            Assert.That(AvatarPlacementService.TryCreateRestingPose(
+                bed,
+                new Pose(Vector3.zero, Quaternion.identity),
+                "lie_down",
+                true,
+                1.6f,
+                .82f,
+                out var pose), Is.True);
+            var local = Quaternion.Inverse(bed.SurfacePose.rotation) *
+                (pose.position - bed.SurfacePose.position);
+            Assert.That(Mathf.Abs(local.x), Is.LessThanOrEqualTo(bed.Size.x * .5f - .079f));
+            Assert.That(Mathf.Abs(local.z), Is.LessThanOrEqualTo(bed.Size.y * .5f - .079f));
+            Assert.That(Vector3.Angle(pose.rotation * Vector3.back, Vector3.up), Is.LessThan(.01f));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SittingPoseFacesViewerForBothModelForwardConventions(bool negativeZ)
+        {
+            var seat = new RoomPlacementCandidate(
+                "chair",
+                RoomPlacementSurfaceKind.Seat,
+                new Pose(new Vector3(0f, .45f, 1f), Quaternion.identity),
+                new Pose(new Vector3(0f, .45f, 1f), Quaternion.identity),
+                new Vector2(.8f, .65f),
+                true,
+                false);
+
+            Assert.That(AvatarPlacementService.TryCreateRestingPose(
+                seat,
+                new Pose(Vector3.zero, Quaternion.identity),
+                "sit",
+                negativeZ,
+                1.6f,
+                .82f,
+                out var pose), Is.True);
+            var modelFacing = pose.rotation * (negativeZ ? Vector3.back : Vector3.forward);
+            Assert.That(Vector3.Angle(modelFacing, Vector3.back), Is.LessThan(.01f));
+        }
+
         private static RoomSurfaceObservation Surface(
             string id,
             PlaneClassification classification,

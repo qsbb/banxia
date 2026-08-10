@@ -423,6 +423,8 @@ namespace QuestMmdPlayer
         private readonly SemaphoreSlim conversionGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim refreshGate = new SemaphoreSlim(1, 1);
         private VmdActionInfo[] actions = Array.Empty<VmdActionInfo>();
+        private string lastPlayedActionId = string.Empty;
+        private RuntimeDebugLog diagnostics;
         private string actionDirectoryFingerprint = string.Empty;
         private bool hasRefreshSnapshot;
         private PMXModel boundModel;
@@ -651,8 +653,10 @@ namespace QuestMmdPlayer
         public void BindModel(PMXModel model, Transform modelRoot, AvatarController avatar)
         {
             ClearModel();
+            diagnostics = GetComponent<RuntimeDebugLog>();
             if (model == null || modelRoot == null || avatar == null)
             {
+                diagnostics?.RecordStage("avatar_action", "limited", "vmd_model_unbound");
                 return;
             }
 
@@ -662,6 +666,7 @@ namespace QuestMmdPlayer
             boundRoot = modelRoot;
             boundAvatar = avatar;
             transformManager = modelRoot.GetComponent<MMDTransformManager>();
+            diagnostics?.RecordStage("avatar_action", "ready", "vmd_model_bound");
         }
 
         public void ClearModel()
@@ -673,12 +678,15 @@ namespace QuestMmdPlayer
             boundRoot = null;
             boundAvatar = null;
             transformManager = null;
+            lastPlayedActionId = string.Empty;
         }
 
         public async Task<bool> PlayAsync(string actionId)
         {
             var operationStartedAt = Time.realtimeSinceStartup;
             var usedPreparedCache = false;
+            diagnostics ??= GetComponent<RuntimeDebugLog>();
+            diagnostics?.RecordStage("avatar_action", "processing", "vmd_request");
             if (IsLoading)
             {
                 ReportFailure("另一个 VMD 动作正在加载。");
@@ -717,6 +725,7 @@ namespace QuestMmdPlayer
                     nextBones = prepared.bones;
                     nextMorphs = prepared.morphs;
                     ProgressChanged?.Invoke("正在使用已缓存动作 " + info.DisplayName);
+                    diagnostics?.RecordStage("avatar_action", "processing", "vmd_cache_hit");
                 }
                 else
                 {
@@ -805,6 +814,7 @@ namespace QuestMmdPlayer
                 playbackClock = 0f;
                 playbackDuration = Mathf.Max(.01f, info.DurationSeconds);
                 CurrentActionId = info.Id;
+                lastPlayedActionId = info.Id;
                 BeginPhysicsArbitration();
                 IsPlaying = true;
                 boundAvatar?.PlayAction("vmd");
@@ -814,6 +824,11 @@ namespace QuestMmdPlayer
                     " cache=" + usedPreparedCache +
                     " elapsed_ms=" + Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)),
                     this);
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "completed",
+                    usedPreparedCache ? "vmd_playback_cached" : "vmd_playback_prepared",
+                    elapsedMs: Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)));
                 PlaybackChanged?.Invoke();
                 return true;
             }
@@ -830,6 +845,11 @@ namespace QuestMmdPlayer
                     " elapsed_ms=" + Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)) +
                     " reason=" + exception.Message,
                     this);
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "failed",
+                    "vmd_load_failed",
+                    elapsedMs: Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)));
                 return false;
             }
             finally
@@ -865,6 +885,24 @@ namespace QuestMmdPlayer
             return await PlayAsync(candidate.Id);
         }
 
+        public async Task<bool> PlayNextDanceAsync()
+        {
+            await RefreshAsync();
+            var previous = string.IsNullOrEmpty(CurrentActionId)
+                ? lastPlayedActionId
+                : CurrentActionId;
+            var candidate = SelectNextDance(actions, previous);
+            if (candidate == null)
+            {
+                Debug.LogWarning("[VmdActionLibrary] No alternate imported action is available for the dance request.", this);
+                return false;
+            }
+
+            Debug.Log("[VmdActionLibrary] Next dance selected imported action: " + candidate.Id +
+                " previous=" + (string.IsNullOrEmpty(previous) ? "none" : previous), this);
+            return await PlayAsync(candidate.Id);
+        }
+
         public static VmdActionInfo SelectRecommendedDance(IEnumerable<VmdActionInfo> available)
         {
             var valid = (available ?? Enumerable.Empty<VmdActionInfo>())
@@ -887,6 +925,29 @@ namespace QuestMmdPlayer
                     .FirstOrDefault();
             }
             return candidate;
+        }
+
+        public static VmdActionInfo SelectNextDance(
+            IEnumerable<VmdActionInfo> available,
+            string currentActionId)
+        {
+            var ordered = (available ?? Enumerable.Empty<VmdActionInfo>())
+                .Where(info => info != null)
+                .OrderByDescending(info => IsDanceLikeName(info.Id))
+                .ThenByDescending(info => DanceNameScore(info.Id))
+                .ThenBy(info => info.Id, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (ordered.Length == 0)
+            {
+                return null;
+            }
+
+            var currentIndex = Array.FindIndex(
+                ordered,
+                info => string.Equals(info.Id, currentActionId, StringComparison.OrdinalIgnoreCase));
+            return currentIndex < 0
+                ? ordered[0]
+                : ordered[(currentIndex + 1) % ordered.Length];
         }
 
         public static bool IsDanceLikeName(string value)
@@ -1076,6 +1137,7 @@ namespace QuestMmdPlayer
 
             endPoseHoldActive = true;
             endPoseHoldClock = 0f;
+            diagnostics?.RecordStage("avatar_action", "processing", "vmd_end_pose_hold");
         }
 
         private void ApplyPlaybackPose(float time)
@@ -1133,6 +1195,7 @@ namespace QuestMmdPlayer
             IsPlaying = false;
             blendOutActive = true;
             blendOutClock = 0f;
+            diagnostics?.RecordStage("avatar_action", "processing", "vmd_blend_out");
             PlaybackChanged?.Invoke();
         }
 
@@ -1187,6 +1250,7 @@ namespace QuestMmdPlayer
             boundAvatar?.PlayAction("idle");
             if (hadPlayback)
             {
+                diagnostics?.RecordStage("avatar_action", "completed", "vmd_idle_restored");
                 PlaybackChanged?.Invoke();
             }
         }

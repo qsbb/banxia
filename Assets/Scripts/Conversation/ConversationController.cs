@@ -666,25 +666,36 @@ namespace QuestMmdPlayer
             {
                 pendingLocalAction = detectedAction;
                 Debug.Log("[Conversation] Explicit action request detected: " + detectedAction, this);
-                // Start explicit local actions immediately. AstrBot remains
-                // authoritative when it later emits avatar.intent, but a
-                // dance request still works when the reply has no action event.
-                if (presenter != null)
-                {
-                    presenter.PlayLocalAction(detectedAction);
-                    localActionStarted = true;
-                    pendingLocalAction = string.Empty;
-                    diagnostics?.Record("AvatarAction", "显式请求立即执行本地动作：" + detectedAction);
-                }
+                diagnostics?.Record(
+                    "AvatarAction",
+                    "显式动作请求已排队，等待后端 avatar.intent：" + detectedAction);
             }
         }
 
         private void TryRunLocalActionFallback()
         {
-            if (localActionStarted || string.IsNullOrEmpty(pendingLocalAction) || backendActionReceived)
+            if (localActionStarted || backendActionReceived)
             {
+                if (backendActionReceived)
+                {
+                    diagnostics?.Record("AvatarAction", "后端已返回可执行动作，本地动作回退未运行");
+                }
                 pendingLocalAction = string.Empty;
                 localActionStarted = false;
+                return;
+            }
+
+            if (string.IsNullOrEmpty(pendingLocalAction) &&
+                ConversationActionIntent.TryDetect(stateMachine.ReplyText, out var replyAction))
+            {
+                pendingLocalAction = replyAction;
+                diagnostics?.Record(
+                    "AvatarAction",
+                    "后端回复描述了动作但未返回 avatar.intent，已准备回退：" + replyAction);
+            }
+            if (string.IsNullOrEmpty(pendingLocalAction))
+            {
+                diagnostics?.Record("AvatarAction", "本轮没有可执行动作");
                 return;
             }
 
@@ -694,6 +705,9 @@ namespace QuestMmdPlayer
             localActionStarted = true;
             Debug.Log("[Conversation] Local action fallback executed: " + action +
                 " (AstrBot reply had no executable avatar.intent).", this);
+            diagnostics?.Record(
+                "AvatarAction",
+                "后端未返回可执行 avatar.intent，回复结束后执行本地回退：" + action);
         }
 
         private static bool IsExecutableAvatarAction(string gesture)

@@ -40,6 +40,10 @@ namespace QuestMmdPlayer
             var normalized = string.IsNullOrWhiteSpace(gesture)
                 ? "idle"
                 : gesture.ToLowerInvariant();
+            if (normalized == "lie")
+            {
+                normalized = "lie_down";
+            }
 
             if (normalized == "handshake" || normalized == "head_pat" ||
                 normalized == "cheek_pinch" || normalized == "talk")
@@ -49,7 +53,10 @@ namespace QuestMmdPlayer
             }
 
             if (normalized != "wave" && normalized != "bow" && normalized != "dance" &&
-                normalized != "nod" && normalized != "sway" && normalized != "idle")
+                normalized != "dance_next" && normalized != "nod" && normalized != "sway" &&
+                normalized != "raise_hand" && normalized != "turn_half" &&
+                normalized != "refuse" && normalized != "step_back" &&
+                normalized != "sit" && normalized != "lie_down" && normalized != "idle")
             {
                 return false;
             }

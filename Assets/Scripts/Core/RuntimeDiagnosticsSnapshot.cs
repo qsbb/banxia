@@ -13,6 +13,7 @@ namespace QuestMmdPlayer
         Pairing,
         PairingKeyboard,
         Appearance,
+        Models,
         Quality,
         Voice,
         TextInput,
@@ -486,11 +487,12 @@ namespace QuestMmdPlayer
             }
             if (IsActive(menuRoot, "Quality Layer")) return RuntimeMenuLayer.Quality;
             if (IsActive(menuRoot, "Voice Layer")) return RuntimeMenuLayer.Voice;
-            if (IsActive(menuRoot, "Debug Layer")) return RuntimeMenuLayer.Debug;
+            if (IsActive(menuRoot, "Model Library Layer")) return RuntimeMenuLayer.Models;
             if (IsActive(menuRoot, "Appearance Layer")) return RuntimeMenuLayer.Appearance;
             if (IsActive(menuRoot, "Backend Pairing Layer")) return RuntimeMenuLayer.Pairing;
             if (IsActive(menuRoot, "Action Presets Layer")) return RuntimeMenuLayer.Actions;
             if (IsActive(menuRoot, "Main Menu Layer")) return RuntimeMenuLayer.Main;
+            if (IsActive(menuRoot, "Debug Layer")) return RuntimeMenuLayer.Debug;
             return RuntimeMenuLayer.Unknown;
         }
 

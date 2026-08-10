@@ -69,7 +69,8 @@ namespace QuestMmdPlayer.Tests
             Assert.IsFalse(behavior.TryAcceptIntent("wave", false, false, 2.5f, out _));
             Assert.IsFalse(behavior.TryAcceptIntent("bow", true, false, 8f, out _));
             Assert.IsFalse(behavior.TryAcceptIntent("bow", false, true, 8f, out _));
-            Assert.IsFalse(behavior.TryAcceptIntent("step_back", false, false, 8f, out _));
+            Assert.IsTrue(behavior.TryAcceptIntent("step_back", false, false, 8f, out var stepBack));
+            Assert.AreEqual("step_back", stepBack);
             Assert.IsTrue(behavior.TryAcceptIntent("talk", true, true, 8f, out var talk));
             Assert.AreEqual("talk", talk);
         }
@@ -112,6 +113,16 @@ namespace QuestMmdPlayer.Tests
                 30f,
                 0f,
                 out _));
+        }
+        [TestCase("sit")]
+        [TestCase("lie_down")]
+        public void ExplicitRestingGesturesAreStrictlyAllowlisted(string action)
+        {
+            var behavior = new AvatarBehaviorCoordinator();
+            behavior.Reset(0f, 0f);
+
+            Assert.That(behavior.TryAcceptIntent(action, false, false, 2f, out var accepted), Is.True);
+            Assert.That(accepted, Is.EqualTo(action));
         }
     }
 }

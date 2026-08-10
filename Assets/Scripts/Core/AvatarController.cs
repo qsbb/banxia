@@ -28,11 +28,21 @@ namespace QuestMmdPlayer
         private Transform rightUpperArm;
         private Transform rightLowerArm;
         private Transform rightHand;
+        private Transform lowerBody;
+        private Transform leftUpperLeg;
+        private Transform rightUpperLeg;
+        private Transform leftLowerLeg;
+        private Transform rightLowerLeg;
         private Quaternion upperBodyBase;
         private Quaternion headBase;
         private Quaternion rightUpperArmBase;
         private Quaternion rightLowerArmBase;
         private Quaternion rightHandBase;
+        private Quaternion lowerBodyBase;
+        private Quaternion leftUpperLegBase;
+        private Quaternion rightUpperLegBase;
+        private Quaternion leftLowerLegBase;
+        private Quaternion rightLowerLegBase;
         private bool actionPoseCaptured;
         private bool actionTransitionActive;
         private float actionTransitionClock;
@@ -42,12 +52,25 @@ namespace QuestMmdPlayer
         private Quaternion transitionRightUpperArm;
         private Quaternion transitionRightLowerArm;
         private Quaternion transitionRightHand;
+        private Quaternion transitionLowerBody;
+        private Quaternion transitionLeftUpperLeg;
+        private Quaternion transitionRightUpperLeg;
+        private Quaternion transitionLeftLowerLeg;
+        private Quaternion transitionRightLowerLeg;
 
         private const float WaveDuration = 3.6f;
         private const float BowDuration = 2.2f;
         private const float NodDuration = 2.1f;
         private const float SwayDuration = 3.4f;
         private const float DanceDuration = 6.4f;
+        private const float RaiseHandDuration = 3.0f;
+        private const float TurnHalfDuration = 2.4f;
+        private const float RefuseDuration = 2.2f;
+        private const float StepBackDuration = 2.0f;
+        private Vector3 actionWorldStartPosition;
+        private Vector3 actionWorldTargetPosition;
+        private Quaternion actionWorldStartRotation = Quaternion.identity;
+        private Quaternion actionWorldTargetRotation = Quaternion.identity;
 
         public event Action<string> ActionChanged;
 
@@ -132,6 +155,46 @@ namespace QuestMmdPlayer
                     PlayAction("idle");
                 }
             }
+            else if (currentAction == "raise_hand")
+            {
+                ApplyRaiseHand();
+                if (actionClock >= RaiseHandDuration)
+                {
+                    PlayAction("idle");
+                }
+            }
+            else if (currentAction == "turn_half")
+            {
+                ApplyTurnHalf();
+                if (actionClock >= TurnHalfDuration)
+                {
+                    PlayAction("idle");
+                }
+            }
+            else if (currentAction == "refuse")
+            {
+                ApplyRefuse();
+                if (actionClock >= RefuseDuration)
+                {
+                    PlayAction("idle");
+                }
+            }
+            else if (currentAction == "step_back")
+            {
+                ApplyStepBack();
+                if (actionClock >= StepBackDuration)
+                {
+                    PlayAction("idle");
+                }
+            }
+            else if (currentAction == "sit")
+            {
+                ApplySit();
+            }
+            else if (currentAction == "lie_down")
+            {
+                ApplyLieDown();
+            }
             else if (currentAction == "idle")
             {
                 // Idle is the captured natural pose. Applying it before the
@@ -159,6 +222,7 @@ namespace QuestMmdPlayer
             }
             actionPoseCaptured = false;
             upperBody = head = rightUpperArm = rightLowerArm = rightHand = null;
+            lowerBody = leftUpperLeg = rightUpperLeg = leftLowerLeg = rightLowerLeg = null;
             if (visualRoot == null)
             {
                 return;
@@ -170,12 +234,22 @@ namespace QuestMmdPlayer
             rightUpperArm = FindBone(bones, "rightupperarm", "upperarmr", "\u53f3\u8155", "\u53f3\u80a9");
             rightLowerArm = FindBone(bones, "rightlowerarm", "lowerarmr", "\u53f3\u3072\u3058", "\u53f3\u8098");
             rightHand = FindBone(bones, "righthand", "handr", "\u53f3\u624b\u9996");
+            lowerBody = FindBone(bones, "lowerbody", "hips", "pelvis", "\u4e0b\u534a\u8eab");
+            leftUpperLeg = FindBone(bones, "leftupperleg", "upperlegl", "\u5de6\u8db3", "\u5de6\u5927\u817f");
+            rightUpperLeg = FindBone(bones, "rightupperleg", "upperlegr", "\u53f3\u8db3", "\u53f3\u5927\u817f");
+            leftLowerLeg = FindBone(bones, "leftlowerleg", "lowerlegl", "\u5de6\u3072\u3056", "\u5de6\u819d");
+            rightLowerLeg = FindBone(bones, "rightlowerleg", "lowerlegr", "\u53f3\u3072\u3056", "\u53f3\u819d");
 
             upperBodyBase = RotationOf(upperBody);
             headBase = RotationOf(head);
             rightUpperArmBase = RotationOf(rightUpperArm);
             rightLowerArmBase = RotationOf(rightLowerArm);
             rightHandBase = RotationOf(rightHand);
+            lowerBodyBase = RotationOf(lowerBody);
+            leftUpperLegBase = RotationOf(leftUpperLeg);
+            rightUpperLegBase = RotationOf(rightUpperLeg);
+            leftLowerLegBase = RotationOf(leftLowerLeg);
+            rightLowerLegBase = RotationOf(rightLowerLeg);
             actionPoseCaptured = true;
         }
 
@@ -316,6 +390,84 @@ namespace QuestMmdPlayer
                 Quaternion.Euler(0f, sway * 10f, counter * 8f), blend);
         }
 
+        private void ApplyRaiseHand()
+        {
+            if (!actionPoseCaptured)
+            {
+                CaptureActionPose();
+            }
+
+            var blend = ActionBlend(actionClock, RaiseHandDuration, .55f);
+            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(0f, -1.5f, -1f), blend);
+            SetRotation(head, headBase, Quaternion.Euler(1f, 1.5f, 1f), blend);
+            SetRotation(rightUpperArm, rightUpperArmBase, Quaternion.Euler(-7f, -5f, 42f), blend);
+            SetRotation(rightLowerArm, rightLowerArmBase, Quaternion.Euler(0f, -10f, -46f), blend);
+            SetRotation(rightHand, rightHandBase, Quaternion.Euler(2f, 4f, 4f), blend);
+        }
+
+        private void ApplyTurnHalf()
+        {
+            var progress = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(actionClock / TurnHalfDuration));
+            transform.rotation = Quaternion.Slerp(actionWorldStartRotation, actionWorldTargetRotation, progress);
+            if (!actionPoseCaptured)
+            {
+                CaptureActionPose();
+            }
+            var step = Mathf.Sin(Mathf.Clamp01(actionClock / TurnHalfDuration) * Mathf.PI * 2f);
+            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(0f, step * 4f, step * 2f), 1f);
+            SetRotation(head, headBase, Quaternion.Euler(0f, -step * 3f, -step), 1f);
+        }
+
+        private void ApplyRefuse()
+        {
+            if (!actionPoseCaptured)
+            {
+                CaptureActionPose();
+            }
+            var blend = ActionBlend(actionClock, RefuseDuration, .4f);
+            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(-3f, -5f, -2f), blend);
+            SetRotation(head, headBase, Quaternion.Euler(-2f, -12f, -2f), blend);
+        }
+
+        private void ApplyStepBack()
+        {
+            var progress = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(actionClock / StepBackDuration));
+            transform.position = Vector3.Lerp(actionWorldStartPosition, actionWorldTargetPosition, progress);
+            ApplyRefuse();
+        }
+
+        private void ApplySit()
+        {
+            if (!actionPoseCaptured)
+            {
+                CaptureActionPose();
+            }
+            var blend = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(actionClock / .7f));
+            SetRotation(lowerBody, lowerBodyBase, Quaternion.Euler(-7f, 0f, 0f), blend);
+            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(8f, 0f, 0f), blend);
+            SetRotation(head, headBase, Quaternion.Euler(-3f, 0f, 0f), blend);
+            SetRotation(leftUpperLeg, leftUpperLegBase, Quaternion.Euler(-72f, 2f, -2f), blend);
+            SetRotation(rightUpperLeg, rightUpperLegBase, Quaternion.Euler(-72f, -2f, 2f), blend);
+            SetRotation(leftLowerLeg, leftLowerLegBase, Quaternion.Euler(76f, 0f, 0f), blend);
+            SetRotation(rightLowerLeg, rightLowerLegBase, Quaternion.Euler(76f, 0f, 0f), blend);
+        }
+
+        private void ApplyLieDown()
+        {
+            if (!actionPoseCaptured)
+            {
+                CaptureActionPose();
+            }
+            var blend = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(actionClock / .85f));
+            SetRotation(lowerBody, lowerBodyBase, Quaternion.Euler(-4f, 0f, 0f), blend);
+            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(3f, 0f, -2f), blend);
+            SetRotation(head, headBase, Quaternion.Euler(-5f, 0f, 3f), blend);
+            SetRotation(leftUpperLeg, leftUpperLegBase, Quaternion.Euler(-5f, 0f, -2f), blend);
+            SetRotation(rightUpperLeg, rightUpperLegBase, Quaternion.Euler(4f, 0f, 2f), blend);
+            SetRotation(leftLowerLeg, leftLowerLegBase, Quaternion.Euler(8f, 0f, 0f), blend);
+            SetRotation(rightLowerLeg, rightLowerLegBase, Quaternion.Euler(4f, 0f, 0f), blend);
+        }
+
         private void CaptureTransitionPose()
         {
             if (!actionPoseCaptured)
@@ -327,6 +479,11 @@ namespace QuestMmdPlayer
             transitionRightUpperArm = RotationOf(rightUpperArm);
             transitionRightLowerArm = RotationOf(rightLowerArm);
             transitionRightHand = RotationOf(rightHand);
+            transitionLowerBody = RotationOf(lowerBody);
+            transitionLeftUpperLeg = RotationOf(leftUpperLeg);
+            transitionRightUpperLeg = RotationOf(rightUpperLeg);
+            transitionLeftLowerLeg = RotationOf(leftLowerLeg);
+            transitionRightLowerLeg = RotationOf(rightLowerLeg);
             actionTransitionClock = 0f;
             actionTransitionActive = true;
         }
@@ -343,6 +500,11 @@ namespace QuestMmdPlayer
             BlendRotation(rightUpperArm, transitionRightUpperArm, amount);
             BlendRotation(rightLowerArm, transitionRightLowerArm, amount);
             BlendRotation(rightHand, transitionRightHand, amount);
+            BlendRotation(lowerBody, transitionLowerBody, amount);
+            BlendRotation(leftUpperLeg, transitionLeftUpperLeg, amount);
+            BlendRotation(rightUpperLeg, transitionRightUpperLeg, amount);
+            BlendRotation(leftLowerLeg, transitionLeftLowerLeg, amount);
+            BlendRotation(rightLowerLeg, transitionRightLowerLeg, amount);
             if (actionTransitionClock >= ActionTransitionSeconds)
             {
                 actionTransitionActive = false;
@@ -386,6 +548,52 @@ namespace QuestMmdPlayer
             if (rightUpperArm != null) rightUpperArm.localRotation = rightUpperArmBase;
             if (rightLowerArm != null) rightLowerArm.localRotation = rightLowerArmBase;
             if (rightHand != null) rightHand.localRotation = rightHandBase;
+            if (lowerBody != null) lowerBody.localRotation = lowerBodyBase;
+            if (leftUpperLeg != null) leftUpperLeg.localRotation = leftUpperLegBase;
+            if (rightUpperLeg != null) rightUpperLeg.localRotation = rightUpperLegBase;
+            if (leftLowerLeg != null) leftLowerLeg.localRotation = leftLowerLegBase;
+            if (rightLowerLeg != null) rightLowerLeg.localRotation = rightLowerLegBase;
+        }
+
+        public float EstimateVisualHeight()
+        {
+            if (visualRoot == null)
+            {
+                return 1.6f;
+            }
+            var renderers = visualRoot.GetComponentsInChildren<Renderer>(true);
+            var found = false;
+            var bounds = new Bounds(transform.position, Vector3.zero);
+            for (var index = 0; index < renderers.Length; index++)
+            {
+                if (renderers[index] == null || !renderers[index].enabled)
+                {
+                    continue;
+                }
+                if (!found)
+                {
+                    bounds = renderers[index].bounds;
+                    found = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderers[index].bounds);
+                }
+            }
+            return found ? Mathf.Clamp(bounds.size.y, .8f, 2.4f) : 1.6f;
+        }
+
+        public float EstimateHipHeight()
+        {
+            if (lowerBody != null)
+            {
+                var height = Vector3.Dot(lowerBody.position - transform.position, transform.up);
+                if (height > .25f && height < 1.6f)
+                {
+                    return height;
+                }
+            }
+            return EstimateVisualHeight() * .52f;
         }
 
         private static Transform FindBone(UMT.MMDBoneTransform[] bones, params string[] names)
@@ -498,12 +706,22 @@ namespace QuestMmdPlayer
 
         public void PlayAction(string actionName)
         {
+            var previous = currentAction;
             CaptureTransitionPose();
             currentAction = string.IsNullOrWhiteSpace(actionName) ? "idle" : actionName.ToLowerInvariant();
             actionClock = 0f;
+            actionWorldStartPosition = transform.position;
+            actionWorldTargetPosition = currentAction == "step_back"
+                ? transform.position - transform.forward * .12f
+                : transform.position;
+            actionWorldStartRotation = transform.rotation;
+            actionWorldTargetRotation = currentAction == "turn_half"
+                ? transform.rotation * Quaternion.Euler(0f, 180f, 0f)
+                : transform.rotation;
             isPlaying = true;
             ActionChanged?.Invoke(currentAction);
-            Debug.Log("[QuestMmdPlayer] Avatar action started: " + currentAction, this);
+            Debug.Log("[AvatarAction] transition=" + previous + "->" + currentAction +
+                " blend_ms=" + Mathf.RoundToInt(ActionTransitionSeconds * 1000f), this);
         }
 
         public void SetEmotion(string emotion)

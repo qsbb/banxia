@@ -170,6 +170,12 @@ namespace QuestMmdPlayer
 
         private void FixedUpdate()
         {
+            // Hand joints and PMX proxies are driven from XR/animation Update
+            // callbacks. Explicitly publish those Transform changes before
+            // querying penetration or swept contacts; relying on
+            // Physics.autoSyncTransforms makes contact one frame late (or
+            // invisible on Quest where it is commonly disabled for performance).
+            Physics.SyncTransforms();
             EvaluatePhysicalContacts(left);
             EvaluatePhysicalContacts(right);
         }
@@ -183,7 +189,7 @@ namespace QuestMmdPlayer
             }
 
             var correctionTarget = Vector3.zero;
-            var hasPalmCorrection = false;
+            var correctionMagnitude = 0f;
             for (var index = 0; index < visual.contactColliders.Length; index++)
             {
                 if (!(visual.contactColliders[index] is SphereCollider sphere) || !sphere.enabled)
@@ -203,11 +209,15 @@ namespace QuestMmdPlayer
                 var hasPenetration = interaction.TryGetPenetrationCorrection(
                     sphere,
                     out var penetrationCorrection,
-                    out var penetrationRegion);
+                    out _);
                 if (hasPenetration)
                 {
-                    correctionTarget = penetrationCorrection;
-                    hasPalmCorrection = true;
+                    var magnitude = penetrationCorrection.magnitude;
+                    if (magnitude > correctionMagnitude)
+                    {
+                        correctionTarget = penetrationCorrection;
+                        correctionMagnitude = magnitude;
+                    }
                 }
 
                 if (interaction.TryGetContactRegionSwept(
@@ -226,16 +236,11 @@ namespace QuestMmdPlayer
                         lastPhysicalContactLogAt = Time.unscaledTime;
                         Debug.Log("[HandTracking] Physical contact: " + region + " (continuous sweep).", this);
                     }
-                    if (!hasPenetration)
-                    {
-                        correctionTarget = contactPoint - center;
-                        hasPalmCorrection = correctionTarget.sqrMagnitude > .000001f;
-                    }
                 }
                 visual.previousJointPositions[index] = center;
                 visual.previousJointTracked[index] = true;
             }
-            ApplyVisualCollisionCorrection(visual, hasPalmCorrection ? correctionTarget : Vector3.zero);
+            ApplyVisualCollisionCorrection(visual, correctionMagnitude > .000001f ? correctionTarget : Vector3.zero);
         }
 
         private static void ApplyVisualCollisionCorrection(HandVisual visual, Vector3 target)

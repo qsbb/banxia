@@ -10,12 +10,14 @@ namespace QuestMmdPlayer.Tests
     {
         private GameObject avatarObject;
         private GameObject serviceObject;
+        private GameObject cameraObject;
 
         [TearDown]
         public void TearDown()
         {
             if (serviceObject != null) Object.DestroyImmediate(serviceObject);
             if (avatarObject != null) Object.DestroyImmediate(avatarObject);
+            if (cameraObject != null) Object.DestroyImmediate(cameraObject);
         }
 
         [Test]
@@ -228,6 +230,56 @@ namespace QuestMmdPlayer.Tests
 
             Assert.IsTrue(touch.TryGetContactRegion(hair.transform.position, .01f, out var region));
             Assert.AreEqual(AvatarContactRegion.Hair, region);
+        }
+
+        [Test]
+        public void FaceProxyIsPlacedOnTheViewerSideOfNegativeZModel()
+        {
+            cameraObject = new GameObject("Main Camera");
+            cameraObject.tag = "MainCamera";
+            cameraObject.transform.position = new Vector3(0f, .35f, -2f);
+            cameraObject.AddComponent<Camera>();
+
+            avatarObject = new GameObject("NegativeZAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var head = new GameObject("Head");
+            head.transform.SetParent(avatarObject.transform, false);
+            head.transform.localPosition = new Vector3(0f, .35f, 0f);
+            var headBone = head.AddComponent<MMDBoneTransform>();
+            headBone.boneName = "head";
+
+            serviceObject = new GameObject("TouchService");
+            var touch = serviceObject.AddComponent<AvatarTouchInteraction>();
+            touch.Bind(controller);
+            Physics.SyncTransforms();
+
+            Assert.That(touch.TryGetContactRegion(
+                new Vector3(0f, .37f, -.06f),
+                .01f,
+                out var region), Is.True);
+            Assert.That(region, Is.EqualTo(AvatarContactRegion.Face));
+        }
+
+        [Test]
+        public void MissingPmxLimbMetadataGetsBoneFollowingContactProxy()
+        {
+            avatarObject = new GameObject("FallbackLimbAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var arm = new GameObject("LeftUpperArm");
+            arm.transform.SetParent(avatarObject.transform, false);
+            arm.transform.localPosition = new Vector3(.6f, .45f, 0f);
+            var armBone = arm.AddComponent<MMDBoneTransform>();
+            armBone.boneName = "leftupperarm";
+
+            serviceObject = new GameObject("TouchService");
+            var touch = serviceObject.AddComponent<AvatarTouchInteraction>();
+            touch.Bind(controller);
+            Physics.SyncTransforms();
+
+            Assert.That(touch.TryGetContactRegion(arm.transform.position, .01f, out var region), Is.True);
+            Assert.That(region, Is.EqualTo(AvatarContactRegion.Limb));
         }
 
         [Test]

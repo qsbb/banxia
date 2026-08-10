@@ -23,6 +23,21 @@ namespace QuestMmdPlayer
                 return false;
             }
 
+            if (ContainsAny(value, "换个舞蹈", "换一个舞蹈", "换支舞", "换一支舞", "另一个舞蹈", "下一支舞", "different dance", "another dance"))
+            {
+                action = "dance_next";
+                return true;
+            }
+            if (ContainsAny(value, "sit down", "sit", "\u5750\u4e0b\u6765", "\u5750\u7740", "\u5750\u4e00\u4e0b"))
+            {
+                action = "sit";
+                return true;
+            }
+            if (ContainsAny(value, "lie down", "lie", "\u8eba\u4e0b", "\u8eba\u4e0b\u6765", "\u8eba\u5230", "\u8eba\u5230\u5e8a\u4e0a", "\u8eba\u5728\u5e8a\u4e0a", "\u8eba\u7740"))
+            {
+                action = "lie_down";
+                return true;
+            }
             if (ContainsAny(value, "跳舞", "舞蹈", "跳个舞", "跳一支", "来段舞", "dance"))
             {
                 action = "dance";
@@ -41,6 +56,16 @@ namespace QuestMmdPlayer
             if (ContainsAny(value, "点头", "nod"))
             {
                 action = "nod";
+                return true;
+            }
+            if (ContainsAny(value, "抬手", "举手", "抬起手", "抬起来", "抬起來", "raise hand"))
+            {
+                action = "raise_hand";
+                return true;
+            }
+            if (ContainsAny(value, "转半圈", "转身", "转个身", "转一百八十度", "turn around", "half turn"))
+            {
+                action = "turn_half";
                 return true;
             }
             return false;

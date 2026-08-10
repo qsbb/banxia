@@ -92,6 +92,7 @@ namespace QuestMmdPlayer.Tests
                 out var candidate), Is.True);
             Assert.That(candidate.Kind, Is.EqualTo(RoomPlacementSurfaceKind.Seat));
             Assert.That(candidate.SupportsSitting, Is.True);
+            Assert.That(candidate.SupportsLying, Is.False);
             Assert.That(candidate.SuggestedPose.position.y, Is.EqualTo(.45f).Within(.0001f));
             Assert.That(
                 Vector3.Angle(candidate.SuggestedPose.rotation * Vector3.forward, Vector3.back),
@@ -110,6 +111,76 @@ namespace QuestMmdPlayer.Tests
                 .45f,
                 .35f,
                 out _), Is.False);
+        }
+
+        [Test]
+        public void LargeSeatSurfaceAdvertisesLyingCapabilityWithoutInventingBedLabel()
+        {
+            var restingSurface = Surface("large-seat", PlaneClassification.Seat, 1.5f, 1.9f, .8f);
+
+            Assert.That(RoomUnderstandingService.TryCreatePlacementCandidate(
+                restingSurface,
+                new Pose(Vector3.zero, Quaternion.identity),
+                .35f,
+                .45f,
+                .35f,
+                out var candidate), Is.True);
+            Assert.That(candidate.Kind, Is.EqualTo(RoomPlacementSurfaceKind.Seat));
+            Assert.That(candidate.SupportsSitting, Is.True);
+            Assert.That(candidate.SupportsLying, Is.True);
+        }
+
+        [Test]
+        public void RestingSurfaceSelectionPrefersNearbyUsableTarget()
+        {
+            var candidates = new List<RoomPlacementCandidate>
+            {
+                new RoomPlacementCandidate(
+                    "far-bed",
+                    RoomPlacementSurfaceKind.Bed,
+                    new Pose(new Vector3(0f, .45f, 3f), Quaternion.identity),
+                    new Pose(new Vector3(0f, .45f, 3f), Quaternion.identity),
+                    new Vector2(2f, 1.2f),
+                    true,
+                    true),
+                new RoomPlacementCandidate(
+                    "near-seat",
+                    RoomPlacementSurfaceKind.Seat,
+                    new Pose(new Vector3(0f, .45f, 1.2f), Quaternion.identity),
+                    new Pose(new Vector3(0f, .45f, 1.2f), Quaternion.identity),
+                    new Vector2(.8f, .55f),
+                    true),
+                new RoomPlacementCandidate(
+                    "table",
+                    RoomPlacementSurfaceKind.Table,
+                    new Pose(new Vector3(0f, .7f, .5f), Quaternion.identity),
+                    new Pose(new Vector3(0f, .7f, .5f), Quaternion.identity),
+                    Vector2.one,
+                    false)
+            };
+
+            Assert.That(RoomUnderstandingService.TrySelectNearestRestingSurface(
+                candidates,
+                new Pose(Vector3.zero, Quaternion.identity),
+                out var selected), Is.True);
+            Assert.That(selected.SurfaceId, Is.EqualTo("near-seat"));
+        }
+
+        [Test]
+        public void TableIsClassifiedButNeverAdvertisedAsSittingOrLying()
+        {
+            var table = Surface("table", PlaneClassification.Table, 1f, 1.1f, .8f);
+
+            Assert.That(RoomUnderstandingService.TryCreatePlacementCandidate(
+                table,
+                new Pose(Vector3.zero, Quaternion.identity),
+                .35f,
+                .45f,
+                .35f,
+                out var candidate), Is.True);
+            Assert.That(candidate.Kind, Is.EqualTo(RoomPlacementSurfaceKind.Table));
+            Assert.That(candidate.SupportsSitting, Is.False);
+            Assert.That(candidate.SupportsLying, Is.False);
         }
 
         [Test]
