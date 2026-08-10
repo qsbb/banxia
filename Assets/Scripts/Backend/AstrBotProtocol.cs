@@ -21,14 +21,17 @@ namespace QuestMmdPlayer
 
     public readonly struct SseEventFrame
     {
-        public SseEventFrame(string eventName, string data)
+        public SseEventFrame(string eventName, string data, long receivedAtTicks = 0L)
         {
             EventName = eventName ?? string.Empty;
             Data = data ?? string.Empty;
+            ReceivedAtTicks = receivedAtTicks;
         }
 
         public string EventName { get; }
         public string Data { get; }
+        /// <summary>Monotonic timestamp captured when the SSE frame is assembled.</summary>
+        public long ReceivedAtTicks { get; }
     }
 
     /// <summary>
@@ -118,7 +121,8 @@ namespace QuestMmdPlayer
             {
                 EventReceived?.Invoke(new SseEventFrame(
                     string.IsNullOrEmpty(eventName) ? "message" : eventName,
-                    data.ToString()));
+                    data.ToString(),
+                    System.Diagnostics.Stopwatch.GetTimestamp()));
             }
             eventName = string.Empty;
             data.Clear();
@@ -353,8 +357,36 @@ namespace QuestMmdPlayer
             {
                 Type = type,
                 TurnId = payload.turn_id ?? string.Empty,
-                Text = payload.text ?? string.Empty
+                Text = payload.text ?? string.Empty,
+                BackendTiming = ToBackendTiming(payload.server_timing)
             };
+        }
+
+        private static BackendTimingSnapshot ToBackendTiming(ServerTimingPayload payload)
+        {
+            if (payload == null || payload.schema_version != 1)
+            {
+                return null;
+            }
+
+            return new BackendTimingSnapshot
+            {
+                SchemaVersion = payload.schema_version,
+                SttMs = ClampServerDuration(payload.stt_ms),
+                DecisionMs = ClampServerDuration(payload.decision_ms),
+                TtsFirstChunkMs = ClampServerDuration(payload.tts_first_chunk_ms),
+                TtsTotalMs = ClampServerDuration(payload.tts_total_ms),
+                TurnTotalMs = ClampServerDuration(payload.turn_total_ms),
+                DecisionPath = payload.decision_path == "astrbot_event_bus" ||
+                    payload.decision_path == "direct_provider"
+                    ? payload.decision_path
+                    : "unknown"
+            };
+        }
+
+        private static int ClampServerDuration(int value)
+        {
+            return value <= 0 ? -1 : Mathf.Clamp(value, 1, 3600000);
         }
 
         private static bool TryDecodeAudio(BridgeSsePayload payload, out short[] samples, out string error)
@@ -438,6 +470,19 @@ namespace QuestMmdPlayer
             public string message;
             public bool text_sent;
             public bool audio_sent;
+            public ServerTimingPayload server_timing;
+        }
+
+        [Serializable]
+        private sealed class ServerTimingPayload
+        {
+            public int schema_version;
+            public int stt_ms;
+            public int decision_ms;
+            public string decision_path;
+            public int tts_first_chunk_ms;
+            public int tts_total_ms;
+            public int turn_total_ms;
         }
     }
 

@@ -8,7 +8,7 @@ namespace QuestMmdPlayer
     [DisallowMultipleComponent]
     public sealed class RuntimeDebugLog : MonoBehaviour
     {
-        [SerializeField, Range(24, 160)] private int capacity = 96;
+        [SerializeField, Range(24, 240)] private int capacity = 160;
 
         private readonly Queue<string> entries = new Queue<string>();
         private readonly Queue<StageEntry> stageEntries = new Queue<StageEntry>();
@@ -104,7 +104,10 @@ namespace QuestMmdPlayer
             int bytes = 0,
             int eventCount = 0,
             int sampleRate = 0,
-            int channels = 0)
+            int channels = 0,
+            string traceId = "",
+            int queueDepth = -1,
+            int bufferedMs = -1)
         {
             var safeStage = SafeToken(stage, "runtime");
             var safeStatus = SafeToken(status, "unknown");
@@ -121,7 +124,10 @@ namespace QuestMmdPlayer
                 Bytes = Mathf.Clamp(bytes, 0, 1000000000),
                 EventCount = Mathf.Clamp(eventCount, 0, 1000000),
                 SampleRate = Mathf.Clamp(sampleRate, 0, 384000),
-                Channels = Mathf.Clamp(channels, 0, 32)
+                Channels = Mathf.Clamp(channels, 0, 32),
+                TraceId = SafeToken(traceId, string.Empty),
+                QueueDepth = Mathf.Clamp(queueDepth, -1, 1000000),
+                BufferedMs = Mathf.Clamp(bufferedMs, -1, 3600000)
             };
             stageEntries.Enqueue(entry);
             while (stageEntries.Count > Mathf.Max(12, capacity))
@@ -142,6 +148,7 @@ namespace QuestMmdPlayer
 
             Debug.Log(
                 $"[RuntimeDebug] stage={safeStage} status={safeStatus}" +
+                (string.IsNullOrEmpty(entry.TraceId) ? string.Empty : " trace=" + entry.TraceId) +
                 (string.IsNullOrEmpty(safeCode) ? string.Empty : " code=" + safeCode) +
                 (entry.HttpStatus > 0 ? " http=" + entry.HttpStatus : string.Empty) +
                 (entry.ElapsedMs >= 0 ? " elapsed_ms=" + entry.ElapsedMs : string.Empty) +
@@ -149,7 +156,9 @@ namespace QuestMmdPlayer
                 (entry.Bytes > 0 ? " bytes=" + entry.Bytes : string.Empty) +
                 (entry.EventCount > 0 ? " events=" + entry.EventCount : string.Empty) +
                 (entry.SampleRate > 0 ? " sample_rate=" + entry.SampleRate : string.Empty) +
-                (entry.Channels > 0 ? " channels=" + entry.Channels : string.Empty),
+                (entry.Channels > 0 ? " channels=" + entry.Channels : string.Empty) +
+                (entry.QueueDepth >= 0 ? " queue_depth=" + entry.QueueDepth : string.Empty) +
+                (entry.BufferedMs >= 0 ? " buffered_ms=" + entry.BufferedMs : string.Empty),
                 this);
         }
 
@@ -221,6 +230,7 @@ namespace QuestMmdPlayer
         {
             var builder = new StringBuilder();
             builder.AppendFormat("{0,6:F1}s [{1}] {2}", entry.Time, StageLabel(entry.Stage), StatusLabel(entry.Status));
+            if (!string.IsNullOrEmpty(entry.TraceId)) builder.Append(" · #").Append(entry.TraceId);
             if (!string.IsNullOrEmpty(entry.Code)) builder.Append(" · ").Append(CodeLabel(entry.Code));
             if (entry.HttpStatus > 0) builder.Append(" · HTTP ").Append(entry.HttpStatus);
             if (entry.ElapsedMs >= 0) builder.Append(" · ").Append(entry.ElapsedMs).Append("ms");
@@ -229,7 +239,25 @@ namespace QuestMmdPlayer
             if (entry.EventCount > 0) builder.Append(" · ").Append(entry.EventCount).Append("事件");
             if (entry.SampleRate > 0) builder.Append(" · ").Append(entry.SampleRate).Append("Hz");
             if (entry.Channels > 0) builder.Append("/").Append(entry.Channels).Append("声道");
+            if (entry.QueueDepth >= 0) builder.Append(" · 队列").Append(entry.QueueDepth);
+            if (entry.BufferedMs >= 0) builder.Append(" · 缓冲").Append(entry.BufferedMs).Append("ms");
             return builder.ToString();
+        }
+
+        /// <summary>Creates a stable, non-reversible short label without exposing the raw turn id.</summary>
+        public static string TraceLabel(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+            unchecked
+            {
+                uint hash = 2166136261;
+                for (var index = 0; index < value.Length; index++)
+                {
+                    hash ^= value[index];
+                    hash *= 16777619;
+                }
+                return "t" + (hash & 0x00ffffffu).ToString("x6");
+            }
         }
 
         private static string SafeToken(string value, string fallback)
@@ -269,13 +297,20 @@ namespace QuestMmdPlayer
                 case "authorization": return "身份授权";
                 case "session": return "会话";
                 case "sse": return "实时事件";
+                case "sse_dispatch": return "事件分发";
                 case "microphone": return "麦克风";
+                case "audio_encode": return "音频编码";
                 case "audio_upload": return "音频上传";
                 case "stt": return "语音识别";
+                case "backend_stt": return "后端语音识别";
+                case "backend_decision": return "后端决策链";
+                case "backend_tts": return "后端语音合成";
+                case "backend_total": return "后端总耗时";
                 case "eventbus": return "AstrBot/EventBus";
                 case "llm": return "模型生成";
                 case "tts": return "语音合成";
                 case "audio_playback": return "音频播放";
+                case "audio_buffer": return "播放缓冲";
                 case "reply": return "回复结束";
                 case "avatar_action": return "角色动作";
                 case "interrupt": return "打断";
@@ -353,6 +388,16 @@ namespace QuestMmdPlayer
                 case "first_audio": return "录音结束到首段语音";
                 case "text_to_first_audio": return "首段文字到首段语音";
                 case "reply_end": return "录音结束到回复结束";
+                case "sse_queue": return "SSE 到主线程排队";
+                case "playback_start": return "首段语音到实际开播";
+                case "playback_callback": return "播放请求到音频回调";
+                case "server_timing": return "服务端耗时摘要";
+                case "main_thread_queue": return "主线程排队";
+                case "pcm_chunk": return "PCM 分块";
+                case "turn_start_http": return "turn/start 请求";
+                case "audio_chunk_http": return "audio/chunk 请求";
+                case "audio_end_http": return "audio/end 请求";
+                case "sse_queue_summary": return "SSE 排队汇总";
                 case "empty_reply": return "后端结束了空回复";
                 case "empty_backend_reply": return "后端结束了空回复";
                 case "configuration_missing": return "尚未绑定后端";
@@ -388,6 +433,9 @@ namespace QuestMmdPlayer
             public int EventCount;
             public int SampleRate;
             public int Channels;
+            public string TraceId;
+            public int QueueDepth;
+            public int BufferedMs;
         }
     }
 }

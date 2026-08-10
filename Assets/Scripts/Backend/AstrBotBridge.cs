@@ -64,6 +64,11 @@ namespace QuestMmdPlayer
         private int receivedReplyAudioBytes;
         private bool receivedReplyText;
         private string receivedErrorCode = string.Empty;
+        private string currentTraceId = string.Empty;
+        private int sseFramesReceived;
+        private int sseFramesDispatched;
+        private int sseQueueDepthPeak;
+        private int sseQueueDelayMaxMs;
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
@@ -108,9 +113,40 @@ namespace QuestMmdPlayer
             var remainingFrameBudget = Mathf.Clamp(maxIncomingFramesPerUpdate, 8, 256);
             while (remainingFrameBudget-- > 0 && incomingFrames.TryDequeue(out var frame))
             {
+                var queueDelayMs = ElapsedMs(frame.ReceivedAtTicks);
                 if (AstrBotProtocol.TryMapSseEvent(sessionId, frame.EventName, frame.Data, out var message, out var error))
                 {
+                    message.TransportReceivedAtTicks = frame.ReceivedAtTicks;
+                    message.TransportQueueDelayMs = queueDelayMs;
+                    message.TransportDispatchedAtTicks = DiagnosticTimestamp();
+                    if (!string.IsNullOrEmpty(message.TurnId))
+                    {
+                        currentTraceId = RuntimeDebugLog.TraceLabel(message.TurnId);
+                    }
+                    sseFramesDispatched++;
+                    sseQueueDelayMaxMs = Mathf.Max(sseQueueDelayMaxMs, Mathf.Max(0, queueDelayMs));
+                    var firstAudioFrame = message.Type == ConversationEventType.AudioChunk && receivedReplyAudioChunks == 0;
+                    if (message.Type != ConversationEventType.AudioChunk || firstAudioFrame || queueDelayMs >= 25)
+                    {
+                        RecordStage(
+                            "sse_dispatch",
+                            "completed",
+                            "sse_queue",
+                            elapsedMs: queueDelayMs,
+                            eventCount: sseFramesDispatched,
+                            queueDepth: incomingFrames.Count);
+                    }
                     RecordIncomingEvent(message);
+                    if (message.Type == ConversationEventType.ReplyEnd)
+                    {
+                        RecordStage(
+                            "sse_dispatch",
+                            "completed",
+                            "sse_queue_summary",
+                            elapsedMs: sseQueueDelayMaxMs,
+                            eventCount: sseFramesDispatched,
+                            queueDepth: sseQueueDepthPeak);
+                    }
                     EventReceived?.Invoke(message);
                 }
                 else if (!error.Contains("stale session"))
@@ -157,6 +193,7 @@ namespace QuestMmdPlayer
                     ? string.Empty
                     : userText.Substring(0, Math.Min(userText.Length, 8192))
             };
+            currentTraceId = RuntimeDebugLog.TraceLabel(turnId);
             ResetReceivedTurnCounters();
             RecordStage("eventbus", "processing");
             StartCoroutine(PostJson("turn/start", JsonUtility.ToJson(request), turnId, true));
@@ -171,6 +208,7 @@ namespace QuestMmdPlayer
 
             CancelAudioUpload();
             audioUploadTurnId = turnId;
+            currentTraceId = RuntimeDebugLog.TraceLabel(turnId);
             audioEndRequested = false;
             audioSequence = 0;
             queuedInputAudioBytes = 0;
@@ -508,6 +546,8 @@ namespace QuestMmdPlayer
                 frame =>
                 {
                     incomingFrames.Enqueue(frame);
+                    Interlocked.Increment(ref sseFramesReceived);
+                    UpdateMaximum(ref sseQueueDepthPeak, incomingFrames.Count);
                     Interlocked.Exchange(ref receivedStreamData, 1);
                 },
                 () => Interlocked.Exchange(ref receivedStreamHeaders, 1));
@@ -581,7 +621,9 @@ namespace QuestMmdPlayer
                 "turn/start",
                 JsonUtility.ToJson(start),
                 turnId,
-                result => startSucceeded = result);
+                result => startSucceeded = result,
+                0,
+                -1);
             if (!startSucceeded || !string.Equals(turnId, audioUploadTurnId, StringComparison.Ordinal))
             {
                 ClearAudioUpload(turnId);
@@ -606,7 +648,9 @@ namespace QuestMmdPlayer
                         "audio/chunk",
                         JsonUtility.ToJson(chunk),
                         turnId,
-                        result => chunkSucceeded = result);
+                        result => chunkSucceeded = result,
+                        pcm16.Length,
+                        audioSequence);
                     if (!chunkSucceeded)
                     {
                         ClearAudioUpload(turnId);
@@ -626,7 +670,9 @@ namespace QuestMmdPlayer
                         "audio/end",
                         JsonUtility.ToJson(end),
                         turnId,
-                        result => endSucceeded = result);
+                        result => endSucceeded = result,
+                        0,
+                        audioSequence);
                     if (endSucceeded)
                     {
                         EventReceived?.Invoke(new ConversationEvent
@@ -662,7 +708,13 @@ namespace QuestMmdPlayer
             }
         }
 
-        private IEnumerator PostAudioJson(string endpoint, string json, string turnId, Action<bool> completed)
+        private IEnumerator PostAudioJson(
+            string endpoint,
+            string json,
+            string turnId,
+            Action<bool> completed,
+            int payloadBytes,
+            int sequence)
         {
             var startedAt = DiagnosticTimestamp();
             using (var request = CreateJsonRequest(endpoint, json))
@@ -685,6 +737,15 @@ namespace QuestMmdPlayer
                         (Succeeded(request) ? "（成功）" : "（失败）"));
                 }
                 var succeeded = Succeeded(request);
+                RecordStage(
+                    "audio_upload",
+                    succeeded ? "ok" : "failed",
+                    AudioRequestCode(endpoint),
+                    request.responseCode,
+                    elapsedMs,
+                    sequence >= 0 ? sequence + 1 : 0,
+                    payloadBytes,
+                    queueDepth: outgoingAudioChunks.Count);
                 if (!succeeded && string.Equals(turnId, audioUploadTurnId, StringComparison.Ordinal))
                 {
                     EventReceived?.Invoke(new ConversationEvent
@@ -1139,6 +1200,32 @@ namespace QuestMmdPlayer
             receivedReplyAudioBytes = 0;
             receivedReplyText = false;
             receivedErrorCode = string.Empty;
+            Interlocked.Exchange(ref sseFramesReceived, 0);
+            sseFramesDispatched = 0;
+            sseQueueDepthPeak = 0;
+            sseQueueDelayMaxMs = 0;
+        }
+
+        private static string AudioRequestCode(string endpoint)
+        {
+            switch (endpoint)
+            {
+                case "turn/start": return "turn_start_http";
+                case "audio/chunk": return "audio_chunk_http";
+                case "audio/end": return "audio_end_http";
+                default: return "audio_http";
+            }
+        }
+
+        private static void UpdateMaximum(ref int target, int value)
+        {
+            var current = Volatile.Read(ref target);
+            while (value > current)
+            {
+                var observed = Interlocked.CompareExchange(ref target, value, current);
+                if (observed == current) return;
+                current = observed;
+            }
         }
 
         private void RecordIncomingEvent(ConversationEvent message)
@@ -1250,7 +1337,10 @@ namespace QuestMmdPlayer
             int elapsedMs = -1,
             int chunks = 0,
             int bytes = 0,
-            int eventCount = 0)
+            int eventCount = 0,
+            string traceId = "",
+            int queueDepth = -1,
+            int bufferedMs = -1)
         {
             diagnostics = diagnostics != null ? diagnostics : GetComponent<RuntimeDebugLog>();
             diagnostics?.RecordStage(
@@ -1261,7 +1351,10 @@ namespace QuestMmdPlayer
                 elapsedMs,
                 chunks,
                 bytes,
-                eventCount);
+                eventCount,
+                traceId: string.IsNullOrEmpty(traceId) ? currentTraceId : traceId,
+                queueDepth: queueDepth,
+                bufferedMs: bufferedMs);
         }
 
         private void MarkEventStreamReady()

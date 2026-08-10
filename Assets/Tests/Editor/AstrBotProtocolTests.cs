@@ -135,6 +135,34 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void OptionalServerTimingIsMappedAndBounded()
+        {
+            const string json = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"server_timing\":{\"schema_version\":1,\"stt_ms\":820,\"decision_ms\":1510,\"decision_path\":\"astrbot_event_bus\",\"tts_first_chunk_ms\":620,\"tts_total_ms\":2380,\"turn_total_ms\":4725}}";
+
+            Assert.That(
+                AstrBotProtocol.TryMapSseEvent("s1", "reply.end", json, out var message, out var error),
+                Is.True,
+                error);
+            Assert.That(message.BackendTiming, Is.Not.Null);
+            Assert.That(message.BackendTiming.SttMs, Is.EqualTo(820));
+            Assert.That(message.BackendTiming.DecisionMs, Is.EqualTo(1510));
+            Assert.That(message.BackendTiming.TtsFirstChunkMs, Is.EqualTo(620));
+            Assert.That(message.BackendTiming.SafeDecisionPath(), Is.EqualTo("astrbot_event_bus"));
+        }
+
+        [Test]
+        public void InvalidOrMissingServerTimingIsIgnored()
+        {
+            const string missing = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\"}";
+            const string invalid = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"server_timing\":{\"schema_version\":9,\"stt_ms\":99999999}}";
+
+            Assert.That(AstrBotProtocol.TryMapSseEvent("s1", "reply.end", missing, out var missingMessage, out _), Is.True);
+            Assert.That(missingMessage.BackendTiming, Is.Null);
+            Assert.That(AstrBotProtocol.TryMapSseEvent("s1", "reply.end", invalid, out var invalidMessage, out _), Is.True);
+            Assert.That(invalidMessage.BackendTiming, Is.Null);
+        }
+
+        [Test]
         public void RuntimePolicyAllowsOnlyExplicitPrivateLanHttp()
         {
             var settings = ValidSettings();

@@ -62,6 +62,28 @@ namespace QuestMmdPlayer.Tests
             Assert.That(diagnostics.GetRecentTimelineText(), Is.Empty);
             Assert.That(diagnostics.CurrentRootCause, Is.EqualTo("未发现明确的失败阶段"));
         }
+
+        [Test]
+        public void TraceLabelsAndQueueMetricsStayShortAndVisible()
+        {
+            const string rawTurnId = "voice-turn-with-sensitive-session-context";
+            var trace = RuntimeDebugLog.TraceLabel(rawTurnId);
+
+            diagnostics.RecordStage(
+                "sse_dispatch",
+                "completed",
+                "sse_queue",
+                elapsedMs: 12,
+                traceId: trace,
+                queueDepth: 3,
+                bufferedMs: 120);
+
+            Assert.That(trace, Does.Not.Contain(rawTurnId));
+            Assert.That(trace, Does.Match("^t[0-9a-f]{6}$"));
+            Assert.That(diagnostics.GetRecentTimelineText(), Does.Contain("#" + trace));
+            Assert.That(diagnostics.GetRecentTimelineText(), Does.Contain("队列3"));
+            Assert.That(diagnostics.GetRecentTimelineText(), Does.Contain("缓冲120ms"));
+        }
     }
 }
 #endif

@@ -1,9 +1,24 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 
 namespace QuestMmdPlayer
 {
+    public readonly struct PlaybackTelemetry
+    {
+        public PlaybackTelemetry(int bufferedMs, int callbackDelayMs, int underflowCount)
+        {
+            BufferedMs = bufferedMs;
+            CallbackDelayMs = callbackDelayMs;
+            UnderflowCount = underflowCount;
+        }
+
+        public int BufferedMs { get; }
+        public int CallbackDelayMs { get; }
+        public int UnderflowCount { get; }
+    }
+
     /// <summary>
     /// Small mono PCM16 queue for streaming TTS. Audio callbacks consume the
     /// queue without touching Unity objects, while enqueue/reset stay on the
@@ -28,6 +43,10 @@ namespace QuestMmdPlayer
         private bool streamCompleted = true;
         private bool playbackStarted;
         private int underflowCount;
+        private long playbackRequestedAtTicks;
+        private long firstAudioCallbackAtTicks;
+        private bool playbackTelemetryReported;
+        private int playbackStartBufferedMs;
         [SerializeField, Range(.04f, .4f)] private float startupBufferSeconds = .12f;
         [SerializeField, Range(.02f, .5f)] private float outputTailSafetySeconds = .22f;
 
@@ -45,7 +64,16 @@ namespace QuestMmdPlayer
         public bool StreamCompleted => streamCompleted;
         public bool PlaybackStarted => playbackStarted;
         public int UnderflowCount => underflowCount;
+        public int QueuedChunkCount
+        {
+            get
+            {
+                lock (gate) return buffers.Count + (currentBuffer == null ? 0 : 1);
+            }
+        }
         public string DiagnosticStatus => $"buffer {BufferedSeconds:F2}s | started {playbackStarted} | underflows {underflowCount}";
+
+        public event Action<PlaybackTelemetry> PlaybackTelemetryReady;
 
         public float BufferedSeconds
         {
@@ -77,6 +105,7 @@ namespace QuestMmdPlayer
         private void Update()
         {
             TryStartPlayback();
+            ReportPlaybackTelemetry();
             if (audioSource != null && audioSource.isPlaying && streamCompleted && IsDrained)
             {
                 audioSource.Stop();
@@ -134,6 +163,10 @@ namespace QuestMmdPlayer
                 audibleUntilDspTime = 0d;
                 streamCompleted = true;
                 playbackStarted = false;
+                playbackRequestedAtTicks = 0L;
+                firstAudioCallbackAtTicks = 0L;
+                playbackTelemetryReported = false;
+                playbackStartBufferedMs = 0;
             }
         }
 
@@ -245,7 +278,45 @@ namespace QuestMmdPlayer
                 return;
             }
             playbackStarted = true;
+            playbackRequestedAtTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            firstAudioCallbackAtTicks = 0L;
+            playbackTelemetryReported = false;
+            playbackStartBufferedMs = Mathf.RoundToInt(buffered * 1000f / Mathf.Max(1, sampleRate));
             audioSource.Play();
+        }
+
+        private void OnAudioFilterRead(float[] data, int channels)
+        {
+            if (!playbackStarted || data == null || data.Length == 0)
+            {
+                return;
+            }
+            Interlocked.CompareExchange(
+                ref firstAudioCallbackAtTicks,
+                System.Diagnostics.Stopwatch.GetTimestamp(),
+                0L);
+        }
+
+        private void ReportPlaybackTelemetry()
+        {
+            if (!playbackStarted || playbackTelemetryReported || playbackRequestedAtTicks <= 0L)
+            {
+                return;
+            }
+
+            var callbackAt = Interlocked.Read(ref firstAudioCallbackAtTicks);
+            if (callbackAt <= 0L)
+            {
+                return;
+            }
+
+            playbackTelemetryReported = true;
+            var elapsed = (callbackAt - playbackRequestedAtTicks) * 1000d /
+                System.Diagnostics.Stopwatch.Frequency;
+            PlaybackTelemetryReady?.Invoke(new PlaybackTelemetry(
+                playbackStartBufferedMs,
+                Mathf.Clamp((int)Math.Round(elapsed), 0, 3600000),
+                underflowCount));
         }
 
         private static void SetPosition(int position)

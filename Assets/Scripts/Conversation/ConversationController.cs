@@ -26,6 +26,7 @@ namespace QuestMmdPlayer
         private float firstEventAt = -1f;
         private float firstTextAt = -1f;
         private float firstAudioAt = -1f;
+        private float playbackStartedAt = -1f;
         private float replyEndedAt = -1f;
         private float audioDoneAt = -1f;
         private float responseWaitStartedAt = -1f;
@@ -35,6 +36,10 @@ namespace QuestMmdPlayer
         private string pendingLocalAction = string.Empty;
         private bool localActionStarted;
         private bool backendActionReceived;
+        private bool backendSttReported;
+        private bool backendDecisionReported;
+        private bool backendTtsReported;
+        private bool backendTotalReported;
         private RuntimeDebugLog diagnostics;
         [SerializeField] private bool allowAutomaticMockTransport;
         [SerializeField] private bool sendInteractionEvents = true;
@@ -100,6 +105,10 @@ namespace QuestMmdPlayer
         {
             SubscribeTransport();
             SubscribeInteraction();
+            if (audioPlayer != null)
+            {
+                audioPlayer.PlaybackTelemetryReady += HandlePlaybackTelemetry;
+            }
         }
 
         private void OnDisable()
@@ -111,6 +120,10 @@ namespace QuestMmdPlayer
             }
             UnsubscribeTransport();
             UnsubscribeInteraction();
+            if (audioPlayer != null)
+            {
+                audioPlayer.PlaybackTelemetryReady -= HandlePlaybackTelemetry;
+            }
             if (transport != null && !string.IsNullOrEmpty(stateMachine.TurnId))
             {
                 transport.Interrupt(stateMachine.TurnId);
@@ -399,6 +412,14 @@ namespace QuestMmdPlayer
             {
                 case ConversationEventType.AudioChunk:
                     audioPlayer?.Enqueue(message.Pcm16, message.SampleRate);
+                    RecordStage(
+                        "audio_buffer",
+                        "queued",
+                        "pcm_chunk",
+                        chunks: replyAudioChunkCount,
+                        bytes: message.Pcm16 == null ? 0 : message.Pcm16.Length * 2,
+                        queueDepth: audioPlayer == null ? -1 : audioPlayer.QueuedChunkCount,
+                        bufferedMs: audioPlayer == null ? -1 : Mathf.RoundToInt(audioPlayer.BufferedSeconds * 1000f));
                     break;
                 case ConversationEventType.ReplyEnd:
                     if (string.IsNullOrWhiteSpace(stateMachine.ReplyText) && replyAudioChunkCount == 0)
@@ -412,6 +433,12 @@ namespace QuestMmdPlayer
                         return;
                     }
                     audioPlayer?.MarkStreamCompleted();
+                    RecordStage(
+                        "audio_buffer",
+                        "completed",
+                        "reply_end",
+                        queueDepth: audioPlayer == null ? -1 : audioPlayer.QueuedChunkCount,
+                        bufferedMs: audioPlayer == null ? -1 : Mathf.RoundToInt(audioPlayer.BufferedSeconds * 1000f));
                     awaitingBackendResponse = false;
                     TryRunLocalActionFallback();
                     break;
@@ -615,12 +642,17 @@ namespace QuestMmdPlayer
             firstEventAt = -1f;
             firstTextAt = -1f;
             firstAudioAt = -1f;
+            playbackStartedAt = -1f;
             replyEndedAt = -1f;
             audioDoneAt = -1f;
             responseWaitStartedAt = -1f;
             lastBackendProgressAt = -1f;
             awaitingBackendResponse = false;
             replyAudioChunkCount = 0;
+            backendSttReported = false;
+            backendDecisionReported = false;
+            backendTtsReported = false;
+            backendTotalReported = false;
         }
 
         private void TryQueueLocalAction(string text)
@@ -732,6 +764,7 @@ namespace QuestMmdPlayer
         private void RecordEventTiming(ConversationEvent message)
         {
             var now = Time.unscaledTime;
+            RecordBackendTiming(message);
             if (firstEventAt < 0f)
             {
                 firstEventAt = now;
@@ -798,6 +831,17 @@ namespace QuestMmdPlayer
                     ElapsedMsValue(inputEndedAt >= 0f ? inputEndedAt : turnStartedAt, replyEndedAt),
                     replyAudioChunkCount);
             }
+
+            if (message.TransportQueueDelayMs >= 0 &&
+                (message.Type != ConversationEventType.AudioChunk || replyAudioChunkCount <= 1 ||
+                 message.TransportQueueDelayMs >= 25))
+            {
+                RecordStage(
+                    "sse_dispatch",
+                    "completed",
+                    "main_thread_queue",
+                    elapsedMs: message.TransportQueueDelayMs);
+            }
         }
 
         private string BuildTimingStatus(float now)
@@ -807,13 +851,79 @@ namespace QuestMmdPlayer
                 return "no active timing";
             }
             var responseStart = inputEndedAt >= 0f ? inputEndedAt : turnStartedAt;
-            return $"firstChunk={ElapsedMs(turnStartedAt, firstInputChunkAt)}ms " +
+            return $"capture={ElapsedMs(turnStartedAt, inputEndedAt)}ms " +
+                $"firstChunk={ElapsedMs(turnStartedAt, firstInputChunkAt)}ms " +
                 $"inputEnd={ElapsedMs(turnStartedAt, inputEndedAt)}ms " +
+                $"asr={ElapsedMs(inputEndedAt, asrFinalAt)}ms " +
                 $"firstEvent={ElapsedMs(responseStart, firstEventAt)}ms " +
                 $"firstText={ElapsedMs(responseStart, firstTextAt)}ms " +
                 $"firstAudio={ElapsedMs(responseStart, firstAudioAt)}ms " +
+                $"playback={ElapsedMs(firstAudioAt, playbackStartedAt)}ms " +
                 $"replyEnd={ElapsedMs(responseStart, replyEndedAt)}ms " +
                 $"audioDone={ElapsedMs(responseStart, audioDoneAt)}ms chunks={replyAudioChunkCount}";
+        }
+
+        private void RecordBackendTiming(ConversationEvent message)
+        {
+            var timing = message == null ? null : message.BackendTiming;
+            if (timing == null || !timing.IsValid)
+            {
+                return;
+            }
+
+            if (!backendSttReported && timing.SttMs > 0)
+            {
+                backendSttReported = true;
+                RecordStage("backend_stt", "completed", "server_timing", elapsedMs: timing.SttMs);
+            }
+            if (!backendDecisionReported && timing.DecisionMs > 0)
+            {
+                backendDecisionReported = true;
+                RecordStage(
+                    "backend_decision",
+                    "completed",
+                    timing.SafeDecisionPath(),
+                    elapsedMs: timing.DecisionMs);
+            }
+            if (!backendTtsReported && (timing.TtsFirstChunkMs > 0 || timing.TtsTotalMs > 0))
+            {
+                backendTtsReported = true;
+                RecordStage(
+                    "backend_tts",
+                    "completed",
+                    "server_timing",
+                    elapsedMs: timing.TtsFirstChunkMs > 0 ? timing.TtsFirstChunkMs : timing.TtsTotalMs);
+            }
+            if (!backendTotalReported && timing.TurnTotalMs > 0)
+            {
+                backendTotalReported = true;
+                RecordStage("backend_total", "completed", "server_timing", elapsedMs: timing.TurnTotalMs);
+            }
+        }
+
+        private void HandlePlaybackTelemetry(PlaybackTelemetry telemetry)
+        {
+            playbackStartedAt = Time.unscaledTime;
+            RecordStage(
+                "audio_playback",
+                "processing",
+                "playback_callback",
+                elapsedMs: ElapsedMsValue(firstAudioAt, playbackStartedAt),
+                bufferedMs: telemetry.BufferedMs);
+            RecordStage(
+                "audio_playback",
+                "ready",
+                "playback_start",
+                elapsedMs: telemetry.CallbackDelayMs,
+                bufferedMs: telemetry.BufferedMs);
+            if (telemetry.UnderflowCount > 0)
+            {
+                RecordStage(
+                    "audio_playback",
+                    "limited",
+                    "audio_underflow",
+                    eventCount: telemetry.UnderflowCount);
+            }
         }
 
         private static string ElapsedMs(float start, float end)
@@ -833,7 +943,12 @@ namespace QuestMmdPlayer
             string status,
             string code = "",
             int elapsedMs = -1,
-            int chunks = 0)
+            int chunks = 0,
+            int bytes = 0,
+            int eventCount = 0,
+            int queueDepth = -1,
+            int bufferedMs = -1,
+            string traceId = "")
         {
             diagnostics = diagnostics != null ? diagnostics : GetComponent<RuntimeDebugLog>();
             diagnostics?.RecordStage(
@@ -841,7 +956,14 @@ namespace QuestMmdPlayer
                 status,
                 code,
                 elapsedMs: elapsedMs,
-                chunks: chunks);
+                chunks: chunks,
+                bytes: bytes,
+                eventCount: eventCount,
+                traceId: string.IsNullOrEmpty(traceId)
+                    ? RuntimeDebugLog.TraceLabel(stateMachine.TurnId)
+                    : traceId,
+                queueDepth: queueDepth,
+                bufferedMs: bufferedMs);
         }
 
         private void SubscribeTransport()

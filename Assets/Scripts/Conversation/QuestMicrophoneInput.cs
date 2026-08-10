@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using UnityEngine;
 using UnityEngine.XR;
 #if UNITY_ANDROID && !UNITY_EDITOR
@@ -48,6 +49,9 @@ namespace QuestMmdPlayer
         private float nextMonitorAttemptAt;
         private bool permissionRequested;
         private RuntimeDebugLog diagnostics;
+        private int pcmEncodeCount;
+        private int pcmEncodeTotalMs;
+        private int pcmEncodeMaxMs;
 
         public bool IsRecording { get; private set; }
         public bool IsMonitoring { get; private set; }
@@ -359,6 +363,9 @@ namespace QuestMmdPlayer
             detectedSpeech = includePreRoll;
             IsRecording = true;
             LastTurnCaptureSeconds = 0f;
+            pcmEncodeCount = 0;
+            pcmEncodeTotalMs = 0;
+            pcmEncodeMaxMs = 0;
             Status = "Recording voice";
             RecordMicrophoneStage("processing", includePreRoll ? "speech_detected" : "manual_capture");
             Debug.Log(includePreRoll
@@ -403,6 +410,18 @@ namespace QuestMmdPlayer
                     bytes: LastTurnPcmBytes,
                     sampleRate: TargetSampleRate,
                     channels: 1);
+                diagnostics?.RecordStage(
+                    "microphone",
+                    "completed",
+                    "vad_trailing_silence",
+                    elapsedMs: Mathf.RoundToInt(Mathf.Max(0f, Time.unscaledTime - lastVoiceAt) * 1000f));
+                diagnostics?.RecordStage(
+                    "audio_encode",
+                    "completed",
+                    "pcm_summary",
+                    elapsedMs: pcmEncodeTotalMs,
+                    chunks: pcmEncodeCount,
+                    bytes: LastTurnPcmBytes);
                 Debug.Log("[VoiceInput] Voice end accepted; waiting for reply.", this);
             }
             else
@@ -581,7 +600,15 @@ namespace QuestMmdPlayer
         {
             var source = pendingMono.GetRange(0, frameCount);
             pendingMono.RemoveRange(0, frameCount);
+            var encodeStartedAt = Stopwatch.GetTimestamp();
             var pcm16 = Pcm16CaptureUtility.ResampleAndEncode(source, sourceSampleRate, TargetSampleRate);
+            var encodeMs = Mathf.Clamp(
+                (int)System.Math.Round((Stopwatch.GetTimestamp() - encodeStartedAt) * 1000d / Stopwatch.Frequency),
+                0,
+                3600000);
+            pcmEncodeCount++;
+            pcmEncodeTotalMs += encodeMs;
+            pcmEncodeMaxMs = Mathf.Max(pcmEncodeMaxMs, encodeMs);
             if (pcm16.Length == 0)
             {
                 return true;
