@@ -84,6 +84,17 @@ namespace QuestMmdPlayer.Tests
             Assert.That(diagnostics.GetRecentTimelineText(), Does.Contain("队列3"));
             Assert.That(diagnostics.GetRecentTimelineText(), Does.Contain("缓冲120ms"));
         }
+
+        [Test]
+        public void TraceLabelsAreStableWithinProcessAndSeparateTurns()
+        {
+            var first = RuntimeDebugLog.TraceLabel("turn-one");
+            var repeated = RuntimeDebugLog.TraceLabel("turn-one");
+            var second = RuntimeDebugLog.TraceLabel("turn-two");
+
+            Assert.That(repeated, Is.EqualTo(first));
+            Assert.That(second, Is.Not.EqualTo(first));
+        }
     }
 }
 #endif

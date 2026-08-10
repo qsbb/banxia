@@ -151,15 +151,51 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ContractNamedServerTimingIsMappedForCurrentBridge()
+        {
+            const string json = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"server_timing\":{\"contract\":\"server_timing@1.0\",\"stt_ms\":820,\"decision_ms\":1510,\"decision_path\":\"direct_provider\",\"tts_first_chunk_ms\":620,\"tts_total_ms\":2380,\"turn_total_ms\":4725}}";
+
+            Assert.That(
+                AstrBotProtocol.TryMapSseEvent("s1", "reply.end", json, out var message, out var error),
+                Is.True,
+                error);
+            Assert.That(message.BackendTiming, Is.Not.Null);
+            Assert.That(message.BackendTiming.SchemaVersion, Is.EqualTo(1));
+            Assert.That(message.BackendTiming.SttMs, Is.EqualTo(820));
+            Assert.That(message.BackendTiming.DecisionMs, Is.EqualTo(1510));
+            Assert.That(message.BackendTiming.SafeDecisionPath(), Is.EqualTo("direct_provider"));
+        }
+
+        [Test]
+        public void ContractNamedServerTimingClampsDurationsAndUnknownPath()
+        {
+            const string json = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"server_timing\":{\"contract\":\"server_timing@1.0\",\"stt_ms\":86400000,\"decision_ms\":-5,\"decision_path\":\"unexpected\",\"tts_first_chunk_ms\":0,\"tts_total_ms\":1,\"turn_total_ms\":86400000}}";
+
+            Assert.That(
+                AstrBotProtocol.TryMapSseEvent("s1", "reply.end", json, out var message, out var error),
+                Is.True,
+                error);
+            Assert.That(message.BackendTiming.SttMs, Is.EqualTo(3600000));
+            Assert.That(message.BackendTiming.DecisionMs, Is.EqualTo(-1));
+            Assert.That(message.BackendTiming.TtsFirstChunkMs, Is.EqualTo(-1));
+            Assert.That(message.BackendTiming.TtsTotalMs, Is.EqualTo(1));
+            Assert.That(message.BackendTiming.TurnTotalMs, Is.EqualTo(3600000));
+            Assert.That(message.BackendTiming.SafeDecisionPath(), Is.EqualTo("unknown"));
+        }
+
+        [Test]
         public void InvalidOrMissingServerTimingIsIgnored()
         {
             const string missing = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\"}";
             const string invalid = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"server_timing\":{\"schema_version\":9,\"stt_ms\":99999999}}";
+            const string invalidContract = "{\"type\":\"reply.end\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"server_timing\":{\"contract\":\"server_timing@2.0\",\"stt_ms\":820}}";
 
             Assert.That(AstrBotProtocol.TryMapSseEvent("s1", "reply.end", missing, out var missingMessage, out _), Is.True);
             Assert.That(missingMessage.BackendTiming, Is.Null);
             Assert.That(AstrBotProtocol.TryMapSseEvent("s1", "reply.end", invalid, out var invalidMessage, out _), Is.True);
             Assert.That(invalidMessage.BackendTiming, Is.Null);
+            Assert.That(AstrBotProtocol.TryMapSseEvent("s1", "reply.end", invalidContract, out var invalidContractMessage, out _), Is.True);
+            Assert.That(invalidContractMessage.BackendTiming, Is.Null);
         }
 
         [Test]

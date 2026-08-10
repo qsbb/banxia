@@ -85,7 +85,7 @@ Assets/StreamingAssets/MmdSamples/ForestBerry 只用于本地冒烟测试，模�
 - 右手 A：挥手；右手 B：播放/暂停。
 - 左手 A：鞠躬；左手 B：重置位置、旋转和缩放。
 - “语音 -> 文字对话”可打开系统键盘，或直接选择中文测试短句；发送始终使用当前真实 AstrBot transport，不会自动切换到 Mock。
-- 诊断日志按短 trace 标签关联单轮：会记录 PCM 编码、每个上传 HTTP 分段、SSE 网络线程到 Unity 主线程排队、首段音频缓冲、实际音频回调开播和播放耗尽；若后端提供可选 `server_timing.schema_version=1`，还会显示后端 STT、AstrBot 决策链、TTS 和整轮耗时。
+- 诊断日志按短 trace 标签关联单轮：会记录 PCM 编码、上传 HTTP 分段、SSE 网络线程到 Unity 主线程排队、首段音频缓冲、实际音频回调开播和播放耗尽；若后端提供可选 `server_timing.schema_version=1` 或 `server_timing.contract=server_timing@1.0`，还会显示后端 STT、AstrBot 决策链、TTS 和整轮耗时。
 - 手掌靠近角色手部：握手；张开手掌靠近头顶：摸头；在脸旁捏合：捏脸。
 - 手掌和五个指尖会作为运动学球体加入角色现有的 UMT/Bullet 世界，能够推动模型自带的动态头发和衣物刚体；语义接触仍由独立代理判定。
 - 控制器模式下使用 Grip/Trigger 触发接触和拖动。

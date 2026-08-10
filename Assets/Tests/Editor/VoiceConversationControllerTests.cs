@@ -152,6 +152,73 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void BackendTimingIsLoggedAgainForEachCompletedTurn()
+        {
+            owner = new GameObject("Backend timing reset test");
+            var diagnostics = owner.AddComponent<RuntimeDebugLog>();
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+
+            controller.StartConversation("first");
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyTextDelta,
+                TurnId = controller.TurnId,
+                Text = "one"
+            });
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyEnd,
+                TurnId = controller.TurnId,
+                TextSent = true,
+                BackendTiming = new BackendTimingSnapshot
+                {
+                    SchemaVersion = 1,
+                    SttMs = 111,
+                    DecisionMs = 112,
+                    TtsFirstChunkMs = 113,
+                    TtsTotalMs = 114,
+                    TurnTotalMs = 115,
+                    DecisionPath = "astrbot_event_bus"
+                }
+            });
+            var firstTimeline = diagnostics.GetRecentTimelineText();
+            Assert.That(firstTimeline, Does.Contain("后端语音识别"));
+            Assert.That(firstTimeline, Does.Contain("111ms"));
+            Assert.That(firstTimeline, Does.Contain("AstrBot/EventBus"));
+
+            controller.StartConversation("second");
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyTextDelta,
+                TurnId = controller.TurnId,
+                Text = "two"
+            });
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyEnd,
+                TurnId = controller.TurnId,
+                TextSent = true,
+                BackendTiming = new BackendTimingSnapshot
+                {
+                    SchemaVersion = 1,
+                    SttMs = 221,
+                    DecisionMs = 222,
+                    TtsFirstChunkMs = 223,
+                    TtsTotalMs = 224,
+                    TurnTotalMs = 225,
+                    DecisionPath = "direct_provider"
+                }
+            });
+
+            var secondTimeline = diagnostics.GetRecentTimelineText();
+            Assert.That(secondTimeline, Does.Contain("后端语音识别"));
+            Assert.That(secondTimeline, Does.Contain("221ms"));
+            Assert.That(secondTimeline, Does.Contain("直接模型"));
+        }
+
+        [Test]
         public void LocalTouchReactionsRemainImmediateWhenBackendConnectsOrDisconnects()
         {
             owner = new GameObject("Conversation fallback test");

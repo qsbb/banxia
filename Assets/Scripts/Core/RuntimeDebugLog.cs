@@ -389,6 +389,9 @@ namespace QuestMmdPlayer
                 case "playback_start": return "首段语音到实际开播";
                 case "playback_callback": return "播放请求到音频回调";
                 case "server_timing": return "服务端耗时摘要";
+                case "astrbot_event_bus": return "AstrBot/EventBus";
+                case "direct_provider": return "直接模型";
+                case "unknown": return "未知路径";
                 case "main_thread_queue": return "主线程排队";
                 case "pcm_chunk": return "PCM 分块";
                 case "first_pcm_chunk": return "首个 PCM 分块";

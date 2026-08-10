@@ -364,14 +364,15 @@ namespace QuestMmdPlayer
 
         private static BackendTimingSnapshot ToBackendTiming(ServerTimingPayload payload)
         {
-            if (payload == null || payload.schema_version != 1)
+            if (payload == null ||
+                (payload.schema_version != 1 && payload.contract != "server_timing@1.0"))
             {
                 return null;
             }
 
             return new BackendTimingSnapshot
             {
-                SchemaVersion = payload.schema_version,
+                SchemaVersion = 1,
                 SttMs = ClampServerDuration(payload.stt_ms),
                 DecisionMs = ClampServerDuration(payload.decision_ms),
                 TtsFirstChunkMs = ClampServerDuration(payload.tts_first_chunk_ms),
@@ -476,6 +477,7 @@ namespace QuestMmdPlayer
         [Serializable]
         private sealed class ServerTimingPayload
         {
+            public string contract;
             public int schema_version;
             public int stt_ms;
             public int decision_ms;
