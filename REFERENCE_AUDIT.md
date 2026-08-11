@@ -30,7 +30,7 @@ AstrBot 对话、人格和记忆
 
 - 伴夏仓库的原创代码采用 Mozilla Public License 2.0；修改并分发 MPL 覆盖文件时应按该许可证提供对应源码。第三方组件和用户素材不因宿主许可证而改变授权范围。
 - 仓库实际嵌入的 `UnityMMDTools 0.5.0` 为 MIT，已保留上游 `LICENSE.md` 与 Third Party Notices；本项目只修改其托管物理适配层，原生二进制未改。
-- Meta 样例、UniVRM、uLipSync、mmd2gltf-gui、VirtualMotionCapture、OpenAI Realtime Console 和 Open-LLM-VTuber 的软件部分为 MIT；Google Gemini Live Console、Project N.E.K.O 和 LLMUnity 为 Apache-2.0；Pipecat 为 BSD-2-Clause。真正引入时仍需保留对应版权与许可证文本。
+- Meta 样例、UniVRM、uLipSync、mmd2gltf-gui、VirtualMotionCapture、OpenAI Realtime Console 和 Open-LLM-VTuber 的软件部分为 MIT；Google Gemini Live Console 和 LLMUnity 为 Apache-2.0；Pipecat 为 BSD-2-Clause。真正引入时仍需保留对应版权与许可证文本。
 - Unity XR Interaction Toolkit Examples 使用 Unity Companion License，只能在符合该许可证的 Unity 相关项目中使用；本项目目前只参考交互边界，没有复制其示例资产。
 - `KK_VR`、`KK_SetParentVR`、`Together Companion` 与 Deepgram FastAPI 示例当前仓库根未声明可识别的软件许可证。README 中只描述公开可观察的架构或行为，没有移植其源码；后续也不得在未获许可时复制。
 - Live2D 样例模型、用户 PMX/贴图、第三方 VMD 和动作/相机配布适用素材作者自己的条款，不因宿主代码采用任何开源许可证而自动获得再分发权。
@@ -106,13 +106,6 @@ AstrBot 对话、人格和记忆
 - 价值：实时语音、VAD、ASR/TTS 模块化、免耳机语音打断、触碰反馈、后端表情映射和会话持久化。
 - 源码模式：WebSocket 消息按类型路由；每个客户端保存当前会话任务；收到 `interrupt-signal` 时取消任务；麦克风原始音频由 VAD 产生暂停/结束控制消息。
 - 采用方式：本项目复用“流式事件 + 可取消 turn + 控制消息”的架构，后端仍然使用 AstrBot，前端角色仍然是 3D PMX/VRM。
-
-### Project N.E.K.O
-
-- 地址：[Project-N-E-K-O/N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O)
-- 价值：公开架构将 Realtime API 对话、ChatCompletion 辅助能力、活动状态、主动话题、五维记忆和 Live2D/VRM/MMD Avatar 分层；强调跨端共享同一人格与记忆，而不是把 Avatar 当作聊天皮肤。
-- 可迁移：保留“临”作为 Quest 传输边界，由“知/言/序/情/境/声/核”继续承担现有能力；Unity 只维护可取消的本地 turn、Avatar 表现和传感器事件。主动搭话应由服务端策略产生，不由 Quest 客户端定时硬编码。
-- 不迁移：不引入其 Python/Electron 服务栈，也不替换 AstrBot；只借鉴能力分层和主动陪伴状态机。
 
 ### Gemini Live 类实时语音示例
 

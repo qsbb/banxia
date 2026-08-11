@@ -8,6 +8,10 @@
 
 产品目标、下一阶段和技术选择见 [DEVELOPMENT_ROADMAP_CN.md](DEVELOPMENT_ROADMAP_CN.md)。自然待机、挥手和日常动作的资源筛选见 [NATURAL_MOTION_SOURCES_CN.md](NATURAL_MOTION_SOURCES_CN.md)。真人式触碰见 [HUMAN_INTERACTION_TESTING_CN.md](HUMAN_INTERACTION_TESTING_CN.md)，对话闭环见 [CONVERSATION_TESTING_CN.md](CONVERSATION_TESTING_CN.md)，AstrBot 后端开发任务见 [ASTRBOT_PLUGIN_DEVELOPMENT_PROMPT_CN.md](ASTRBOT_PLUGIN_DEVELOPMENT_PROMPT_CN.md)。
 
+## 参与项目
+
+本项目希望先给出一条可运行、可验证的混合现实具身陪伴实现路径，以此抛砖引玉，而不是把当前方案当作唯一答案。欢迎通过 [Issues](https://github.com/qsbb/banxia/issues) 反馈设备兼容、交互、协议和性能问题，也欢迎提交 Pull Request，共同完善客户端适配、模型支持、物理交互、测试与文档。提交内容请说明测试环境，并确认拥有所附代码、图片、模型、动作和音频的必要授权。
+
 ## 前后端项目
 
 | 项目 | 职责 | 仓库 |
@@ -188,13 +192,8 @@ Assets/StreamingAssets/MmdSamples/ForestBerry 只用于本地冒烟测试，模�
 | [OpenAI Realtime Console](https://github.com/openai/openai-realtime-console) | 实时音频事件、打断和调试 UI | MIT |
 | [Gemini Live API Web Console](https://github.com/google-gemini/live-api-web-console) | PCM 队列、全双工和低频视觉通道 | Apache-2.0 |
 | [Pipecat](https://github.com/pipecat-ai/pipecat) | 异步处理管线、轮次与 barge-in | BSD-2-Clause |
-| [Project N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) | 人格、记忆、活动状态与 Avatar 分层 | Apache-2.0 |
 | [Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber) | VAD、可取消任务和表情映射 | MIT；Live2D 样例模型另有条款 |
 | [Together Companion](https://github.com/menglimi/astrbot_plugin_together_companion) | AstrBot 消息链、连续识别与房间连接思路 | 仓库未声明许可证；只作行为参考 |
 | [KK_VR](https://github.com/Ermin610/KK_VR) / [KK_SetParentVR](https://github.com/MayouKurayami/KK_SetParentVR) | IK 目标、接触冷却、约束释放和双手操作 | 仓库未声明许可证；只作概念参考，未复制代码 |
 
 完整技术路线、更多项目和逐项采用边界见 [REFERENCE_AUDIT.md](REFERENCE_AUDIT.md)。没有明确再分发授权的 PMX、贴图、VMD、相机配布和表情资源不会进入仓库或 APK。本仓库原创代码采用 [Mozilla Public License 2.0](LICENSE)；第三方组件和用户导入素材仍分别适用其原有许可证或授权条款，MPL-2.0 不会替它们授予额外权利。
-
-## 参与项目
-
-本项目希望先给出一条可运行、可验证的混合现实具身陪伴实现路径，以此抛砖引玉，而不是把当前方案当作唯一答案。欢迎通过 [Issues](https://github.com/qsbb/banxia/issues) 反馈设备兼容、交互、协议和性能问题，也欢迎提交 Pull Request，共同完善客户端适配、模型支持、物理交互、测试与文档。提交内容请说明测试环境，并确认拥有所附代码、图片、模型、动作和音频的必要授权。
