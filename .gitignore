@@ -27,6 +27,8 @@ captures/
 .env
 .env.*
 !.env.example
+embodiment_bridge.json
+# Legacy name retained so migrated device exports cannot be committed accidentally.
 quest_avatar_bridge.json
 *.keystore
 *.jks

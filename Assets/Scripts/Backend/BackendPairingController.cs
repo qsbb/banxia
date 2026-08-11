@@ -41,7 +41,8 @@ namespace QuestMmdPlayer
     [DisallowMultipleComponent]
     public sealed class BackendPairingController : MonoBehaviour
     {
-        private const string PairingServerPreference = "quest_avatar_pairing_server_v1";
+        private const string PairingServerPreference = "embodiment_bridge_pairing_server_v1";
+        private const string LegacyPairingServerPreference = "quest_avatar_pairing_server_v1";
 
         [SerializeField] private int requestTimeoutSeconds = 15;
 
@@ -258,9 +259,20 @@ namespace QuestMmdPlayer
         private void RestorePairingServer()
         {
             var saved = PlayerPrefs.GetString(PairingServerPreference, string.Empty);
+            var restoredLegacyPreference = false;
+            if (string.IsNullOrWhiteSpace(saved) && PlayerPrefs.HasKey(LegacyPairingServerPreference))
+            {
+                saved = PlayerPrefs.GetString(LegacyPairingServerPreference, string.Empty);
+                restoredLegacyPreference = true;
+            }
             if (BackendPairingProtocol.TryBuildExchangeEndpoint(saved, out var endpoint, out _, allowPrivateHttp))
             {
                 PairingServerEndpoint = endpoint;
+                if (restoredLegacyPreference || !string.Equals(saved, endpoint, StringComparison.Ordinal))
+                {
+                    PlayerPrefs.SetString(PairingServerPreference, endpoint);
+                    PlayerPrefs.Save();
+                }
                 return;
             }
             if (bridge != null && BackendPairingProtocol.TryBuildExchangeEndpoint(

@@ -1,8 +1,8 @@
 # Third-party notices
 
 This repository contains or references software and assets owned by their
-respective authors. A future root license for original Banxia code
-does not replace these terms.
+respective authors. The root MPL-2.0 license covers original Banxia source code
+only and does not replace these terms.
 
 ## UnityMMDTools
 

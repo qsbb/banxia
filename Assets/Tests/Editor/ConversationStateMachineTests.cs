@@ -66,6 +66,17 @@ namespace QuestMmdPlayer.Tests
             Assert.IsFalse(machine.Fail("again"));
         }
 
+        [Test]
+        public void FirstTurnIdIsUniqueAcrossProcessStateMachines()
+        {
+            var first = new ConversationStateMachine().Begin("first");
+            var second = new ConversationStateMachine().Begin("second");
+
+            Assert.AreNotEqual(first, second);
+            StringAssert.IsMatch(@"^turn-[0-9a-f]{8}-000001$", first);
+            StringAssert.IsMatch(@"^turn-[0-9a-f]{8}-000001$", second);
+        }
+
         private static ConversationEvent Event(string turnId, ConversationEventType type, string text = null)
         {
             return new ConversationEvent { TurnId = turnId, Type = type, Text = text };

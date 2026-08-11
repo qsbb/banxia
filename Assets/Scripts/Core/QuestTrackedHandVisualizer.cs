@@ -299,6 +299,20 @@ namespace QuestMmdPlayer
                 return 1;
             }
 
+            // Quest can briefly report an untracked hand between otherwise
+            // continuous joint frames. Keep the last physical probes alive for
+            // the same bounded grace window as the visible hand so a 1-frame
+            // dropout does not make the hand pass through the avatar.
+            if (ShouldRetainTrackedHandPose(
+                visual.inputSource,
+                Time.unscaledTime,
+                visual.lastTrackedPoseAt,
+                trackingLossVisualGrace))
+            {
+                SetVisible(visual, true, visual.meshRoot != null);
+                return 0;
+            }
+
             var device = InputDevices.GetDeviceAtXRNode(visual.node);
             if (device.isValid && device.TryGetFeatureValue(CommonUsages.devicePosition, out var position))
             {
@@ -604,6 +618,16 @@ namespace QuestMmdPlayer
         public static bool IsTrackingGraceActive(float now, float lastTrackedAt, float graceSeconds)
         {
             return AvatarTouchInteraction.IsTrackingGraceActive(now, lastTrackedAt, graceSeconds);
+        }
+
+        public static bool ShouldRetainTrackedHandPose(
+            string inputSource,
+            float now,
+            float lastTrackedAt,
+            float graceSeconds)
+        {
+            return string.Equals(inputSource, "hand_tracking", StringComparison.Ordinal) &&
+                   IsTrackingGraceActive(now, lastTrackedAt, graceSeconds);
         }
 
         public static TrackedHandContactProbe ContactProbeForJoint(XRHandJointID joint)

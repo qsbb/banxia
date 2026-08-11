@@ -1,32 +1,38 @@
-# Quest Avatar Bridge Unity 接入
+# AstrBot Embodiment Bridge Unity 接入
 
-Unity 客户端实现 Quest Avatar Bridge 协议 `1.0`，使用 HTTP POST 上行和 SSE 下行。配置不会写入 APK 或 Unity 场景。
+Unity 客户端实现 Embodiment Bridge 协议 `1.0`，使用 HTTP POST 上行和 SSE 下行。协议本身不限定设备；伴夏当前以 Meta Quest 为首个参考客户端。配置不会写入 APK 或 Unity 场景。
 
 ## 配置位置
 
 Quest 包名为 `com.lingxi.banxia`。配置文件路径：
 
 ```text
-/sdcard/Android/data/com.lingxi.banxia/files/quest_avatar_bridge.json
+/sdcard/Android/data/com.lingxi.banxia/files/embodiment_bridge.json
 ```
 
-模板位于 `Builds/quest_avatar_bridge.example.json`。完整 `base_url` 必须包含插件路径：
+推荐通过应用内 6 位短码绑定生成配置。需要受控调试时，完整 `base_url` 必须包含插件路径：
 
 ```text
-https://<astrbot-host>/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge
+https://<astrbot-host>/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge
 ```
 
 通过 ADB 安装配置：
 
 ```powershell
-adb -s 2G0YC5ZHBF00R0 push quest_avatar_bridge.json /sdcard/Android/data/com.lingxi.banxia/files/quest_avatar_bridge.json
+adb -s <serial> push embodiment_bridge.json /sdcard/Android/data/com.lingxi.banxia/files/embodiment_bridge.json
 ```
 
 重启应用后，`AstrBotBridge` 会执行 `health -> session/start -> events/<session_id>`。SSE 断开时复用现有会话重连；服务端返回 `404` 时创建新会话。
 
+## 旧版迁移
+
+若新配置尚不存在，客户端会读取旧的 `quest_avatar_bridge.json`，将精确的旧插件路径迁移到 `astrbot_plugin_embodiment_bridge`，然后原子写入新文件。旧文件保留用于降级，不会覆盖已经存在的新配置。旧配对服务器偏好和精确旧二维码路径也会迁移到新路径。
+
+新客户端使用 `X-Embodiment-Bridge-Key`。后端在 1.0 兼容期仍接受旧 `X-Quest-Avatar-Key`；二维码类型 `astrbot.quest.pair` 暂时保持不变，它是已发布的线上载荷字段，不代表当前插件仍绑定 Quest。
+
 ## 网络安全
 
-Quest APK 只接受 HTTPS。`allow_insecure_http=true` 仅供 Unity 编辑器中的受控协议测试使用，不能放宽 Android 构建。AstrBot 在局域网只提供 HTTP 时，应先通过可信反向代理提供 HTTPS；两个认证头不得明文传输。
+公网必须使用可信 HTTPS。私网调试可由用户在配对界面显式允许 HTTP，但只接受字面量私网 IP，不接受域名，避免 DNS 重绑定；两个认证头会以明文经过该局域网链路，因此不得在不可信网络启用。8520 内置 listener 只匿名开放精确的配对交换路径，其他协议请求仍需要 AstrBot API Key 与 Bridge Key。
 
 ## 前端职责
 

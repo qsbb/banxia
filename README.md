@@ -8,6 +8,31 @@
 
 产品目标、下一阶段和技术选择见 [DEVELOPMENT_ROADMAP_CN.md](DEVELOPMENT_ROADMAP_CN.md)。自然待机、挥手和日常动作的资源筛选见 [NATURAL_MOTION_SOURCES_CN.md](NATURAL_MOTION_SOURCES_CN.md)。真人式触碰见 [HUMAN_INTERACTION_TESTING_CN.md](HUMAN_INTERACTION_TESTING_CN.md)，对话闭环见 [CONVERSATION_TESTING_CN.md](CONVERSATION_TESTING_CN.md)，AstrBot 后端开发任务见 [ASTRBOT_PLUGIN_DEVELOPMENT_PROMPT_CN.md](ASTRBOT_PLUGIN_DEVELOPMENT_PROMPT_CN.md)。
 
+## 前后端项目
+
+| 项目 | 职责 | 仓库 |
+|---|---|---|
+| 伴夏（本仓库） | Unity/XR 客户端、角色显示、输入、物理、动作、房间理解和音频播放 | [qsbb/banxia](https://github.com/qsbb/banxia) |
+| 凝心溯溪-临 | AstrBot 配对、身份、EventBus 对话、STT/TTS、动作意图与诊断 | [qsbb/astrbot_plugin_embodiment_bridge](https://github.com/qsbb/astrbot_plugin_embodiment_bridge) |
+
+伴夏是后端 Protocol 1.0 的参考客户端；后端协议不绑定 Quest、Unity、MMD 或伴夏，其他 XR 设备、桌面角色和实体载体也可以实现同一接口。两个仓库独立版本、独立发布，并在各自 README 中互相推荐。
+
+## 架构与职责
+
+```mermaid
+flowchart LR
+    H["手追、控制器、麦克风、房间事实"] --> U["伴夏 Unity 客户端"]
+    U -->|"HTTP: 文字、PCM16、交互事实"| B["凝心溯溪-临"]
+    B --> E["AstrBot EventBus"]
+    E --> S["人格、记忆、知识、工具与后处理"]
+    S --> E
+    E --> B
+    B -->|"SSE: 文字、PCM16、avatar.intent"| U
+    U --> A["PMX、动作、表情、注视、物理与嘴型"]
+```
+
+Unity 只上报已经观测到的事实，并执行模型无关的白名单意图；它不决定关系、身份权限或回复内容。后端不发送骨骼名、Morph 名、Unity 对象或任意文件路径。客户端无法通过配对或 `session/start` 自报管理员身份、人格、平台或自然人。
+
 ## 当前实现
 
 - 运行时直接读取 PMX，不把模型预转换成 GLB。
@@ -55,9 +80,48 @@
 
 ## 后端绑定
 
-在头显菜单“绑定后端”中只输入域名或 IP、端口和 6 位绑定码；应用会自动补全 `/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge`，无需输入或粘贴长路径。
+在头显菜单“绑定后端”中只输入域名或 IP、端口和 6 位绑定码；应用会自动补全 `/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge`，无需输入或粘贴长路径。
 
 当前项目仍使用 Unity 2022 与 Meta OpenXR 1.x，没有可用的头显相机帧 API，因此不显示不可工作的扫码按钮。二维码相机绑定需要后续整体迁移到 Unity 6、MRUK 81+ 和 Meta Passthrough Camera API；在迁移完成前以手动短码绑定为正式流程。
+
+### 配置教程
+
+1. 在 AstrBot 安装并启用“凝心溯溪-临”，配置至少一个 Chat Completion Provider。
+2. 在 AstrBot 管理后台进入“设置 → API Key 管理”，创建具身客户端专用 API Key，至少授予 `plugin` scope。密钥明文通常只显示一次。
+3. 打开后端的“具身服务控制台”Page，选择聊天模型和正式消息平台，填写客户端 ID、Bot、User 与专用 API Key。需要身份/关系继承时再绑定“序”和“情”。
+4. 私网部署启用后端内置 listener，默认端口为 `8520`；Docker 必须映射同一端口。私网 HTTP 只接受私网 IP 字面量并要求服务端显式允许，公网必须使用可信 HTTPS。
+5. 打开后端“快速绑定”Page，生成 6 位短码。
+6. 在伴夏菜单打开“绑定后端”，填写服务器域名或 IP、端口和短码；应用自动补全 exchange 路径并原子保存配置。
+7. 配对后查看菜单诊断：应依次看到配置加载、health、session、SSE 和真实 EventBus 链路。出现错误时不要改用 Mock 或直连模型掩盖配置问题。
+
+配对结果保存在 `Application.persistentDataPath/embodiment_bridge.json`。其中包含长期密钥，不应提交到 Git、截图或日志；应用不会在 UI 中回显完整密钥。重新安装时应优先覆盖安装，卸载会删除应用私有数据并要求重新绑定。更完整的服务端配置见后端 [README](https://github.com/qsbb/astrbot_plugin_embodiment_bridge#十分钟配置) 和本仓库 [ASTRBOT_BRIDGE_SETUP_CN.md](ASTRBOT_BRIDGE_SETUP_CN.md)。
+
+从旧版升级时，伴夏会在新配置不存在的前提下读取 `quest_avatar_bridge.json`，把其中的旧插件路径升级为新路径，再原子写入 `embodiment_bridge.json`。旧文件不会被删除，可用于降级；旧配对服务器偏好也会一次性复制到新键。手工输入或旧二维码中的精确旧扩展路径同样会规范化到新路径，不接受其他任意插件路径。
+
+### Protocol 1.0 接口
+
+伴夏对正常接口同时发送：
+
+```http
+Authorization: ApiKey <具有 plugin scope 的专用 Key>
+X-Embodiment-Bridge-Key: <bridge_api_key>
+```
+
+新客户端发送 `X-Embodiment-Bridge-Key`。后端在 1.0 兼容期仍接受旧客户端的 `X-Quest-Avatar-Key`，但同一请求只需发送其中一个。二维码类型 `astrbot.quest.pair` 是已经发布的 1.0 载荷字段，暂时保留；未来替换时需要通过新协议版本协商。
+
+| 方法 | 路径 | 客户端用途 |
+|---|---|---|
+| POST | `/session/start` | 创建会话 |
+| GET | `/events/<session_id>` | 建立唯一 SSE 下行流 |
+| POST | `/turn/start` | 开始文字或语音轮次 |
+| POST | `/audio/chunk` | 上传 PCM16 mono 16000 Hz 音频块 |
+| POST | `/audio/end` | 完成录音并启动 STT/决策 |
+| POST | `/interaction` | 上报握手、摸头、捏脸等事实 |
+| POST | `/interrupt` | 打断并清理旧轮事件 |
+| POST | `/session/close` | 关闭会话 |
+| GET | `/health` | 读取协议与能力状态 |
+
+SSE 下行事件包括 `asr.partial`、`asr.final`、`avatar.intent`、`reply.text.delta`、`reply.audio.chunk`、`reply.end` 和 `error`。当前后端文件式 STT 不产生 `asr.partial`；输出音频为 PCM16 mono 24000 Hz。完整 schema、状态码和安全边界见后端 [API_CN.md](https://github.com/qsbb/astrbot_plugin_embodiment_bridge/blob/main/docs/API_CN.md)。
 
 ## 导入任意用户 PMX
 
@@ -95,3 +159,42 @@ Assets/StreamingAssets/MmdSamples/ForestBerry 只用于本地冒烟测试，模�
 当前接触传感会在本地立即给出物理和表情反馈，同时把 `handshake/head_pat/cheek_pinch` 的开始和结束上报给后端；AstrBot 返回的结构化意图可以继续补充动作。PMX 动态头发和衣物由同一个 Bullet 求解器响应，手臂仍是原型骨骼反馈，不是连续 Two Bone IK。
 
 开发机可在冷启动时通过 Android Intent 模拟一条客户端文字输入：`quest_debug_command=send_text` 与 `quest_debug_text=<测试文本>`。该入口等待真实 SSE 会话就绪后调用 `ConversationController.StartConversation`，不读取或打印正文，也不会绕过身份授权。
+
+## 凝心溯溪系列
+
+伴夏只需要连接“临”；“临”再通过有版本的公开契约复用系列能力。各模块均可独立安装，缺失时按边界降级。
+
+| 模块 | 作用 | 仓库 |
+|---|---|---|
+| 知 | 知识学习、检索与验证 | [astrbot_plugin_active_learner](https://github.com/qsbb/astrbot_plugin_active_learner) |
+| 言 | 对话节奏、消息链与表达控制 | [astrbot_plugin_conversation_flow](https://github.com/qsbb/astrbot_plugin_conversation_flow) |
+| 序 | 身份、主人和精确授权 | [astrbot_plugin_identity_guardian](https://github.com/qsbb/astrbot_plugin_identity_guardian) |
+| 情 | 自然人映射、关系状态与边界 | [astrbot_plugin_relationship](https://github.com/qsbb/astrbot_plugin_relationship) |
+| 境 | 环境事实、机会与预警 | [astrbot_plugin_environment_awareness](https://github.com/qsbb/astrbot_plugin_environment_awareness) |
+| 声 | TTS、音色与语音输出契约 | [astrbot_plugin_voice_hub](https://github.com/qsbb/astrbot_plugin_voice_hub) |
+| 核 | 系列更新、诊断聚合与安全边界 | [astrbot_plugin_update_manager](https://github.com/qsbb/astrbot_plugin_update_manager) |
+| 临 | 具身客户端桥接 | [astrbot_plugin_embodiment_bridge](https://github.com/qsbb/astrbot_plugin_embodiment_bridge) |
+
+## 参考与第三方项目
+
+当前实际嵌入并修改的是 [UnityMMDTools](https://github.com/CandidumGames/UnityMMDTools) 0.5.0（MIT）；上游许可证和第三方声明保留在嵌入包中，本仓库的修改记录见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Unity Package Manager 与 Meta 包继续适用各自许可证。
+
+以下项目用于学习架构和交互方法，没有把其源码、模型或动作复制进本仓库：
+
+| 项目 | 参考点 | 上游许可/边界 |
+|---|---|---|
+| [Meta Unity-NorthStar](https://github.com/oculus-samples/Unity-NorthStar) | NPC、手追、全身重定向、嘴型和性能分层 | MIT |
+| [Meta Unity-Discover](https://github.com/oculus-samples/Unity-Discover) | Passthrough、Scene API、空间锚与 MR 工程组织 | MIT |
+| [OpenAI Realtime Console](https://github.com/openai/openai-realtime-console) | 实时音频事件、打断和调试 UI | MIT |
+| [Gemini Live API Web Console](https://github.com/google-gemini/live-api-web-console) | PCM 队列、全双工和低频视觉通道 | Apache-2.0 |
+| [Pipecat](https://github.com/pipecat-ai/pipecat) | 异步处理管线、轮次与 barge-in | BSD-2-Clause |
+| [Project N.E.K.O](https://github.com/Project-N-E-K-O/N.E.K.O) | 人格、记忆、活动状态与 Avatar 分层 | Apache-2.0 |
+| [Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber) | VAD、可取消任务和表情映射 | MIT；Live2D 样例模型另有条款 |
+| [Together Companion](https://github.com/menglimi/astrbot_plugin_together_companion) | AstrBot 消息链、连续识别与房间连接思路 | 仓库未声明许可证；只作行为参考 |
+| [KK_VR](https://github.com/Ermin610/KK_VR) / [KK_SetParentVR](https://github.com/MayouKurayami/KK_SetParentVR) | IK 目标、接触冷却、约束释放和双手操作 | 仓库未声明许可证；只作概念参考，未复制代码 |
+
+完整技术路线、更多项目和逐项采用边界见 [REFERENCE_AUDIT.md](REFERENCE_AUDIT.md)。没有明确再分发授权的 PMX、贴图、VMD、相机配布和表情资源不会进入仓库或 APK。本仓库原创代码采用 [Mozilla Public License 2.0](LICENSE)；第三方组件和用户导入素材仍分别适用其原有许可证或授权条款，MPL-2.0 不会替它们授予额外权利。
+
+## 参与项目
+
+本项目希望先给出一条可运行、可验证的混合现实具身陪伴实现路径，以此抛砖引玉，而不是把当前方案当作唯一答案。欢迎通过 [Issues](https://github.com/qsbb/banxia/issues) 反馈设备兼容、交互、协议和性能问题，也欢迎提交 Pull Request，共同完善客户端适配、模型支持、物理交互、测试与文档。提交内容请说明测试环境，并确认拥有所附代码、图片、模型、动作和音频的必要授权。

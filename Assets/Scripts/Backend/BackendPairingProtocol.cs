@@ -41,9 +41,13 @@ namespace QuestMmdPlayer
     public static class BackendPairingProtocol
     {
         public const string Version = "1.0";
+        public const string PluginId = "astrbot_plugin_embodiment_bridge";
+        public const string LegacyPluginId = "astrbot_plugin_quest_avatar_bridge";
         public const string PayloadType = "astrbot.quest.pair";
-        public const string PluginApiPath = "/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge";
+        public const string PluginApiPath = "/api/v1/plugins/extensions/" + PluginId;
         public const string ExchangePath = PluginApiPath + "/pairing/exchange";
+        public const string LegacyPluginApiPath = "/api/v1/plugins/extensions/" + LegacyPluginId;
+        public const string LegacyExchangePath = LegacyPluginApiPath + "/pairing/exchange";
 
         public static bool TryBuildExchangeEndpoint(string serverOrEndpoint, out string endpoint, out string reason, bool allowPrivateHttp = false)
         {
@@ -91,13 +95,18 @@ namespace QuestMmdPlayer
             {
                 path = ExchangePath;
             }
-            else if (string.Equals(path, PluginApiPath, StringComparison.Ordinal))
+            else if (string.Equals(path, PluginApiPath, StringComparison.Ordinal) ||
+                     string.Equals(path, LegacyPluginApiPath, StringComparison.Ordinal))
+            {
+                path = ExchangePath;
+            }
+            else if (string.Equals(path, LegacyExchangePath, StringComparison.Ordinal))
             {
                 path = ExchangePath;
             }
             else if (!string.Equals(path, ExchangePath, StringComparison.Ordinal))
             {
-                reason = "Pairing server path is not a Quest Avatar Bridge endpoint";
+                reason = "Pairing server path is not an Embodiment Bridge endpoint";
                 return false;
             }
 
@@ -172,6 +181,91 @@ namespace QuestMmdPlayer
             }
             token = payload.token;
             return true;
+        }
+
+        public static bool TryUpgradeLegacyPluginBaseUrl(string value, out string upgraded)
+        {
+            upgraded = value ?? string.Empty;
+            if (!TryGetExactPluginUri(value, LegacyPluginApiPath, out var uri))
+            {
+                return false;
+            }
+
+            var builder = new UriBuilder(uri)
+            {
+                Path = PluginApiPath,
+                Query = string.Empty,
+                Fragment = string.Empty
+            };
+            upgraded = builder.Uri.AbsoluteUri.TrimEnd('/');
+            return true;
+        }
+
+        public static bool TryMigrateLegacyConfiguration(
+            string legacyPath,
+            string currentPath,
+            out bool migrated,
+            out string reason)
+        {
+            migrated = false;
+            reason = string.Empty;
+            if (string.IsNullOrWhiteSpace(legacyPath) || string.IsNullOrWhiteSpace(currentPath))
+            {
+                reason = "Configuration migration paths are missing";
+                return false;
+            }
+
+            try
+            {
+                var legacyFullPath = Path.GetFullPath(legacyPath);
+                var currentFullPath = Path.GetFullPath(currentPath);
+                if (File.Exists(currentFullPath) || !File.Exists(legacyFullPath))
+                {
+                    return true;
+                }
+                var settings = JsonUtility.FromJson<AstrBotBridgeSettings>(
+                    File.ReadAllText(legacyFullPath, Encoding.UTF8));
+                if (settings == null)
+                {
+                    reason = "Legacy configuration is empty";
+                    return false;
+                }
+                if (TryUpgradeLegacyPluginBaseUrl(settings.base_url, out var upgradedBaseUrl))
+                {
+                    settings.base_url = upgradedBaseUrl;
+                }
+                else if (!TryGetExactPluginUri(settings.base_url, PluginApiPath, out _))
+                {
+                    reason = "Legacy configuration endpoint is not a recognized bridge path";
+                    return false;
+                }
+                if (!TryWriteSettingsAtomically(
+                    currentFullPath,
+                    settings,
+                    out reason,
+                    settings.allow_insecure_http))
+                {
+                    return false;
+                }
+                migrated = true;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                reason = "Legacy configuration could not be migrated: " + exception.GetType().Name;
+                return false;
+            }
+        }
+
+        private static bool TryGetExactPluginUri(string value, string pluginPath, out Uri uri)
+        {
+            return Uri.TryCreate(value, UriKind.Absolute, out uri) &&
+                   !string.IsNullOrEmpty(uri.Host) &&
+                   !string.IsNullOrEmpty(uri.Scheme) &&
+                   string.IsNullOrEmpty(uri.UserInfo) &&
+                   string.IsNullOrEmpty(uri.Query) &&
+                   string.IsNullOrEmpty(uri.Fragment) &&
+                   string.Equals(uri.AbsolutePath.TrimEnd('/'), pluginPath, StringComparison.Ordinal);
         }
 
         public static string NormalizeShortCode(string value)

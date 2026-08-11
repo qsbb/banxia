@@ -1,10 +1,10 @@
-# AstrBot Quest 角色桥接插件开发提示词
+# AstrBot 具身客户端桥接插件开发提示词
 
-把以下整段提示词交给负责 AstrBot 后端开发的编码助手。目标插件暂定名为 `astrbot_plugin_quest_avatar_bridge`。
+把以下整段提示词交给负责 AstrBot 后端开发的编码助手。目标插件名为 `astrbot_plugin_embodiment_bridge`。
 
 ---
 
-你是负责 AstrBot 插件的高级 Python 工程师。请在现有 AstrBot 工作区中开发一个新插件 `astrbot_plugin_quest_avatar_bridge`，为 Meta Quest/Unity MMD 角色前端提供实时对话与角色行为决策服务。
+你是负责 AstrBot 插件的高级 Python 工程师。请在现有 AstrBot 工作区中开发插件 `astrbot_plugin_embodiment_bridge`，为 XR、桌面角色和其他具身客户端提供实时对话与角色行为决策服务；Meta Quest/Unity MMD 客户端“伴夏”是首个参考实现。
 
 ## 一、先做只读调查
 
@@ -107,7 +107,7 @@ SSE 的每条 `data` 都是一个 JSON 对象，至少含 `protocol_version`、`
 ## 八、建议目录
 
 ```text
-astrbot_plugin_quest_avatar_bridge/
+astrbot_plugin_embodiment_bridge/
   main.py
   metadata.yaml
   _conf_schema.json
@@ -147,4 +147,3 @@ astrbot_plugin_quest_avatar_bridge/
 - 插件配置：https://docs.astrbot.app/dev/star/guides/plugin-config.html
 - 插件 Pages、Web API 与 SSE：https://docs.astrbot.app/dev/star/guides/plugin-pages.html
 - 存储：https://docs.astrbot.app/dev/star/guides/storage.html
-

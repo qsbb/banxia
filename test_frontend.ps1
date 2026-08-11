@@ -83,6 +83,8 @@ $requiredFiles = @(
     "Assets/Tests/Editor/RoomUnderstandingServiceTests.cs",
     "Assets/Tests/Editor/RuntimeDiagnosticsSnapshotTests.cs",
     "Assets/Tests/Editor/QuestFileImportServiceTests.cs",
+    "Assets/Tests/PlayMode/QuestMmdPlayer.PlayModeTests.asmdef",
+    "Assets/Tests/PlayMode/RuntimeLifecycleSmokeTests.cs",
     "README.md",
     "TESTING.md",
     "QUICK_TEST.md",
@@ -163,15 +165,15 @@ $sourceChecks = @{
     "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("LoadFromFileAsync", "PMXImporter.BuildUnityObjectsAsync", "streamingAssetsPath", "textureBaseDirectory", "PreserveOriginalNames")
     "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VmdActionFilePolicy", "SearchOption.TopDirectoryOnly", "VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "DefaultExecutionOrder(11000)", "bakePhysicsToFK = true", "BeginPhysicsArbitration", "StopAndReturnToIdle")
     "Assets/Scripts/Core/QuestQualitySettings.cs" = @("XRSettings.eyeTextureResolutionScale", "XRSettings.renderViewportScale", "QuestQualityPreset.Clear", "UniversalRenderPipelineAsset", "PlayerPrefs.Save")
-    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel", "PlayerSettings.SetApplicationIdentifier", "PlayerSettings.bundleVersion = AndroidVersionName", "PlayerSettings.Android.bundleVersionCode = AndroidVersionCode", "com.lingxi.banxia", "0.1.8", "Builds/Banxia.apk")
+    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel", "PlayerSettings.SetApplicationIdentifier", "PlayerSettings.bundleVersion = AndroidVersionName", "PlayerSettings.Android.bundleVersionCode = AndroidVersionCode", "com.lingxi.banxia", "0.2.0", "Builds/Banxia.apk")
     "Assets/Plugins/Android/AndroidManifest.xml" = @("com.unity3d.player.UnityPlayerActivity", "android.intent.action.MAIN", "android.intent.category.LAUNCHER")
     "Assets/Editor/QuestPrivateLanManifestPostprocessor.cs" = @("usesCleartextTraffic", "horizonos.permission.HAND_TRACKING", "EnsurePermission", "ConfigureFilePickerModule", "buildConfig = false")
     "Assets/Editor/QuestMmdPlayerRuntimeSmokeTest.cs" = @("PMXImporter.Import", "applyRenames = false", "Runtime PMX Smoke Test")
     "Assets/Editor/QuestMmdPlayerMenu.cs" = @("RuntimeMmdModelLoader", "bundled PMX sample")
-    "Assets/Scripts/Backend/AstrBotBridge.cs" = @("TryIngestCommandJson", "JsonUtility.FromJson", "CommandReceived", "ReloadConfiguration", "ConfiguredBaseUrl", "ParseSessionChainStatus", "ResolveBackendChainStatus", "sse_dispatch", "AudioRequestCode", "UpdateMaximum")
+    "Assets/Scripts/Backend/AstrBotBridge.cs" = @("TryIngestCommandJson", "JsonUtility.FromJson", "CommandReceived", "ReloadConfiguration", "ConfiguredBaseUrl", "ParseSessionChainStatus", "ResolveBackendChainStatus", "sse_dispatch", "AudioRequestCode", "UpdateMaximum", "embodiment_bridge.json", "TryMigrateLegacyConfiguration", "X-Embodiment-Bridge-Key")
     "Assets/Scripts/Backend/AstrBotProtocol.cs" = @("ReceivedAtTicks", "server_timing", "server_timing@1.0", "ToBackendTiming", "ClampServerDuration")
-    "Assets/Scripts/Backend/BackendPairingProtocol.cs" = @("TryBuildExchangeEndpoint", "TryParseQrPayload", "TryWriteSettingsAtomically", "File.Replace", "https")
-    "Assets/Scripts/Backend/BackendPairingController.cs" = @("IPairingCodeScanner", "PairWithCode", "PairWithQrPayload", "PairingServerEndpoint", "ReloadConfiguration")
+    "Assets/Scripts/Backend/BackendPairingProtocol.cs" = @("astrbot_plugin_embodiment_bridge", "LegacyPluginApiPath", "TryBuildExchangeEndpoint", "TryParseQrPayload", "TryUpgradeLegacyPluginBaseUrl", "TryMigrateLegacyConfiguration", "TryWriteSettingsAtomically", "File.Replace", "https")
+    "Assets/Scripts/Backend/BackendPairingController.cs" = @("embodiment_bridge_pairing_server_v1", "LegacyPairingServerPreference", "IPairingCodeScanner", "PairWithCode", "PairWithQrPayload", "PairingServerEndpoint", "ReloadConfiguration")
     "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("PAIR BACKEND", "SET HOST PORT", "AUTO COMPLETE PATH", "TouchScreenKeyboard", "RefreshExternalActions", "PlaySelectedExternalAction", "ImportFile", "导入文件", "RoomUnderstanding")
     "Assets/Scripts/MR/PassthroughFacade.cs" = @("IPassthroughProvider", "EditorPassthroughProvider", "StateChanged")
     "Assets/Scripts/MR/QuestFileImportService.cs" = @("OpenPicker", "OnAndroidFileImported", "ExtractArchiveSafely", "MaximumExpandedArchiveBytes", "RuntimeMmdModelLoader", "VmdActionFilePolicy")

@@ -8,6 +8,7 @@ namespace QuestMmdPlayer
     /// </summary>
     public sealed class ConversationStateMachine
     {
+        private readonly string turnNamespace = Guid.NewGuid().ToString("N").Substring(0, 8);
         private long turnSequence;
         private bool acceptingEvents;
         private bool replyEnded;
@@ -23,7 +24,7 @@ namespace QuestMmdPlayer
         public string Begin(string userText)
         {
             turnSequence++;
-            TurnId = $"turn-{turnSequence:D6}";
+            TurnId = $"turn-{turnNamespace}-{turnSequence:D6}";
             UserText = userText ?? string.Empty;
             Transcript = string.Empty;
             ReplyText = string.Empty;

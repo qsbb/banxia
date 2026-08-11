@@ -11,15 +11,18 @@ using UnityEngine.Networking;
 namespace QuestMmdPlayer
 {
     /// <summary>
-    /// Quest Avatar Bridge protocol 1.0 transport. Secrets are loaded from a
+    /// AstrBot Embodiment Bridge protocol 1.0 transport. Secrets are loaded from a
     /// JSON file under Application.persistentDataPath and are never serialized
     /// into the Unity scene or APK.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class AstrBotBridge : MonoBehaviour, IConversationTransport
     {
+        internal const string DefaultConfigurationFileName = "embodiment_bridge.json";
+        internal const string LegacyConfigurationFileName = "quest_avatar_bridge.json";
+
         [SerializeField] private bool autoConnect = true;
-        [SerializeField] private string configurationFileName = "quest_avatar_bridge.json";
+        [SerializeField] private string configurationFileName = DefaultConfigurationFileName;
         [SerializeField] private float reconnectDelaySeconds = 1.5f;
         [SerializeField] private int requestTimeoutSeconds = 15;
         [SerializeField, Range(8, 256)] private int maxIncomingFramesPerUpdate = 64;
@@ -931,7 +934,7 @@ namespace QuestMmdPlayer
         private void ConfigureHeaders(UnityWebRequest request, bool eventStream)
         {
             request.SetRequestHeader("Authorization", "ApiKey " + settings.astrbot_api_key);
-            request.SetRequestHeader("X-Quest-Avatar-Key", settings.bridge_api_key);
+            request.SetRequestHeader("X-Embodiment-Bridge-Key", settings.bridge_api_key);
             request.SetRequestHeader("Accept", eventStream ? "text/event-stream" : "application/json");
         }
 
@@ -962,6 +965,7 @@ namespace QuestMmdPlayer
             healthPipelineStatus = "unknown";
             healthReady = false;
             eventStreamReady = false;
+            TryMigrateLegacyConfiguration();
             if (!File.Exists(ConfigurationPath))
             {
                 SetStatus("AstrBot configuration missing");
@@ -972,6 +976,23 @@ namespace QuestMmdPlayer
             try
             {
                 settings = JsonUtility.FromJson<AstrBotBridgeSettings>(File.ReadAllText(ConfigurationPath, Encoding.UTF8));
+                if (settings != null &&
+                    BackendPairingProtocol.TryUpgradeLegacyPluginBaseUrl(settings.base_url, out var upgradedBaseUrl))
+                {
+                    settings.base_url = upgradedBaseUrl;
+                    if (!BackendPairingProtocol.TryWriteSettingsAtomically(
+                        ConfigurationPath,
+                        settings,
+                        out var migrationReason,
+                        settings.allow_insecure_http))
+                    {
+                        Debug.LogWarning("[AstrBotBridge] Legacy endpoint was upgraded in memory but could not be saved: " + migrationReason);
+                    }
+                    else
+                    {
+                        RecordStage("configuration", "ready", "legacy_endpoint_migrated");
+                    }
+                }
                 if (!AstrBotProtocol.TryValidateSettings(settings, out var reason))
                 {
                     SetStatus("AstrBot config invalid: " + reason);
@@ -991,6 +1012,31 @@ namespace QuestMmdPlayer
                 SetStatus("AstrBot config could not be read");
                 RecordStage("configuration", "failed", "configuration_invalid");
                 Debug.LogWarning("[AstrBotBridge] Configuration error: " + exception.Message);
+            }
+        }
+
+        private void TryMigrateLegacyConfiguration()
+        {
+            if (!string.Equals(configurationFileName, DefaultConfigurationFileName, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var legacyPath = Path.Combine(Application.persistentDataPath, LegacyConfigurationFileName);
+            if (!BackendPairingProtocol.TryMigrateLegacyConfiguration(
+                legacyPath,
+                ConfigurationPath,
+                out var migrated,
+                out var reason))
+            {
+                Debug.LogWarning("[AstrBotBridge] Legacy configuration migration skipped: " + reason);
+                RecordStage("configuration", "failed", "legacy_configuration_migration_failed");
+                return;
+            }
+            if (migrated)
+            {
+                Debug.Log("[AstrBotBridge] Legacy configuration migrated to " + ConfigurationPath);
+                RecordStage("configuration", "ready", "legacy_configuration_migrated");
             }
         }
 

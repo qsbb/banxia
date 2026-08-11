@@ -38,6 +38,19 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PhysicalHandPoseSurvivesOnlyBriefTrackingDropout()
+        {
+            Assert.IsTrue(QuestTrackedHandVisualizer.ShouldRetainTrackedHandPose(
+                "hand_tracking", 10.08f, 10f, .1f));
+            Assert.IsFalse(QuestTrackedHandVisualizer.ShouldRetainTrackedHandPose(
+                "hand_tracking", 10.11f, 10f, .1f));
+            Assert.IsFalse(QuestTrackedHandVisualizer.ShouldRetainTrackedHandPose(
+                "controller", 10.01f, 10f, .1f));
+            Assert.IsFalse(QuestTrackedHandVisualizer.ShouldRetainTrackedHandPose(
+                "none", 10.01f, 10f, .1f));
+        }
+
+        [Test]
         public void ExistingContactUsesWiderReleaseThreshold()
         {
             Assert.AreEqual(.07f, AvatarTouchInteraction.ContactThreshold(false, .07f), .0001f);

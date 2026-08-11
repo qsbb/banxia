@@ -372,5 +372,13 @@ namespace QuestMmdPlayer.Tests
                 Is.EqualTo(512));
             Assert.That(CompanionWorldMenu.NormalizeConversationInput(null), Is.Empty);
         }
+
+        [Test]
+        public void QaWaitIgnoresLargeResumeFrameGap()
+        {
+            Assert.That(CompanionWorldMenu.ActiveWaitDelta(-1f), Is.Zero);
+            Assert.That(CompanionWorldMenu.ActiveWaitDelta(.016f), Is.EqualTo(.016f));
+            Assert.That(CompanionWorldMenu.ActiveWaitDelta(120f), Is.EqualTo(.1f));
+        }
     }
 }

@@ -148,7 +148,7 @@ namespace QuestMmdPlayer
             catch (Exception exception)
             {
                 Debug.LogException(exception, this);
-                LoadFailed?.Invoke(exception.Message);
+                NotifyLoadFailed(exception.Message);
                 return;
             }
 
@@ -187,26 +187,30 @@ namespace QuestMmdPlayer
             loadCancellation = new CancellationTokenSource();
             var token = loadCancellation.Token;
             IsLoading = true;
-            ProgressChanged?.Invoke("Reading PMX");
+            NotifyProgress("Reading PMX");
 
+            PMXImportResult importedResult = null;
+            GameObject importedAvatarHost = null;
             try
             {
-                var result = await ImportAsync(pmxPath, textureBaseDirectory, token);
+                importedResult = await ImportAsync(pmxPath, textureBaseDirectory, token);
                 token.ThrowIfCancellationRequested();
 
-                var modelRoot = result.root;
-                var avatarHost = new GameObject(modelRoot.name + "_Avatar");
-                avatarHost.transform.SetPositionAndRotation(spawnPosition, Quaternion.identity);
-                modelRoot.transform.SetParent(avatarHost.transform, false);
-                var avatar = avatarHost.AddComponent<AvatarController>();
+                var modelRoot = importedResult.root;
+                importedAvatarHost = new GameObject(modelRoot.name + "_Avatar");
+                importedAvatarHost.transform.SetPositionAndRotation(spawnPosition, Quaternion.identity);
+                modelRoot.transform.SetParent(importedAvatarHost.transform, false);
+                var avatar = importedAvatarHost.AddComponent<AvatarController>();
                 avatar.Initialize(modelRoot.transform);
 
                 UnloadCurrentModel();
-                currentResult = result;
+                currentResult = importedResult;
                 currentAvatar = avatar;
                 CurrentModelPath = pmxPath;
-                ProgressChanged?.Invoke("Model ready");
-                AvatarLoaded?.Invoke(avatar);
+                importedResult = null;
+                importedAvatarHost = null;
+                NotifyProgress("Model ready");
+                NotifyAvatarLoaded(avatar);
                 return avatar;
             }
             catch (OperationCanceledException)
@@ -216,11 +220,15 @@ namespace QuestMmdPlayer
             catch (Exception exception)
             {
                 Debug.LogException(exception, this);
-                LoadFailed?.Invoke(exception.Message);
+                NotifyLoadFailed(exception.Message);
                 throw;
             }
             finally
             {
+                if (importedResult != null)
+                {
+                    DestroyImportResult(importedResult, importedAvatarHost);
+                }
                 IsLoading = false;
             }
         }
@@ -241,7 +249,7 @@ namespace QuestMmdPlayer
 
             token.ThrowIfCancellationRequested();
             PreserveOriginalNames(model);
-            ProgressChanged?.Invoke("Building MMD materials and skeleton");
+            NotifyProgress("Building MMD materials and skeleton");
             var options = new PMXImportOptions
             {
                 sourcePath = pmxPath,
@@ -295,7 +303,7 @@ namespace QuestMmdPlayer
         {
             var targetDirectory = Path.Combine(Application.persistentDataPath, "MmdModels", "ForestBerry");
             Directory.CreateDirectory(targetDirectory);
-            ProgressChanged?.Invoke("Preparing bundled PMX sample");
+            NotifyProgress("Preparing bundled PMX sample");
 
             foreach (var fileName in BundledSampleFiles)
             {
@@ -351,33 +359,104 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            ModelWillUnload?.Invoke();
+            NotifyModelWillUnload();
 
-            if (currentAvatar != null && currentAvatar.gameObject != null)
-            {
-                Destroy(currentAvatar.gameObject);
-            }
-            else if (currentResult.root != null)
-            {
-                Destroy(currentResult.root);
-            }
-
-            foreach (var texture in currentResult.textures)
-            {
-                if (texture != null)
-                {
-                    Destroy(texture);
-                }
-            }
-
-            if (currentResult.model != null)
-            {
-                Destroy(currentResult.model);
-            }
+            DestroyImportResult(currentResult, currentAvatar == null ? null : currentAvatar.gameObject);
 
             currentResult = null;
             currentAvatar = null;
             CurrentModelPath = null;
+        }
+
+        internal static void DestroyImportResult(PMXImportResult result, GameObject avatarHost = null)
+        {
+            if (result == null)
+            {
+                return;
+            }
+
+            var destroyed = new HashSet<UnityEngine.Object>();
+            void DestroyOnce(UnityEngine.Object value)
+            {
+                if (value != null && destroyed.Add(value))
+                {
+                    Destroy(value);
+                }
+            }
+
+            DestroyOnce(avatarHost != null ? avatarHost : result.root);
+            foreach (var importedMesh in result.meshes)
+            {
+                DestroyOnce(importedMesh?.mesh);
+            }
+            foreach (var material in result.materials)
+            {
+                DestroyOnce(material);
+            }
+            foreach (var texture in result.textures)
+            {
+                DestroyOnce(texture);
+            }
+            DestroyOnce(result.model);
+        }
+
+        private void NotifyProgress(string message)
+        {
+            InvokeSafely(ProgressChanged, message);
+        }
+
+        private void NotifyAvatarLoaded(AvatarController avatar)
+        {
+            InvokeSafely(AvatarLoaded, avatar);
+        }
+
+        private void NotifyLoadFailed(string message)
+        {
+            InvokeSafely(LoadFailed, message);
+        }
+
+        private void NotifyModelWillUnload()
+        {
+            if (ModelWillUnload == null)
+            {
+                return;
+            }
+
+            foreach (Action subscriber in ModelWillUnload.GetInvocationList())
+            {
+                try
+                {
+                    subscriber();
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning(
+                        "[RuntimeMmdModelLoader] unload subscriber failed: " + exception.Message,
+                        this);
+                }
+            }
+        }
+
+        private void InvokeSafely<T>(Action<T> callback, T value)
+        {
+            if (callback == null)
+            {
+                return;
+            }
+
+            foreach (Action<T> subscriber in callback.GetInvocationList())
+            {
+                try
+                {
+                    subscriber(value);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning(
+                        "[RuntimeMmdModelLoader] event subscriber failed: " + exception.Message,
+                        this);
+                }
+            }
         }
 
         private void OnDestroy()

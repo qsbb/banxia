@@ -213,7 +213,7 @@ namespace QuestMmdPlayer.Tests
         public void RuntimePolicyAllowsOnlyExplicitPrivateLanHttp()
         {
             var settings = ValidSettings();
-            settings.base_url = "http://192.168.1.10:6185/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge";
+            settings.base_url = "http://192.168.1.10:6185/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
 
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out var error), Is.False);
             Assert.That(error, Does.Contain("allow_insecure_http"));
@@ -221,11 +221,11 @@ namespace QuestMmdPlayer.Tests
             settings.allow_insecure_http = true;
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out error), Is.True, error);
 
-            settings.base_url = "http://api.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge";
+            settings.base_url = "http://api.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out error), Is.False);
             Assert.That(error, Does.Contain("private-network IP"));
 
-            settings.base_url = "http://nas.local/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge";
+            settings.base_url = "http://nas.local/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out error), Is.False);
         }
 
@@ -233,7 +233,7 @@ namespace QuestMmdPlayer.Tests
         {
             return new AstrBotBridgeSettings
             {
-                base_url = "https://astrbot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge",
+                base_url = "https://astrbot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge",
                 astrbot_api_key = "astrbot-api-key",
                 bridge_api_key = "0123456789abcdef0123456789abcdef",
                 client_id = "quest3-living-room",

@@ -324,7 +324,17 @@ namespace QuestMmdPlayer
             }
 
             SetStatus("正在加载角色：" + modelName);
-            await modelLoader.LoadFromFileAsync(targetPmx, targetRoot);
+            try
+            {
+                await modelLoader.LoadFromFileAsync(targetPmx, targetRoot);
+            }
+            catch
+            {
+                // The destination is unique to this import. Do not leave a
+                // broken model in the model picker when parsing/building fails.
+                TryDeleteDirectory(targetRoot);
+                throw;
+            }
             SetStatus("角色导入完成：" + modelName);
         }
 
@@ -351,8 +361,16 @@ namespace QuestMmdPlayer
                 }
 
                 VmdActionFilePolicy.Inspect(vmdFiles[0], actionName);
-                CopyFile(vmdFiles[0], destination);
-                await actionLibrary.RefreshAsync();
+                try
+                {
+                    CopyFile(vmdFiles[0], destination);
+                    await actionLibrary.RefreshAsync();
+                }
+                catch
+                {
+                    TryDeleteFile(destination);
+                    throw;
+                }
                 SetStatus("动作导入完成：" + actionName);
                 return;
             }
@@ -362,7 +380,12 @@ namespace QuestMmdPlayer
             motion ??= vmdFiles[0];
             var facial = vmdFiles.FirstOrDefault(file =>
                 string.Equals(Path.GetFileName(file), "facial.vmd", StringComparison.OrdinalIgnoreCase));
-            var packageName = "Imported_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+            var packageName = "Imported_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff");
+            VmdActionFilePolicy.Inspect(motion, packageName);
+            if (!string.IsNullOrEmpty(facial))
+            {
+                VmdActionFilePolicy.Inspect(facial, packageName);
+            }
             if (!VmdActionFilePolicy.TryResolvePackagePaths(
                 actionLibrary.MotionsDirectory,
                 packageName,
@@ -374,17 +397,23 @@ namespace QuestMmdPlayer
             }
 
             var packageDirectoryPath = Path.Combine(actionLibrary.MotionsDirectory, packageName);
-            Directory.CreateDirectory(packageDirectoryPath);
-            var motionDestination = Path.Combine(packageDirectoryPath, "motion.vmd");
-            VmdActionFilePolicy.Inspect(motion, packageName);
-            CopyFile(motion, motionDestination);
-            if (!string.IsNullOrEmpty(facial))
+            try
             {
-                VmdActionFilePolicy.Inspect(facial, packageName);
-                CopyFile(facial, Path.Combine(packageDirectoryPath, "facial.vmd"));
-            }
+                Directory.CreateDirectory(packageDirectoryPath);
+                var motionDestination = Path.Combine(packageDirectoryPath, "motion.vmd");
+                CopyFile(motion, motionDestination);
+                if (!string.IsNullOrEmpty(facial))
+                {
+                    CopyFile(facial, Path.Combine(packageDirectoryPath, "facial.vmd"));
+                }
 
-            await actionLibrary.RefreshAsync();
+                await actionLibrary.RefreshAsync();
+            }
+            catch
+            {
+                TryDeleteDirectory(packageDirectoryPath);
+                throw;
+            }
             SetStatus("动作包导入完成：" + packageName);
         }
 
@@ -589,6 +618,21 @@ namespace QuestMmdPlayer
             catch (Exception exception)
             {
                 Debug.LogWarning("[FileImport] Temporary cleanup failed: " + exception.Message);
+            }
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[FileImport] Temporary file cleanup failed: " + exception.Message);
             }
         }
 

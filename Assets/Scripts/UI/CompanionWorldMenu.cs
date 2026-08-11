@@ -239,7 +239,7 @@ namespace QuestMmdPlayer
             var remaining = 5f;
             while (remaining > 0f && (owner == null || owner.TouchInteraction == null || owner.TouchInteraction.Avatar == null))
             {
-                remaining -= Time.unscaledDeltaTime;
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
                 yield return null;
             }
 
@@ -252,7 +252,7 @@ namespace QuestMmdPlayer
             while (remaining > 0f &&
                    (owner == null || owner.Conversation == null || !owner.Conversation.IsRealBackendConnected))
             {
-                remaining -= Time.unscaledDeltaTime;
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
                 yield return null;
             }
 
@@ -271,7 +271,7 @@ namespace QuestMmdPlayer
             var remaining = 10f;
             while (remaining > 0f && (menuRoot == null || Camera.main == null))
             {
-                remaining -= Time.unscaledDeltaTime;
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
                 yield return null;
             }
             if (menuRoot == null || Camera.main == null)
@@ -284,6 +284,11 @@ namespace QuestMmdPlayer
             ShowTextInputPanel();
             OpenConversationKeyboard();
             Debug.Log("[CompanionMenu] Android QA text input opened; keyboard_requested=" + (conversationKeyboard != null), this);
+        }
+
+        public static float ActiveWaitDelta(float unscaledDeltaTime)
+        {
+            return Mathf.Clamp(unscaledDeltaTime, 0f, .1f);
         }
 
         public void Toggle()

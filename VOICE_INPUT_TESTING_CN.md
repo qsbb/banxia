@@ -24,7 +24,7 @@ adb -s 2G0YC5ZHBF00R0 shell pm grant com.lingxi.banxia android.permission.RECORD
 应用内不会包含 AstrBot 密钥。配置仍放在：
 
 ```text
-/sdcard/Android/data/com.lingxi.banxia/files/quest_avatar_bridge.json
+/sdcard/Android/data/com.lingxi.banxia/files/embodiment_bridge.json
 ```
 
 Quest Android 构建要求后端使用 HTTPS。

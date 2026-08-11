@@ -7,9 +7,9 @@ namespace QuestMmdPlayer.Tests
 {
     public sealed class BackendPairingTests
     {
-        [TestCase("bot.example.com", "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange")]
-        [TestCase("https://bot.example.com:7443", "https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange")]
-        [TestCase("https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge", "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange")]
+        [TestCase("bot.example.com", "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
+        [TestCase("https://bot.example.com:7443", "https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
+        [TestCase("https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge", "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
         public void PairingEndpointNormalizesHostPluginPathAndPort(string input, string expected)
         {
             Assert.That(
@@ -19,8 +19,8 @@ namespace QuestMmdPlayer.Tests
             Assert.That(endpoint, Is.EqualTo(expected));
         }
 
-        [TestCase("https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange", "bot.example.com:7443")]
-        [TestCase("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange", "192.168.5.88:8520")]
+        [TestCase("https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange", "bot.example.com:7443")]
+        [TestCase("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange", "192.168.5.88:8520")]
         public void PairingServerEntryHidesTheGeneratedPluginPath(string endpoint, string expected)
         {
             Assert.That(BackendPairingProtocol.GetServerEntry(endpoint), Is.EqualTo(expected));
@@ -46,7 +46,7 @@ namespace QuestMmdPlayer.Tests
 
             Assert.That(
                 BackendPairingProtocol.TryBuildExchangeEndpoint(
-                    "http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange",
+                    "http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange",
                     out _,
                     out _),
                 Is.False,
@@ -60,7 +60,7 @@ namespace QuestMmdPlayer.Tests
                     true),
                 Is.True,
                 reason);
-            Assert.That(endpoint, Is.EqualTo("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange"));
+            Assert.That(endpoint, Is.EqualTo("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange"));
 
             Assert.That(
                 BackendPairingProtocol.TryBuildExchangeEndpoint("http://api.example.com", out _, out _, true),
@@ -75,7 +75,7 @@ namespace QuestMmdPlayer.Tests
         {
             var token = new string('x', 43);
             var json = "{\"type\":\"astrbot.quest.pair\",\"version\":\"1.0\","
-                + "\"exchange_url\":\"https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge/pairing/exchange\","
+                + "\"exchange_url\":\"https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange\","
                 + "\"token\":\"" + token + "\"}";
 
             Assert.That(
@@ -93,6 +93,105 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void LegacyPluginEndpointsAreAcceptedAndRewrittenToCurrentPlugin()
+        {
+            var legacyBaseUrl = "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge";
+            Assert.That(
+                BackendPairingProtocol.TryBuildExchangeEndpoint(
+                    legacyBaseUrl + "/pairing/exchange",
+                    out var exchangeEndpoint,
+                    out var exchangeReason),
+                Is.True,
+                exchangeReason);
+            Assert.That(exchangeEndpoint, Is.EqualTo(
+                "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange"));
+
+            Assert.That(
+                BackendPairingProtocol.TryUpgradeLegacyPluginBaseUrl(legacyBaseUrl, out var upgradedBaseUrl),
+                Is.True);
+            Assert.That(upgradedBaseUrl, Is.EqualTo(
+                "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge"));
+        }
+
+        [Test]
+        public void LegacyConfigurationMigratesOnceAndPreservesSource()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "embodiment-migration-" + Guid.NewGuid().ToString("N"));
+            var legacyPath = Path.Combine(directory, "quest_avatar_bridge.json");
+            var currentPath = Path.Combine(directory, "embodiment_bridge.json");
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var legacySettings = ValidSettings("legacy-user");
+                legacySettings.base_url =
+                    "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge";
+                File.WriteAllText(legacyPath, JsonUtility.ToJson(legacySettings));
+
+                Assert.That(
+                    BackendPairingProtocol.TryMigrateLegacyConfiguration(
+                        legacyPath,
+                        currentPath,
+                        out var migrated,
+                        out var reason),
+                    Is.True,
+                    reason);
+                Assert.That(migrated, Is.True);
+                Assert.That(File.Exists(legacyPath), Is.True, "Migration must keep the downgrade copy");
+                var currentSettings = JsonUtility.FromJson<AstrBotBridgeSettings>(File.ReadAllText(currentPath));
+                Assert.That(currentSettings.user_id, Is.EqualTo("legacy-user"));
+                Assert.That(currentSettings.base_url, Is.EqualTo(
+                    "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge"));
+
+                File.WriteAllText(currentPath, "current-wins");
+                Assert.That(
+                    BackendPairingProtocol.TryMigrateLegacyConfiguration(
+                        legacyPath,
+                        currentPath,
+                        out migrated,
+                        out reason),
+                    Is.True,
+                    reason);
+                Assert.That(migrated, Is.False);
+                Assert.That(File.ReadAllText(currentPath), Is.EqualTo("current-wins"));
+            }
+            finally
+            {
+                if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            }
+        }
+
+        [Test]
+        public void LegacyConfigurationMigrationRejectsUnrelatedPluginPath()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "embodiment-migration-reject-" + Guid.NewGuid().ToString("N"));
+            var legacyPath = Path.Combine(directory, "quest_avatar_bridge.json");
+            var currentPath = Path.Combine(directory, "embodiment_bridge.json");
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var legacySettings = ValidSettings("legacy-user");
+                legacySettings.base_url =
+                    "https://bot.example.com/api/v1/plugins/extensions/another_plugin";
+                File.WriteAllText(legacyPath, JsonUtility.ToJson(legacySettings));
+
+                Assert.That(
+                    BackendPairingProtocol.TryMigrateLegacyConfiguration(
+                        legacyPath,
+                        currentPath,
+                        out var migrated,
+                        out var reason),
+                    Is.False);
+                Assert.That(migrated, Is.False);
+                Assert.That(reason, Does.Contain("recognized bridge path"));
+                Assert.That(File.Exists(currentPath), Is.False);
+            }
+            finally
+            {
+                if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            }
+        }
+
+        [Test]
         public void ShortCodeKeepsOnlyFirstSixDigits()
         {
             Assert.That(BackendPairingProtocol.NormalizeShortCode("12 3a45-678"), Is.EqualTo("123456"));
@@ -103,7 +202,7 @@ namespace QuestMmdPlayer.Tests
         public void PairedSettingsAreValidatedAndReplacedAtomically()
         {
             var directory = Path.Combine(Path.GetTempPath(), "quest-pairing-" + Guid.NewGuid().ToString("N"));
-            var path = Path.Combine(directory, "quest_avatar_bridge.json");
+            var path = Path.Combine(directory, "embodiment_bridge.json");
             try
             {
                 var first = ValidSettings("user-a");
@@ -134,13 +233,13 @@ namespace QuestMmdPlayer.Tests
         public void AtomicWriteRejectsHttpWithoutTouchingExistingConfig()
         {
             var directory = Path.Combine(Path.GetTempPath(), "quest-pairing-" + Guid.NewGuid().ToString("N"));
-            var path = Path.Combine(directory, "quest_avatar_bridge.json");
+            var path = Path.Combine(directory, "embodiment_bridge.json");
             Directory.CreateDirectory(directory);
             File.WriteAllText(path, "original");
             try
             {
                 var settings = ValidSettings("user-a");
-                settings.base_url = "http://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge";
+                settings.base_url = "http://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
                 settings.allow_insecure_http = true;
                 Assert.That(
                     BackendPairingProtocol.TryWriteSettingsAtomically(path, settings, out _),
@@ -157,11 +256,11 @@ namespace QuestMmdPlayer.Tests
         public void AtomicWriteAllowsExplicitPrivateLanHttp()
         {
             var directory = Path.Combine(Path.GetTempPath(), "quest-pairing-lan-" + Guid.NewGuid().ToString("N"));
-            var path = Path.Combine(directory, "quest_avatar_bridge.json");
+            var path = Path.Combine(directory, "embodiment_bridge.json");
             try
             {
                 var settings = ValidSettings("user-lan");
-                settings.base_url = "http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge";
+                settings.base_url = "http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
                 settings.allow_insecure_http = true;
                 Assert.That(
                     BackendPairingProtocol.TryWriteSettingsAtomically(path, settings, out _),
@@ -186,7 +285,7 @@ namespace QuestMmdPlayer.Tests
         {
             return new AstrBotBridgeSettings
             {
-                base_url = "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_quest_avatar_bridge",
+                base_url = "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge",
                 astrbot_api_key = "plugin-scope-key",
                 bridge_api_key = "bridge-key-000000000000000000000000",
                 client_id = "quest-living-room",

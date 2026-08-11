@@ -1,8 +1,8 @@
-# Quest 3 / MMD 技术路线参考审计
+# 伴夏 XR / 具身角色技术路线与许可证审计
 
-更新日期：2026-08-05
+更新日期：2026-08-11
 
-本轮检索关键词包括 Quest、VR、MR、AR、MMD、PMX、VRM、KKS、KK、VR 游戏、手部追踪、IK、虚拟角色、语音对话和嘴型。这里只分析技术结构和可迁移方法，不用许可证作为技术路线筛选条件。
+检索关键词包括 Quest、VR、MR、AR、MMD、PMX、VRM、KKS、KK、VR 游戏、手部追踪、IK、虚拟角色、语音对话和嘴型。技术价值与许可证风险分别记录：许可证允许且确有必要的组件才能作为依赖引入；未声明许可证、仅有转载页或素材条款不清的项目只允许作为概念参考，不复制源码、模型、动作、贴图、音频或品牌资源。
 
 ## 结论先行
 
@@ -25,6 +25,15 @@ AstrBot 对话、人格和记忆
 ```
 
 现在不应切换 UE4/UE5，也不应立刻把 Unity 2022.3 升到 Unity 6。前者会丢失已经完成的 PMX/XR Hands 链路，后者会把“实现功能”变成“迁移依赖”。Meta Unity 6 样例只用于读架构。
+
+## 许可证结论
+
+- 伴夏仓库的原创代码采用 Mozilla Public License 2.0；修改并分发 MPL 覆盖文件时应按该许可证提供对应源码。第三方组件和用户素材不因宿主许可证而改变授权范围。
+- 仓库实际嵌入的 `UnityMMDTools 0.5.0` 为 MIT，已保留上游 `LICENSE.md` 与 Third Party Notices；本项目只修改其托管物理适配层，原生二进制未改。
+- Meta 样例、UniVRM、uLipSync、mmd2gltf-gui、VirtualMotionCapture、OpenAI Realtime Console 和 Open-LLM-VTuber 的软件部分为 MIT；Google Gemini Live Console、Project N.E.K.O 和 LLMUnity 为 Apache-2.0；Pipecat 为 BSD-2-Clause。真正引入时仍需保留对应版权与许可证文本。
+- Unity XR Interaction Toolkit Examples 使用 Unity Companion License，只能在符合该许可证的 Unity 相关项目中使用；本项目目前只参考交互边界，没有复制其示例资产。
+- `KK_VR`、`KK_SetParentVR`、`Together Companion` 与 Deepgram FastAPI 示例当前仓库根未声明可识别的软件许可证。README 中只描述公开可观察的架构或行为，没有移植其源码；后续也不得在未获许可时复制。
+- Live2D 样例模型、用户 PMX/贴图、第三方 VMD 和动作/相机配布适用素材作者自己的条款，不因宿主代码采用任何开源许可证而自动获得再分发权。
 
 ## 1. Quest / MR / NPC
 
