@@ -63,7 +63,10 @@ namespace QuestMmdPlayer
             }
             else
             {
-                activeSeconds = Math.Max(0f, activeSeconds - duration * 2f);
+                // Keep a short amount of syllable energy across a brief
+                // consonant or word gap. Isolated spikes still expire before
+                // a later sound can open a turn.
+                activeSeconds = Math.Max(0f, activeSeconds - duration * .5f);
                 AdaptNoise(level, duration, false);
             }
             return activeSeconds >= activationSeconds;

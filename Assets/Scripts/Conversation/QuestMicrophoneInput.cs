@@ -26,7 +26,7 @@ namespace QuestMmdPlayer
         [SerializeField, Range(1.5f, 8f)] private float initialVoiceTimeoutSeconds = 4f;
         [SerializeField] private bool alwaysListening = true;
         [SerializeField, Range(.12f, .6f)] private float voicePreRollSeconds = .32f;
-        [SerializeField, Range(.08f, .4f)] private float voiceActivationSeconds = .16f;
+        [SerializeField, Range(.08f, .4f)] private float voiceActivationSeconds = .12f;
 
         private readonly List<float> pendingMono = new List<float>(4096);
         private readonly List<float> preRollMono = new List<float>(8192);

@@ -30,6 +30,22 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ExplicitActionTextStillStartsTheBackendTurn()
+        {
+            owner = new GameObject("Action text transport test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+
+            controller.StartConversation("请挥手");
+
+            Assert.AreEqual(1, transport.TextStartCount);
+            Assert.AreEqual(controller.TurnId, transport.StartedTextTurnId);
+            Assert.AreEqual("请挥手", transport.LastText);
+            Assert.AreEqual(ConversationState.Listening, controller.State);
+        }
+
+        [Test]
         public void VoiceTurnUsesOneTurnIdAndForwardsPcmBeforeEnd()
         {
             owner = new GameObject("Voice conversation test");
@@ -514,6 +530,9 @@ namespace QuestMmdPlayer.Tests
             public byte[] LastChunk;
             public int InterruptCount;
             public int AudioStartCount;
+            public int TextStartCount;
+            public string StartedTextTurnId = string.Empty;
+            public string LastText = string.Empty;
             public string InteractionEventId = string.Empty;
             public string LastInteractionName = string.Empty;
             public bool IsConnected => Connected;
@@ -521,6 +540,9 @@ namespace QuestMmdPlayer.Tests
 
             public void StartTurn(string turnId, string userText)
             {
+                TextStartCount++;
+                StartedTextTurnId = turnId;
+                LastText = userText;
             }
 
             public void Interrupt(string turnId)

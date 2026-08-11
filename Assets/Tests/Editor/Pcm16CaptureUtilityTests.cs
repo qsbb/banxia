@@ -55,6 +55,27 @@ namespace QuestMmdPlayer.Tests
             Assert.IsFalse(gate.Observe(.08f, .2f, false));
             Assert.That(gate.ActivationProgress, Is.EqualTo(0f));
         }
+
+        [Test]
+        public void VoiceGateKeepsShortCommandSyllablesAcrossOneQuietChunk()
+        {
+            var gate = new VoiceActivityGate(.006f, .018f, .12f, 0f);
+
+            Assert.IsFalse(gate.Observe(.02f, .08f, true));
+            Assert.IsFalse(gate.Observe(.002f, .08f, true));
+            Assert.IsTrue(gate.Observe(.02f, .08f, true));
+        }
+
+        [Test]
+        public void VoiceGateLetsAnIsolatedSpikeExpire()
+        {
+            var gate = new VoiceActivityGate(.006f, .018f, .12f, 0f);
+
+            Assert.IsFalse(gate.Observe(.02f, .08f, true));
+            Assert.IsFalse(gate.Observe(.002f, .08f, true));
+            Assert.IsFalse(gate.Observe(.002f, .08f, true));
+            Assert.IsFalse(gate.Observe(.02f, .08f, true));
+        }
     }
 }
 #endif
