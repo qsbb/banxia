@@ -112,6 +112,54 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PhysicalContactStoresAvatarYieldInsteadOfMovingTrackedHand()
+        {
+            avatarObject = new GameObject("YieldAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("Head", "\u982D");
+
+            serviceObject = new GameObject("YieldInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            interaction.ReportTrackedHandContact(
+                AvatarContactRegion.Head,
+                false,
+                new Vector3(0f, 1f, 0f),
+                new Vector3(.2f, 0f, 0f));
+
+            var stored = (Vector3)(typeof(AvatarHumanInteraction)
+                .GetField("trackedContactPush", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.GetValue(interaction) ?? Vector3.zero);
+            Assert.That(stored.magnitude, Is.EqualTo(.055f).Within(.0001f));
+            Assert.That(Vector3.Dot(stored.normalized, Vector3.right), Is.GreaterThan(.99f));
+        }
+
+        [Test]
+        public void ReactionTransitionUsesSmoothAsymmetricBlend()
+        {
+            var velocity = 0f;
+            var entered = NaturalMotionTransition.UpdateWeight(
+                0f, 1f, ref velocity, .34f, .52f, .08f);
+            Assert.That(entered, Is.GreaterThan(0f).And.LessThan(1f));
+
+            velocity = 0f;
+            var exited = NaturalMotionTransition.UpdateWeight(
+                1f, 0f, ref velocity, .34f, .52f, .08f);
+            Assert.That(exited, Is.GreaterThan(0f).And.LessThan(1f));
+            Assert.That(entered, Is.GreaterThan(1f - exited));
+        }
+
+        [TestCase(0f, 0f)]
+        [TestCase(.5f, .5f)]
+        [TestCase(1f, 1f)]
+        public void NaturalTransitionIsBoundedAndSymmetric(float input, float expected)
+        {
+            Assert.That(NaturalMotionTransition.Smooth01(input), Is.EqualTo(expected).Within(.0001f));
+        }
+
+        [Test]
         public void BodyContactProducesLocalBodyTouchWithoutBecomingHandshake()
         {
             Assert.AreEqual(

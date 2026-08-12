@@ -106,7 +106,6 @@ namespace QuestMmdPlayer
             internal bool ownsRuntimeMaterial;
             internal bool visible;
             internal bool pinching;
-            internal Vector3 collisionCorrection;
             internal float lastTrackedPoseAt = float.NegativeInfinity;
             internal string inputSource = "none";
 
@@ -188,8 +187,6 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            var correctionTarget = Vector3.zero;
-            var correctionMagnitude = 0f;
             for (var index = 0; index < visual.contactColliders.Length; index++)
             {
                 if (!(visual.contactColliders[index] is SphereCollider sphere) || !sphere.enabled)
@@ -209,26 +206,28 @@ namespace QuestMmdPlayer
                 var hasPenetration = interaction.TryGetPenetrationCorrection(
                     sphere,
                     out var penetrationCorrection,
-                    out _);
-                if (hasPenetration)
-                {
-                    var magnitude = penetrationCorrection.magnitude;
-                    if (magnitude > correctionMagnitude)
-                    {
-                        correctionTarget = penetrationCorrection;
-                        correctionMagnitude = magnitude;
-                    }
-                }
+                    out var penetrationRegion);
 
-                if (interaction.TryGetContactRegionSwept(
+                var swept = interaction.TryGetContactRegionSwept(
                     from,
                     center,
                     Mathf.Max(.005f, radius),
-                    out var region,
-                    out var contactPoint) &&
+                    out var sweptRegion,
+                    out var contactPoint);
+                var region = swept ? sweptRegion : penetrationRegion;
+                if ((swept || hasPenetration) &&
                     ShouldReportContact(probe, region, visual.pinching))
                 {
-                    interaction.ReportTrackedHandContact(region, visual.pinching, contactPoint);
+                    // XR pose is authoritative: never displace the rendered hand.
+                    // ComputePenetration returns the vector that would move the
+                    // hand out of the avatar, so its inverse is the compliant
+                    // push applied to the avatar pose/UMT physics response.
+                    var avatarPush = hasPenetration ? -penetrationCorrection : Vector3.zero;
+                    interaction.ReportTrackedHandContact(
+                        region,
+                        visual.pinching,
+                        swept ? contactPoint : center,
+                        avatarPush);
                     if (lastPhysicalContact != region ||
                         Time.unscaledTime - lastPhysicalContactLogAt >= .75f)
                     {
@@ -239,49 +238,6 @@ namespace QuestMmdPlayer
                 }
                 visual.previousJointPositions[index] = center;
                 visual.previousJointTracked[index] = true;
-            }
-            ApplyVisualCollisionCorrection(visual, correctionMagnitude > .000001f ? correctionTarget : Vector3.zero);
-        }
-
-        private static void ApplyVisualCollisionCorrection(HandVisual visual, Vector3 target)
-        {
-            var previous = visual.collisionCorrection;
-            visual.collisionCorrection = target.sqrMagnitude > .000001f
-                ? target
-                : Vector3.MoveTowards(previous, Vector3.zero, Time.fixedUnscaledDeltaTime * .35f);
-            var delta = visual.collisionCorrection - previous;
-            if (delta.sqrMagnitude <= .00000001f) return;
-            // Joint poses are written in world space every frame, so moving the
-            // root alone would be overwritten by the next XR pose update. Move
-            // the visible probes themselves and keep the root as a stable parent.
-            if (visual.joints != null)
-            {
-                for (var index = 0; index < visual.joints.Length; index++)
-                {
-                    if (visual.joints[index] != null)
-                    {
-                        visual.joints[index].transform.position += delta;
-                    }
-                }
-            }
-            // The official mesh is parented to tracking space and is driven by
-            // the XR hand provider. Its own pose must be corrected alongside the
-            // proxy joints, otherwise the visible hand can remain inside the
-            // avatar while only hidden probes are pushed out.
-            if (visual.meshRoot != null)
-            {
-                visual.meshRoot.transform.position += delta;
-            }
-            if (visual.lines != null)
-            {
-                for (var index = 0; index < visual.lines.Length; index++)
-                {
-                    if (visual.lines[index].enabled)
-                    {
-                        visual.lines[index].SetPosition(0, visual.lines[index].GetPosition(0) + delta);
-                        visual.lines[index].SetPosition(1, visual.lines[index].GetPosition(1) + delta);
-                    }
-                }
             }
         }
 
@@ -345,10 +301,6 @@ namespace QuestMmdPlayer
             }
 
             var previous = visual.inputSource;
-            if (previous == "hand_tracking" && source != "hand_tracking")
-            {
-                ResetVisualCollisionCorrection(visual);
-            }
             visual.inputSource = source;
             if (source == "hand_tracking" && visual.meshRoot == null)
             {
@@ -359,15 +311,6 @@ namespace QuestMmdPlayer
                 "[HandTracking] " + visual.name + " input source: " + previous + " -> " + source +
                 (source == "hand_tracking" && visual.meshRoot == null ? " (proxy mesh)" : ""),
                 this);
-        }
-
-        private static void ResetVisualCollisionCorrection(HandVisual visual)
-        {
-            if (visual.meshRoot != null && visual.collisionCorrection.sqrMagnitude > .000001f)
-            {
-                visual.meshRoot.transform.position -= visual.collisionCorrection;
-            }
-            visual.collisionCorrection = Vector3.zero;
         }
 
         private bool TryGetHandPose(XRHand hand, HandVisual visual)
@@ -408,7 +351,6 @@ namespace QuestMmdPlayer
         private void SetControllerPose(HandVisual visual, Vector3 palm, Quaternion rotation)
         {
             ClearPreviousPose(visual);
-            visual.collisionCorrection = Vector3.zero;
             var forward = rotation * Vector3.forward;
             var side = rotation * Vector3.right;
             visual.joints[0].transform.SetPositionAndRotation(palm - forward * .035f, rotation);
@@ -580,7 +522,6 @@ namespace QuestMmdPlayer
             {
                 visual.meshRoot.SetActive(visual.visible && showOfficialMesh);
             }
-            if (!visible) visual.collisionCorrection = Vector3.zero;
         }
 
         private XRHandSubsystem FindRunningSubsystem()

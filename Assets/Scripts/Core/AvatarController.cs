@@ -494,7 +494,7 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            var amount = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(actionTransitionClock / ActionTransitionSeconds));
+            var amount = NaturalMotionTransition.Smooth01(actionTransitionClock / ActionTransitionSeconds);
             BlendRotation(upperBody, transitionUpperBody, amount);
             BlendRotation(head, transitionHead, amount);
             BlendRotation(rightUpperArm, transitionRightUpperArm, amount);

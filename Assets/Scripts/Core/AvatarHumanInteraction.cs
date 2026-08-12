@@ -20,6 +20,9 @@ namespace QuestMmdPlayer
         [SerializeField, Range(.1f, .35f)] float handshakeHoldSeconds = .18f;
         [SerializeField] float handshakeTargetSmoothing = 14f;
         [SerializeField, Range(.75f, .995f)] float maxArmStretch = .98f;
+        [SerializeField, Range(.12f, .8f)] float reactionEnterSeconds = .34f;
+        [SerializeField, Range(.18f, 1.2f)] float reactionExitSeconds = .52f;
+        [SerializeField, Range(.01f, .09f)] float maximumPhysicalYield = .055f;
         [SerializeField] Transform trackingSpace;
 
         readonly List<XRHandSubsystem> subsystems = new List<XRHandSubsystem>();
@@ -33,6 +36,7 @@ namespace QuestMmdPlayer
         HumanInteractionKind fadeKind;
         float stateTime;
         float fade;
+        float fadeVelocity;
         float simulationUntil;
         HumanInteractionKind simulationKind;
         Vector3 target;
@@ -44,6 +48,9 @@ namespace QuestMmdPlayer
         AvatarContactRegion trackedContactRegion;
         float trackedContactUntil;
         Vector3 trackedContactTarget;
+        Vector3 trackedContactPush;
+        Vector3 smoothedContactPush;
+        Vector3 contactPushVelocity;
         bool handshakeUsesRightArm;
         bool hasHandshakeArm;
         Vector3 smoothedHandshakeTarget;
@@ -100,9 +107,18 @@ namespace QuestMmdPlayer
         sealed class BoneSet
         {
             public Transform upperBody, head, leftUpper, leftLower, leftHand, rightUpper, rightLower, rightHand;
+            public Transform leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot;
             public Vector3 headScale = Vector3.one;
             public Quaternion upperBodyRotation, headRotation, leftUpperRotation, leftLowerRotation, leftHandRotation;
             public Quaternion rightUpperRotation, rightLowerRotation, rightHandRotation;
+            public Quaternion leftUpperLegRotation, leftLowerLegRotation, leftFootRotation;
+            public Quaternion rightUpperLegRotation, rightLowerLegRotation, rightFootRotation;
+            public Quaternion transitionUpperBody, transitionHead, transitionLeftUpper, transitionLeftLower, transitionLeftHand;
+            public Quaternion transitionRightUpper, transitionRightLower, transitionRightHand;
+            public Quaternion transitionLeftUpperLeg, transitionLeftLowerLeg, transitionLeftFoot;
+            public Quaternion transitionRightUpperLeg, transitionRightLowerLeg, transitionRightFoot;
+            public float transitionClock;
+            public bool transitionActive;
 
             public void CapturePose()
             {
@@ -114,6 +130,12 @@ namespace QuestMmdPlayer
                 if (rightUpper != null) rightUpperRotation = rightUpper.localRotation;
                 if (rightLower != null) rightLowerRotation = rightLower.localRotation;
                 if (rightHand != null) rightHandRotation = rightHand.localRotation;
+                if (leftUpperLeg != null) leftUpperLegRotation = leftUpperLeg.localRotation;
+                if (leftLowerLeg != null) leftLowerLegRotation = leftLowerLeg.localRotation;
+                if (leftFoot != null) leftFootRotation = leftFoot.localRotation;
+                if (rightUpperLeg != null) rightUpperLegRotation = rightUpperLeg.localRotation;
+                if (rightLowerLeg != null) rightLowerLegRotation = rightLowerLeg.localRotation;
+                if (rightFoot != null) rightFootRotation = rightFoot.localRotation;
             }
 
             public void ResetArms()
@@ -126,11 +148,69 @@ namespace QuestMmdPlayer
                 if (rightHand != null) rightHand.localRotation = rightHandRotation;
             }
 
+            public void ResetLegs()
+            {
+                if (leftUpperLeg != null) leftUpperLeg.localRotation = leftUpperLegRotation;
+                if (leftLowerLeg != null) leftLowerLeg.localRotation = leftLowerLegRotation;
+                if (leftFoot != null) leftFoot.localRotation = leftFootRotation;
+                if (rightUpperLeg != null) rightUpperLeg.localRotation = rightUpperLegRotation;
+                if (rightLowerLeg != null) rightLowerLeg.localRotation = rightLowerLegRotation;
+                if (rightFoot != null) rightFoot.localRotation = rightFootRotation;
+            }
+
             public void ResetPose()
             {
                 if (upperBody != null) upperBody.localRotation = upperBodyRotation;
                 if (head != null) { head.localRotation = headRotation; head.localScale = headScale; }
                 ResetArms();
+                ResetLegs();
+            }
+
+            public void CaptureTransitionPose()
+            {
+                if (upperBody != null) transitionUpperBody = upperBody.localRotation;
+                if (head != null) transitionHead = head.localRotation;
+                if (leftUpper != null) transitionLeftUpper = leftUpper.localRotation;
+                if (leftLower != null) transitionLeftLower = leftLower.localRotation;
+                if (leftHand != null) transitionLeftHand = leftHand.localRotation;
+                if (rightUpper != null) transitionRightUpper = rightUpper.localRotation;
+                if (rightLower != null) transitionRightLower = rightLower.localRotation;
+                if (rightHand != null) transitionRightHand = rightHand.localRotation;
+                if (leftUpperLeg != null) transitionLeftUpperLeg = leftUpperLeg.localRotation;
+                if (leftLowerLeg != null) transitionLeftLowerLeg = leftLowerLeg.localRotation;
+                if (leftFoot != null) transitionLeftFoot = leftFoot.localRotation;
+                if (rightUpperLeg != null) transitionRightUpperLeg = rightUpperLeg.localRotation;
+                if (rightLowerLeg != null) transitionRightLowerLeg = rightLowerLeg.localRotation;
+                if (rightFoot != null) transitionRightFoot = rightFoot.localRotation;
+                transitionClock = 0f;
+                transitionActive = true;
+            }
+
+            public void ApplyTransition(float deltaTime, float seconds)
+            {
+                if (!transitionActive) return;
+                transitionClock += Mathf.Max(0f, deltaTime);
+                var amount = NaturalMotionTransition.Smooth01(transitionClock / Mathf.Max(.01f, seconds));
+                BlendFrom(upperBody, transitionUpperBody, amount);
+                BlendFrom(head, transitionHead, amount);
+                BlendFrom(leftUpper, transitionLeftUpper, amount);
+                BlendFrom(leftLower, transitionLeftLower, amount);
+                BlendFrom(leftHand, transitionLeftHand, amount);
+                BlendFrom(rightUpper, transitionRightUpper, amount);
+                BlendFrom(rightLower, transitionRightLower, amount);
+                BlendFrom(rightHand, transitionRightHand, amount);
+                BlendFrom(leftUpperLeg, transitionLeftUpperLeg, amount);
+                BlendFrom(leftLowerLeg, transitionLeftLowerLeg, amount);
+                BlendFrom(leftFoot, transitionLeftFoot, amount);
+                BlendFrom(rightUpperLeg, transitionRightUpperLeg, amount);
+                BlendFrom(rightLowerLeg, transitionRightLowerLeg, amount);
+                BlendFrom(rightFoot, transitionRightFoot, amount);
+                if (amount >= 1f) transitionActive = false;
+            }
+
+            private static void BlendFrom(Transform bone, Quaternion from, float amount)
+            {
+                if (bone != null) bone.localRotation = Quaternion.Slerp(from, bone.localRotation, amount);
             }
         }
 
@@ -174,6 +254,7 @@ namespace QuestMmdPlayer
             avatar = targetAvatar;
             current = fadeKind = HumanInteractionKind.None;
             fade = stateTime = 0f;
+            fadeVelocity = 0f;
             scaleChanged = false;
             backendReactionKind = HumanInteractionKind.None;
             backendReactionUntil = 0f;
@@ -181,6 +262,7 @@ namespace QuestMmdPlayer
             trackedContactRegion = AvatarContactRegion.None;
             trackedContactUntil = 0f;
             trackedContactTarget = Vector3.zero;
+            trackedContactPush = smoothedContactPush = contactPushVelocity = Vector3.zero;
             hasHandshakeArm = false;
             hasSmoothedHandshakeTarget = false;
             reactionPoseApplied = false;
@@ -280,7 +362,9 @@ namespace QuestMmdPlayer
             {
                 var activationDelay = detected == HumanInteractionKind.Handshake
                     ? handshakeHoldSeconds
-                    : .1f;
+                    : detected == HumanInteractionKind.HeadPat
+                        ? .24f
+                        : .14f;
                 if (stateTime >= activationDelay) SetState(detected, detectedFromPhysicalContact);
             }
             else if (sourceChanged)
@@ -312,7 +396,20 @@ namespace QuestMmdPlayer
                     ? current
                     : HumanInteractionKind.None;
             if (desired != HumanInteractionKind.None) fadeKind = desired;
-            fade = Mathf.MoveTowards(fade, desired == HumanInteractionKind.None ? 0f : 1f, Time.unscaledDeltaTime * 6f);
+            fade = NaturalMotionTransition.UpdateWeight(
+                fade,
+                desired == HumanInteractionKind.None ? 0f : 1f,
+                ref fadeVelocity,
+                reactionEnterSeconds,
+                reactionExitSeconds,
+                Time.unscaledDeltaTime);
+            smoothedContactPush = Vector3.SmoothDamp(
+                smoothedContactPush,
+                currentInteractionIsPhysical ? trackedContactPush : Vector3.zero,
+                ref contactPushVelocity,
+                currentInteractionIsPhysical ? .09f : .22f,
+                Mathf.Infinity,
+                Time.unscaledDeltaTime);
             if (fade <= .001f)
             {
                 if (reactionPoseApplied || scaleChanged)
@@ -326,6 +423,7 @@ namespace QuestMmdPlayer
             var kind = desired == HumanInteractionKind.None ? fadeKind : desired;
             if (enableMorphReactions) ApplyMorphs(kind, fade);
             if (enableBoneReactions) ApplyBones(kind, fade);
+            bones.ApplyTransition(Time.unscaledDeltaTime, .38f);
             reactionPoseApplied = true;
         }
 
@@ -404,7 +502,11 @@ namespace QuestMmdPlayer
             return HumanInteractionKind.None;
         }
 
-        public void ReportTrackedHandContact(AvatarContactRegion region, bool pinching, Vector3 point)
+        public void ReportTrackedHandContact(
+            AvatarContactRegion region,
+            bool pinching,
+            Vector3 point,
+            Vector3 avatarPush = default)
         {
             var kind = ClassifyPhysicalContact(region, pinching);
             if (kind == HumanInteractionKind.None) return;
@@ -412,6 +514,8 @@ namespace QuestMmdPlayer
             trackedContactKind = kind;
             trackedContactRegion = region;
             trackedContactTarget = point;
+            if (changed || avatarPush.sqrMagnitude > .0000001f || trackedContactUntil <= Time.unscaledTime)
+                trackedContactPush = Vector3.ClampMagnitude(avatarPush, maximumPhysicalYield);
             trackedContactUntil = Time.unscaledTime + .14f;
             if (kind == HumanInteractionKind.Handshake) AcquireHandshakeTarget(point);
             if (changed)
@@ -471,6 +575,8 @@ namespace QuestMmdPlayer
             }
             var kindChanged = current != next;
             var previousWasPhysical = currentInteractionIsPhysical;
+            if (kindChanged && current != HumanInteractionKind.None && next != HumanInteractionKind.None && bones != null)
+                bones.CaptureTransitionPose();
             current = next;
             currentInteractionIsPhysical = nextIsPhysical;
             if (kindChanged && next != HumanInteractionKind.None)
@@ -507,10 +613,11 @@ namespace QuestMmdPlayer
         void ApplyBones(HumanInteractionKind kind, float amount)
         {
             var settle = Mathf.Sin(Time.unscaledTime * 2.15f);
+            var physical = currentInteractionIsPhysical && backendReactionUntil <= Time.unscaledTime;
             if (bones.upperBody != null)
             {
                 var bodyOffset = kind == HumanInteractionKind.HeadPat
-                    ? Quaternion.Euler(-1.2f, 0f, 1.4f + settle * .25f)
+                    ? physical ? PhysicalBodyOffset(.35f) : Quaternion.Euler(-1.2f, 0f, 1.4f + settle * .25f)
                     : kind == HumanInteractionKind.CheekPinch
                         ? Quaternion.Euler(0f, -1.8f, -1.2f)
                         : kind == HumanInteractionKind.BodyTouch
@@ -525,7 +632,7 @@ namespace QuestMmdPlayer
             if (bones.head != null)
             {
                 var offset = kind == HumanInteractionKind.HeadPat
-                    ? Quaternion.Euler(-4.5f + settle * .65f, 0f, 3.5f)
+                    ? physical ? PhysicalHeadOffset(settle) : Quaternion.Euler(-4.5f + settle * .65f, 0f, 3.5f)
                     : kind == HumanInteractionKind.CheekPinch
                         ? Quaternion.Euler(0f, -4.5f, -3.5f)
                         : kind == HumanInteractionKind.BodyTouch
@@ -545,6 +652,11 @@ namespace QuestMmdPlayer
             }
 
             bones.ResetArms();
+            if (physical && kind == HumanInteractionKind.BodyTouch && trackedContactRegion == AvatarContactRegion.Limb)
+            {
+                ApplyPhysicalLimbYield(amount);
+                return;
+            }
             if (kind != HumanInteractionKind.Handshake || target == Vector3.zero) return;
             var rightSide = hasHandshakeArm
                 ? handshakeUsesRightArm
@@ -564,6 +676,73 @@ namespace QuestMmdPlayer
             var pole = upper.position - avatar.transform.up + side * .2f;
             SolveTwoBoneIk(upper, lower, hand, smoothedHandshakeTarget, pole, maxArmStretch, amount);
         }
+
+        private Quaternion PhysicalHeadOffset(float settle)
+        {
+            if (avatar == null || smoothedContactPush.sqrMagnitude <= .0000001f)
+                return Quaternion.Euler(-1.1f + settle * .15f, 0f, 0f);
+            var local = avatar.transform.InverseTransformDirection(smoothedContactPush);
+            var scale = Mathf.Clamp01(local.magnitude / Mathf.Max(.005f, maximumPhysicalYield));
+            var direction = local.normalized;
+            return Quaternion.Euler(
+                Mathf.Clamp(-direction.z * 5.5f - direction.y * 2.2f, -6f, 6f) * scale,
+                Mathf.Clamp(direction.x * 5f, -5f, 5f) * scale,
+                Mathf.Clamp(-direction.x * 6.5f, -6.5f, 6.5f) * scale);
+        }
+
+        private Quaternion PhysicalBodyOffset(float strength)
+        {
+            if (avatar == null || smoothedContactPush.sqrMagnitude <= .0000001f) return Quaternion.identity;
+            var local = avatar.transform.InverseTransformDirection(smoothedContactPush);
+            var scale = Mathf.Clamp01(local.magnitude / Mathf.Max(.005f, maximumPhysicalYield)) * strength;
+            var direction = local.normalized;
+            return Quaternion.Euler(-direction.z * 2.5f * scale, direction.x * 1.5f * scale, -direction.x * 3f * scale);
+        }
+
+        private void ApplyPhysicalLimbYield(float amount)
+        {
+            if (bones == null || smoothedContactPush.sqrMagnitude <= .0000001f) return;
+            Transform upper = null, lower = null, endpoint = null;
+            var rightSide = false;
+            var leg = false;
+            var nearest = float.MaxValue;
+            ChooseLimb(bones.leftUpper, bones.leftLower, bones.leftHand, false, false, ref upper, ref lower, ref endpoint, ref rightSide, ref leg, ref nearest);
+            ChooseLimb(bones.rightUpper, bones.rightLower, bones.rightHand, true, false, ref upper, ref lower, ref endpoint, ref rightSide, ref leg, ref nearest);
+            ChooseLimb(bones.leftUpperLeg, bones.leftLowerLeg, bones.leftFoot, false, true, ref upper, ref lower, ref endpoint, ref rightSide, ref leg, ref nearest);
+            ChooseLimb(bones.rightUpperLeg, bones.rightLowerLeg, bones.rightFoot, true, true, ref upper, ref lower, ref endpoint, ref rightSide, ref leg, ref nearest);
+            if (upper == null || lower == null || endpoint == null) return;
+            var destination = endpoint.position + Vector3.ClampMagnitude(smoothedContactPush, maximumPhysicalYield);
+            var side = rightSide ? avatar.transform.right : -avatar.transform.right;
+            var pole = leg
+                ? upper.position + avatar.transform.forward * .28f + side * .08f
+                : upper.position - avatar.transform.up + side * .2f;
+            SolveTwoBoneIk(upper, lower, endpoint, destination, pole, maxArmStretch, amount * (leg ? .48f : .82f));
+        }
+
+        private void ChooseLimb(
+            Transform candidateUpper,
+            Transform candidateLower,
+            Transform candidateEndpoint,
+            bool candidateRight,
+            bool candidateLeg,
+            ref Transform upper,
+            ref Transform lower,
+            ref Transform endpoint,
+            ref bool rightSide,
+            ref bool leg,
+            ref float nearest)
+        {
+            if (candidateUpper == null || candidateLower == null || candidateEndpoint == null) return;
+            var distance = Vector3.Distance(candidateEndpoint.position, trackedContactTarget);
+            if (distance >= nearest) return;
+            nearest = distance;
+            upper = candidateUpper;
+            lower = candidateLower;
+            endpoint = candidateEndpoint;
+            rightSide = candidateRight;
+            leg = candidateLeg;
+        }
+
         public static bool SolveTwoBoneIk(Transform upper, Transform lower, Transform hand, Vector3 destination, Vector3 pole, float stretch = .98f, float weight = 1f)
         {
             if (upper == null || lower == null || hand == null || weight <= 0f) return false;
@@ -664,6 +843,12 @@ namespace QuestMmdPlayer
             result.rightUpper = Find(all, "rightupperarm", "upperarm_r", "\u53F3\u8155");
             result.rightLower = Find(all, "rightlowerarm", "lowerarm_r", "\u53F3\u3072\u3058", "\u53F3\u8098");
             result.rightHand = Find(all, "righthand", "hand_r", "\u53F3\u624B\u9996");
+            result.leftUpperLeg = Find(all, "leftupperleg", "upperleg_l", "\u5DE6\u8DB3");
+            result.leftLowerLeg = Find(all, "leftlowerleg", "lowerleg_l", "\u5DE6\u3072\u3056", "\u5DE6\u819D");
+            result.leftFoot = Find(all, "leftfoot", "foot_l", "\u5DE6\u8DB3\u9996");
+            result.rightUpperLeg = Find(all, "rightupperleg", "upperleg_r", "\u53F3\u8DB3");
+            result.rightLowerLeg = Find(all, "rightlowerleg", "lowerleg_r", "\u53F3\u3072\u3056", "\u53F3\u819D");
+            result.rightFoot = Find(all, "rightfoot", "foot_r", "\u53F3\u8DB3\u9996");
             return result;
         }
 
