@@ -139,7 +139,6 @@ namespace QuestMmdPlayer.PlayModeTests
             try
             {
                 var loader = root.AddComponent(RuntimeType("QuestMmdPlayer.RuntimeMmdModelLoader"));
-                SetField(loader, "loadBundledSampleOnStart", false);
                 loader.GetType().GetEvent("ProgressChanged").AddEventHandler(
                     loader,
                     new Action<string>(_ => throw new InvalidOperationException("progress subscriber")));
@@ -180,7 +179,6 @@ namespace QuestMmdPlayer.PlayModeTests
             try
             {
                 var loader = root.AddComponent(RuntimeType("QuestMmdPlayer.RuntimeMmdModelLoader"));
-                SetField(loader, "loadBundledSampleOnStart", false);
                 var actions = root.AddComponent(RuntimeType("QuestMmdPlayer.VmdActionLibrary"));
                 var importer = root.AddComponent(RuntimeType("QuestMmdPlayer.QuestFileImportService"));
                 Invoke(importer, "Initialize", loader, actions);

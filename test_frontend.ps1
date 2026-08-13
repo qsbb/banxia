@@ -100,11 +100,12 @@ foreach ($file in $requiredFiles) {
     [void](Check-File $file)
 }
 
-$localModelSample = Join-Path $projectRoot "Assets/StreamingAssets/MmdSamples/ForestBerry/ForestBerry.pmx"
-if (Test-Path -LiteralPath $localModelSample -PathType Leaf) {
-    Pass "optional local PMX smoke-test sample is available"
+$bundledAvatarModels = Get-ChildItem -LiteralPath (Join-Path $projectRoot "Assets") -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in @(".pmx", ".pmd", ".vrm", ".glb", ".gltf") }
+if ($bundledAvatarModels) {
+    Fail "production Assets contains bundled avatar model sources"
 } else {
-    Pass "optional local PMX sample is absent; fallback avatar remains available"
+    Pass "production Assets contains no bundled avatar model sources"
 }
 
 $manifestPath = Join-Path $projectRoot "Packages/manifest.json"
@@ -162,14 +163,14 @@ if (Test-Path -LiteralPath $versionPath) {
 }
 
 $sourceChecks = @{
-    "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("LoadFromFileAsync", "PMXImporter.BuildUnityObjectsAsync", "streamingAssetsPath", "textureBaseDirectory", "PreserveOriginalNames")
+    "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("LoadFromFileAsync", "PMXImporter.BuildUnityObjectsAsync", "DiscoverInstalledModels", "textureBaseDirectory", "PreserveOriginalNames", "RemoveRetiredBundledSample")
     "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VmdActionFilePolicy", "SearchOption.TopDirectoryOnly", "VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "DefaultExecutionOrder(11000)", "bakePhysicsToFK = true", "BeginPhysicsArbitration", "StopAndReturnToIdle")
     "Assets/Scripts/Core/QuestQualitySettings.cs" = @("XRSettings.eyeTextureResolutionScale", "XRSettings.renderViewportScale", "QuestQualityPreset.Clear", "UniversalRenderPipelineAsset", "PlayerPrefs.Save")
-    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel", "PlayerSettings.SetApplicationIdentifier", "PlayerSettings.bundleVersion = AndroidVersionName", "PlayerSettings.Android.bundleVersionCode = AndroidVersionCode", "com.lingxi.banxia", "0.2.0", "Builds/Banxia.apk")
+    "Assets/Editor/QuestMmdPlayerBuild.cs" = @("MetaQuestFeature", "forceRemoveInternetPermission", "ConfigureQuestInteractionProfiles", "OculusTouchControllerProfile", "MetaQuestTouchProControllerProfile", "HandTracking", "GraphicsDeviceType.Vulkan", "AndroidArchitecture.ARM64", "InsecureHttpOption.AlwaysAllowed", "PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel", "PlayerSettings.SetApplicationIdentifier", "PlayerSettings.bundleVersion = AndroidVersionName", "PlayerSettings.Android.bundleVersionCode = AndroidVersionCode", "com.lingxi.banxia", "0.2.1", "Builds/Banxia.apk", "ValidateNoBundledAvatarModels", "Production Assets must not contain avatar model sources")
     "Assets/Plugins/Android/AndroidManifest.xml" = @("com.unity3d.player.UnityPlayerActivity", "android.intent.action.MAIN", "android.intent.category.LAUNCHER")
     "Assets/Editor/QuestPrivateLanManifestPostprocessor.cs" = @("usesCleartextTraffic", "horizonos.permission.HAND_TRACKING", "EnsurePermission", "ConfigureFilePickerModule", "buildConfig = false")
     "Assets/Editor/QuestMmdPlayerRuntimeSmokeTest.cs" = @("PMXImporter.Import", "applyRenames = false", "Runtime PMX Smoke Test")
-    "Assets/Editor/QuestMmdPlayerMenu.cs" = @("RuntimeMmdModelLoader", "bundled PMX sample")
+    "Assets/Editor/QuestMmdPlayerMenu.cs" = @("RuntimeMmdModelLoader")
     "Assets/Scripts/Backend/AstrBotBridge.cs" = @("TryIngestCommandJson", "JsonUtility.FromJson", "CommandReceived", "ReloadConfiguration", "ConfiguredBaseUrl", "ParseSessionChainStatus", "ResolveBackendChainStatus", "sse_dispatch", "AudioRequestCode", "UpdateMaximum", "embodiment_bridge.json", "TryMigrateLegacyConfiguration", "X-Embodiment-Bridge-Key")
     "Assets/Scripts/Backend/AstrBotProtocol.cs" = @("ReceivedAtTicks", "server_timing", "server_timing@1.0", "ToBackendTiming", "ClampServerDuration")
     "Assets/Scripts/Backend/BackendPairingProtocol.cs" = @("astrbot_plugin_embodiment_bridge", "LegacyPluginApiPath", "TryBuildExchangeEndpoint", "TryParseQrPayload", "TryUpgradeLegacyPluginBaseUrl", "TryMigrateLegacyConfiguration", "TryWriteSettingsAtomically", "File.Replace", "https")

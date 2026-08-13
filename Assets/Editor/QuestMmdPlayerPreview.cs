@@ -11,16 +11,15 @@ namespace QuestMmdPlayer.Editor
     public static class QuestMmdPlayerPreview
     {
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
-        private const string PmxPath = "Assets/StreamingAssets/MmdSamples/ForestBerry/ForestBerry.pmx";
-        private const string OutputPath = "Builds/ForestBerryPreview.png";
+        private const string OutputPath = "Builds/ModelPreview.png";
 
         [MenuItem("Quest MMD Player/Render Model Preview")]
         public static void RenderModelPreview()
         {
             QuestMmdPlayerMenu.EnsureRenderPipeline();
             EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
-            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-            string pmxPath = Path.Combine(projectRoot, PmxPath.Replace('/', Path.DirectorySeparatorChar));
+            string pmxPath = EditorUtility.OpenFilePanel("Select a local PMX model", string.Empty, "pmx");
+            if (string.IsNullOrWhiteSpace(pmxPath)) return;
             string textureDirectory = Path.GetDirectoryName(pmxPath);
             PMXImportResult result = null;
 

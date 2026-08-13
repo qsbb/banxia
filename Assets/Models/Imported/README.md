@@ -1,7 +1,9 @@
-# Legacy comparison asset
+# Local model comparison assets
 
-ForestBerry.glb is an earlier local conversion of the user-provided PMX used only to compare the old offline path. The prototype scene and current APK load Assets/StreamingAssets/MmdSamples/ForestBerry/ForestBerry.pmx directly at runtime instead.
+This directory is intentionally empty in production. Developers may place local,
+untracked conversion outputs here for editor-only comparisons. Production APKs
+must not bundle avatar models; users import models on-device and select them from
+persistent storage.
 
-- Converter: https://github.com/masaka1024/mmd2gltf-gui
-- Converter license: MIT
-- Do not redistribute the model, textures, GLB, or APK without confirming the model author's terms.
+Do not redistribute user-provided models, textures, conversions, or APKs without
+confirming the original authors' terms.

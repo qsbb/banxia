@@ -42,7 +42,7 @@ namespace QuestMmdPlayer.Editor
 
             EditorSceneManager.SaveScene(scene, Path.Combine(directory, "Prototype.unity"));
             Selection.activeGameObject = root;
-            Debug.Log("Created Assets/Scenes/Prototype.unity. Press Play to load the bundled PMX sample at runtime.");
+            Debug.Log("Created Assets/Scenes/Prototype.unity. Import and select an on-device PMX model at runtime.");
         }
 
         internal static XROrigin CreateMrRig()

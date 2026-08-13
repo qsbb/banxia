@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using UMT;
 using UnityEngine;
-using UnityEngine.Networking;
 
 namespace QuestMmdPlayer
 {
@@ -23,25 +23,22 @@ namespace QuestMmdPlayer
     }
 
     /// <summary>
-    /// Loads PMX models directly at runtime. The bundled sample is extracted to
-    /// persistent storage first so UMT can resolve the PMX texture sidecars on
-    /// Android exactly as it does on desktop.
+    /// Loads user-imported PMX models directly at runtime. Production builds do
+    /// not bundle a default avatar; installed models live in persistent data.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class RuntimeMmdModelLoader : MonoBehaviour
     {
-        private static readonly string[] BundledSampleFiles =
-        {
-            "ForestBerry.pmx",
-            "T_KokonaShiki_Body_104_D.png",
-            "T_KokonaShiki_Face.png",
-            "T_KokonaShiki_Hair.TGA",
-            "T_KokonaShiki_Hair_104_D.png"
-        };
-
-        [SerializeField] private bool loadBundledSampleOnStart = true;
-        [SerializeField] private string bundledSampleDirectory = "MmdSamples/ForestBerry";
-        [SerializeField] private string bundledSamplePmx = "ForestBerry.pmx";
+        private const string RetiredBundledSampleDirectory = "ForestBerry";
+        private static readonly IReadOnlyDictionary<string, string> RetiredBundledSampleFiles =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "ForestBerry.pmx", "9B13CCA69078DDC76F1313DC8D864894EE74D3A341048EF2D2930D4F3A8D847A" },
+                { "T_KokonaShiki_Body_104_D.png", "84048F28A8707A136D36979235B60E0EB38E5B823BC43228CD2288F02D2FED30" },
+                { "T_KokonaShiki_Face.png", "CB9AEC7D575B499A0A7CF1D9BB3673DA52B634CB3CF3709F6787F07E8DCBC3E8" },
+                { "T_KokonaShiki_Hair.TGA", "C9DC185DA9A20710EB3079705BB2AA5CAFE5B446B33BFFA1A7EF04D161BE71EF" },
+                { "T_KokonaShiki_Hair_104_D.png", "2F178CB82DF769A2179B408DB03F70368AB02F5BA29D81FC9D0DCB719466D1E3" }
+            };
         [SerializeField, Range(1f, 12f)] private float frameBudgetMilliseconds = 4f;
         [SerializeField] private Vector3 spawnPosition = new Vector3(0f, 0f, 2.2f);
 
@@ -60,9 +57,16 @@ namespace QuestMmdPlayer
         public bool IsLoading { get; private set; }
         public string CurrentModelPath { get; private set; }
 
+        private void Awake()
+        {
+            RemoveRetiredBundledSample(
+                Path.Combine(Application.persistentDataPath, "MmdModels"));
+        }
+
         public IReadOnlyList<RuntimeMmdModelInfo> DiscoverInstalledModels()
         {
             var root = System.IO.Path.Combine(Application.persistentDataPath, "MmdModels");
+            RemoveRetiredBundledSample(root);
             var results = new List<RuntimeMmdModelInfo>();
             if (!Directory.Exists(root))
             {
@@ -119,6 +123,66 @@ namespace QuestMmdPlayer
             return results;
         }
 
+        internal static int RemoveRetiredBundledSample(
+            string modelsRoot,
+            IReadOnlyDictionary<string, string> expectedFiles = null)
+        {
+            if (string.IsNullOrWhiteSpace(modelsRoot)) return 0;
+            var directory = Path.Combine(modelsRoot, RetiredBundledSampleDirectory);
+            if (!Directory.Exists(directory)) return 0;
+            var removed = 0;
+            foreach (var sample in expectedFiles ?? RetiredBundledSampleFiles)
+            {
+                var path = Path.Combine(directory, sample.Key);
+                if (!File.Exists(path) || !MatchesSha256(path, sample.Value)) continue;
+                try
+                {
+                    File.Delete(path);
+                    removed++;
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            if (removed == 0) return 0;
+            TryDeleteEmptyDirectory(directory);
+            Debug.Log($"[ModelLoader] Removed {removed} retired bundled sample files from persistent data.");
+            return removed;
+        }
+
+        private static void TryDeleteEmptyDirectory(string directory)
+        {
+            try
+            {
+                if (Directory.GetFileSystemEntries(directory).Length == 0)
+                    Directory.Delete(directory, false);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        private static bool MatchesSha256(string path, string expected)
+        {
+            try
+            {
+                using (var stream = File.OpenRead(path))
+                using (var sha256 = SHA256.Create())
+                {
+                    return string.Equals(
+                        BitConverter.ToString(sha256.ComputeHash(stream)).Replace("-", string.Empty),
+                        expected,
+                        StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
         public Task<AvatarController> LoadInstalledModelAsync(RuntimeMmdModelInfo model)
         {
             if (model == null || string.IsNullOrWhiteSpace(model.Path))
@@ -128,44 +192,6 @@ namespace QuestMmdPlayer
             return LoadFromFileAsync(model.Path, System.IO.Path.GetDirectoryName(model.Path));
         }
 
-        private async void Start()
-        {
-            if (!loadBundledSampleOnStart)
-            {
-                return;
-            }
-
-            string pmxPath;
-            try
-            {
-                pmxPath = await PrepareBundledSampleAsync();
-            }
-            catch (OperationCanceledException)
-            {
-                // Object destruction canceled extraction before an import began.
-                return;
-            }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception, this);
-                NotifyLoadFailed(exception.Message);
-                return;
-            }
-
-            try
-            {
-                await LoadFromFileAsync(pmxPath);
-            }
-            catch (OperationCanceledException)
-            {
-                // A new import or object destruction canceled the previous load.
-            }
-            catch (Exception exception)
-            {
-                // LoadFromFileAsync already notified listeners with the original error.
-                Debug.LogException(exception, this);
-            }
-        }
         /// <summary>
         /// Loads a PMX file and its adjacent texture directory. This is the API
         /// that a file picker, network transfer, or AstrBot bridge can call later.
@@ -299,57 +325,6 @@ namespace QuestMmdPlayer
                 model.morphs[i] = morph;
             }
         }
-        private async Task<string> PrepareBundledSampleAsync()
-        {
-            var targetDirectory = Path.Combine(Application.persistentDataPath, "MmdModels", "ForestBerry");
-            Directory.CreateDirectory(targetDirectory);
-            NotifyProgress("Preparing bundled PMX sample");
-
-            foreach (var fileName in BundledSampleFiles)
-            {
-                var targetPath = Path.Combine(targetDirectory, fileName);
-                if (File.Exists(targetPath) && new FileInfo(targetPath).Length > 0)
-                {
-                    continue;
-                }
-
-                var relativePath = $"{bundledSampleDirectory}/{fileName}";
-                await CopyStreamingAssetAsync(relativePath, targetPath);
-            }
-
-            return Path.Combine(targetDirectory, bundledSamplePmx);
-        }
-
-        private static async Task CopyStreamingAssetAsync(string relativePath, string targetPath)
-        {
-            var sourcePath = Path.Combine(Application.streamingAssetsPath, relativePath).Replace('\\', '/');
-#if UNITY_ANDROID && !UNITY_EDITOR
-            using (var request = UnityWebRequest.Get(sourcePath))
-            {
-                var operation = request.SendWebRequest();
-                while (!operation.isDone)
-                {
-                    await Task.Yield();
-                }
-
-                if (request.result != UnityWebRequest.Result.Success)
-                {
-                    throw new IOException($"Could not extract StreamingAsset '{relativePath}': {request.error}");
-                }
-
-                File.WriteAllBytes(targetPath, request.downloadHandler.data);
-            }
-#else
-            if (!File.Exists(sourcePath))
-            {
-                throw new FileNotFoundException("Bundled StreamingAsset was not found.", sourcePath);
-            }
-
-            File.Copy(sourcePath, targetPath, true);
-            await Task.Yield();
-#endif
-        }
-
         private void UnloadCurrentModel()
         {
             if (currentResult == null)

@@ -25,9 +25,9 @@ powershell -ExecutionPolicy Bypass -File .\test_frontend.ps1 -Strict
 8. 输入文字并点击 Start mock conversation，确认 Listening -> Thinking -> Speaking -> Idle；播放中点击 Interrupt 应立即停声。
 9. 完整步骤见 CONVERSATION_TESTING_CN.md。
 
-在不进入 Play 的情况下，可执行 Quest MMD Player > Run Runtime PMX Smoke Test。该测试直接读取 Assets/StreamingAssets/MmdSamples/ForestBerry/ForestBerry.pmx，验证网格、材质、纹理、骨骼和刚体数量。
+在不进入 Play 的情况下，可执行 Quest MMD Player > Run Runtime PMX Smoke Test。通过文件选择器选择本地 PMX 后，该测试会验证网格、材质、纹理、骨骼和刚体数量；文件只用于本机编辑器测试，不进入生产 APK。
 
-Quest MMD Player > Render Model Preview 会用同一条 PMX 运行时导入链生成 Builds/ForestBerryPreview.png，用于桌面端查看画面。
+Quest MMD Player > Render Model Preview 会用同一条 PMX 运行时导入链生成本地预览图，用于桌面端查看画面。
 
 Quest MMD Player > Render Human Interaction Previews 会生成三种交互的多角度 PNG，用于不戴头显检查骨骼和表情反馈。
 
@@ -75,7 +75,7 @@ Android 构建后必须用 APK/Dex 分析确认 com.lingxi.banxia.filepicker.Ban
 |---|---|---|
 | Unity 项目和 UMT 包解析 | 已完成 | Packages/com.candidumgames.unitymmdtools/package.json |
 | 运行时 PMX 导入 | 已完成 | RuntimeMmdModelLoader.cs、PMX 冒烟测试 |
-| 桌面端预览 | 已完成 | Builds/ForestBerryPreview.png |
+| 桌面端预览 | 已完成 | Quest MMD Player > Render Model Preview |
 | Quest APK 构建 | 已完成 | Builds/Banxia.apk |
 | XR Hands/控制器输入 | 已完成，待真机体验确认 | AvatarHumanInteraction.cs、AvatarTouchInteraction.cs |
 | 握手/摸头/捏脸传感 | 已完成；默认本地即时反应，语义上报显式开启 | HUD 模拟、Mock avatar.intent、编辑器测试 |

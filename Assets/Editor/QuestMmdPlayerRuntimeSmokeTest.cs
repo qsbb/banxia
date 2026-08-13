@@ -12,8 +12,8 @@ namespace QuestMmdPlayer.Editor
         [MenuItem("Quest MMD Player/Run Runtime PMX Smoke Test")]
         public static void Run()
         {
-            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-            string pmxPath = Path.Combine(projectRoot, "Assets", "StreamingAssets", "MmdSamples", "ForestBerry", "ForestBerry.pmx");
+            string pmxPath = EditorUtility.OpenFilePanel("Select a local PMX model", string.Empty, "pmx");
+            if (string.IsNullOrWhiteSpace(pmxPath)) return;
             string textureDirectory = Path.GetDirectoryName(pmxPath);
             PMXImportResult result = null;
 
@@ -21,7 +21,7 @@ namespace QuestMmdPlayer.Editor
             {
                 if (!File.Exists(pmxPath))
                 {
-                    throw new FileNotFoundException("Bundled PMX sample was not found.", pmxPath);
+                    throw new FileNotFoundException("Selected PMX model was not found.", pmxPath);
                 }
 
                 var options = new PMXImportOptions

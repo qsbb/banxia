@@ -21,7 +21,7 @@ powershell -ExecutionPolicy Bypass -File .\test_frontend.ps1 -Strict
 - 手势/手柄输入
 - 长时间运行的发热和稳定性
 
-本阶段示例模型位于 Assets/StreamingAssets/MmdSamples/ForestBerry。以后接入文件选择器或 AstrBot 时，调用 RuntimeMmdModelLoader.LoadFromFileAsync 即可换成其他 PMX，不需要重新转换成 GLB。
+生产 APK 不内置角色模型。请在设备端导入并选择 PMX；编辑器冒烟测试通过文件选择器读取本地 PMX，模型和贴图不会进入版本库或 APK。
 ## Quest 当前交互
 
 - 左手菜单键：在面前打开中文 World Space 菜单。

@@ -37,11 +37,13 @@ quest_avatar_bridge.json
 
 # User-provided avatar assets are local-only unless their authors grant redistribution.
 /Assets/Models/Source/
-/Assets/Models/Imported/ForestBerry.glb
-/Assets/Models/Imported/ForestBerry.glb.meta
-/Assets/StreamingAssets/MmdSamples/ForestBerry/*
-!/Assets/StreamingAssets/MmdSamples/ForestBerry/README.md
-!/Assets/StreamingAssets/MmdSamples/ForestBerry/README.md.meta
+/Assets/Models/Imported/*.glb
+/Assets/Models/Imported/*.glb.meta
+/Assets/StreamingAssets/**/*.pmx
+/Assets/StreamingAssets/**/*.pmd
+/Assets/StreamingAssets/**/*.vrm
+/Assets/StreamingAssets/**/*.glb
+/Assets/StreamingAssets/**/*.gltf
 
 # External motions are installed on-device or in persistent data, never committed by default.
 /Assets/StreamingAssets/Motions/

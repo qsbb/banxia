@@ -1,5 +1,7 @@
 #if UNITY_EDITOR
+using System;
 using System.IO;
+using System.Linq;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
@@ -17,13 +19,23 @@ using UnityEngine.XR.Hands.OpenXR;
 
 namespace QuestMmdPlayer.Editor
 {
+    internal sealed class QuestMmdPlayerBundledAvatarBuildGuard : IPreprocessBuildWithReport
+    {
+        public int callbackOrder => -10000;
+
+        public void OnPreprocessBuild(BuildReport report)
+        {
+            QuestMmdPlayerBuild.ValidateNoBundledAvatarModels();
+        }
+    }
+
     public static class QuestMmdPlayerBuild
     {
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
         private const string OutputPath = "Builds/Banxia.apk";
         private const string AndroidApplicationIdentifier = "com.lingxi.banxia";
-        private const string AndroidVersionName = "0.2.0";
-        private const int AndroidVersionCode = 11;
+        private const string AndroidVersionName = "0.2.1";
+        private const int AndroidVersionCode = 12;
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
         private static readonly string[] RuntimeShaderNames =
@@ -31,11 +43,16 @@ namespace QuestMmdPlayer.Editor
             "Universal Render Pipeline/Unlit",
             "QuestMmdPlayer/Avatar Outline"
         };
+        private static readonly string[] BundledAvatarExtensions =
+        {
+            ".pmx", ".pmd", ".vrm", ".glb", ".gltf"
+        };
 
         [MenuItem("Quest MMD Player/Build Android APK")]
         public static void BuildAndroidApk()
         {
             QuestMmdPlayerMenu.CreatePrototypeScene();
+            ValidateNoBundledAvatarModels();
 
             if (!EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android))
             {
@@ -74,6 +91,27 @@ namespace QuestMmdPlayer.Editor
             }
 
             Debug.Log($"Android APK created: {report.summary.outputPath} ({report.summary.totalSize} bytes)");
+        }
+
+        internal static void ValidateNoBundledAvatarModels(string assetsRootOverride = null)
+        {
+            var assetsRoot = string.IsNullOrWhiteSpace(assetsRootOverride)
+                ? Application.dataPath
+                : assetsRootOverride;
+            if (!Directory.Exists(assetsRoot)) return;
+
+            var bundledModels = Directory.GetFiles(assetsRoot, "*", SearchOption.AllDirectories)
+                .Where(path => BundledAvatarExtensions.Contains(
+                    Path.GetExtension(path),
+                    StringComparer.OrdinalIgnoreCase))
+                .Select(path => path.Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (bundledModels.Length == 0) return;
+
+            throw new BuildFailedException(
+                "Production Assets must not contain avatar model sources. Import them on-device instead: " +
+                string.Join(", ", bundledModels));
         }
 
         private static void ConfigureRuntimeShaders()

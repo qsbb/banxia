@@ -12,8 +12,8 @@ namespace QuestMmdPlayer.Editor
 {
     public static class QuestMmdHumanInteractionPreview
     {
-        private const string PmxPath = "Assets/StreamingAssets/MmdSamples/ForestBerry/ForestBerry.pmx";
         private const string OutputDirectory = "Builds/HumanInteractionPreviews";
+        private static string selectedPmxPath;
 
         private struct View
         {
@@ -26,6 +26,8 @@ namespace QuestMmdPlayer.Editor
         public static void RenderAll()
         {
             QuestMmdPlayerMenu.EnsureRenderPipeline();
+            selectedPmxPath = EditorUtility.OpenFilePanel("Select a local PMX model", string.Empty, "pmx");
+            if (string.IsNullOrWhiteSpace(selectedPmxPath)) return;
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             Directory.CreateDirectory(OutputDirectory);
             RenderInteraction(HumanInteractionKind.None, "idle", 1f);
@@ -38,8 +40,7 @@ namespace QuestMmdPlayer.Editor
 
         private static void RenderInteraction(HumanInteractionKind kind, string fileName, float frameHeight)
         {
-            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-            string pmxPath = Path.Combine(projectRoot, PmxPath.Replace('/', Path.DirectorySeparatorChar));
+            string pmxPath = selectedPmxPath;
             PMXImportResult result = null;
             GameObject host = null;
             GameObject cameraObject = null;

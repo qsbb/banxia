@@ -27,5 +27,5 @@ local development inputs. They are excluded from Git by default and are not
 covered by any source-code license for this project. Add or redistribute them
 only when the original author explicitly permits it.
 
-The `Assets/StreamingAssets/MmdSamples/ForestBerry/README.md` placeholder
-documents the expected local smoke-test layout without granting redistribution.
+No third-party avatar model or avatar texture is bundled with the production APK.
+Models imported by users remain subject to their original authors' terms.
