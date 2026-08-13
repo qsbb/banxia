@@ -468,7 +468,8 @@ namespace QuestMmdPlayer
         private void BuildDebugPanel()
         {
             debugLayer = CreateUiObject("Debug Layer", menuRoot.transform, new Vector2(-610f, 0f), new Vector2(440f, 680f));
-            CreateImage("Sidebar Background", debugLayer.transform, Vector2.zero, new Vector2(440f, 680f), new Color(.035f, .055f, .06f, .985f));
+            var background = CreateImage("Sidebar Background", debugLayer.transform, Vector2.zero, new Vector2(440f, 680f), new Color(.035f, .055f, .06f, .985f));
+            AddInputBlocker(background.gameObject, new Vector2(440f, 680f), debugLayer.transform);
             CreateImage("Accent", debugLayer.transform, new Vector2(0f, 335f), new Vector2(440f, 10f), new Color(.25f, .86f, .66f, 1f));
             CreateText("运行诊断", debugLayer.transform, new Vector2(0f, 292f), new Vector2(400f, 44f), 24, FontStyle.Bold, Color.white);
             CreateText("实时刷新  ·  主菜单可同时操作", debugLayer.transform, new Vector2(0f, 254f), new Vector2(400f, 26f), 12, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
@@ -818,7 +819,7 @@ namespace QuestMmdPlayer
         {
             var normalized = string.IsNullOrWhiteSpace(action) ? "idle" : action.ToLowerInvariant();
             owner.VmdActions?.StopAndReturnToIdle();
-            owner.Avatar.PlayAction(normalized);
+            owner.Avatar.PlayActionFromSource(normalized, AvatarActionSource.Manual);
             if (returnToMain)
             {
                 ShowMainPanel();
@@ -1862,24 +1863,46 @@ namespace QuestMmdPlayer
             var ray = new Ray(pose.position, pose.rotation * Vector3.forward);
             var hitCount = Physics.RaycastNonAlloc(ray, pointer.hits, pointerLength, ~0, QueryTriggerInteraction.Collide);
             var bestDistance = float.MaxValue;
+            var blockerDistance = float.MaxValue;
+            CompanionMenuInputBlocker blocker = null;
             var end = ray.origin + ray.direction * pointerLength;
             CompanionMenuButtonTarget best = null;
             for (var i = 0; i < hitCount; i++)
             {
-                var target = pointer.hits[i].collider == null
+                var hit = pointer.hits[i];
+                var hitBlocker = hit.collider == null ? null : hit.collider.GetComponent<CompanionMenuInputBlocker>();
+                if (hitBlocker != null && hit.distance < blockerDistance)
+                {
+                    blockerDistance = hit.distance;
+                    blocker = hitBlocker;
+                    end = hit.point;
+                }
+
+                var target = hit.collider == null
                     ? null
-                    : pointer.hits[i].collider.GetComponent<CompanionMenuButtonTarget>();
+                    : hit.collider.GetComponent<CompanionMenuButtonTarget>();
+                var targetAllowedByBlocker = blocker == null || blocker.AllowedLayer == null ||
+                    (target != null && target.transform.IsChildOf(blocker.AllowedLayer));
                 if (target == null ||
                     !target.IsInteractive ||
                     !IsTargetInFocusedLayer(target) ||
-                    pointer.hits[i].distance >= bestDistance)
+                    hit.distance >= bestDistance ||
+                    (!targetAllowedByBlocker && hit.distance > blockerDistance + .002f))
                 {
                     continue;
                 }
 
                 best = target;
-                bestDistance = pointer.hits[i].distance;
-                end = pointer.hits[i].point;
+                bestDistance = hit.distance;
+                end = hit.point;
+            }
+
+            // RaycastNonAlloc does not guarantee hit ordering. A modal
+            // backdrop always wins over a deeper button from another layer.
+            if (best != null && blocker != null && bestDistance > blockerDistance + .002f &&
+                (blocker.AllowedLayer == null || !best.transform.IsChildOf(blocker.AllowedLayer)))
+            {
+                best = null;
             }
 
             pointer.hovered = best;
@@ -2129,12 +2152,16 @@ namespace QuestMmdPlayer
 
         private static void AddModalBlocker(GameObject background, Vector2 size)
         {
-            if (background == null)
-            {
-                return;
-            }
+            AddInputBlocker(background, size, background == null ? null : background.transform.parent);
+        }
+
+        private static void AddInputBlocker(GameObject background, Vector2 size, Transform allowedLayer)
+        {
+            if (background == null) return;
             var collider = background.AddComponent<BoxCollider>();
             collider.size = new Vector3(size.x, size.y, 8f);
+            var blocker = background.AddComponent<CompanionMenuInputBlocker>();
+            blocker.Configure(allowedLayer);
         }
         private void ClearHoverVisuals()
         {
@@ -2368,6 +2395,16 @@ namespace QuestMmdPlayer
             {
                 button.onClick.Invoke();
             }
+        }
+    }
+
+    internal sealed class CompanionMenuInputBlocker : MonoBehaviour
+    {
+        internal Transform AllowedLayer { get; private set; }
+
+        internal void Configure(Transform allowedLayer)
+        {
+            AllowedLayer = allowedLayer;
         }
     }
 }

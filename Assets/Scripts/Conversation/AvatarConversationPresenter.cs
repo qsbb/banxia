@@ -193,7 +193,7 @@ namespace QuestMmdPlayer
                 }
                 else
                 {
-                    avatar.PlayAction(acceptedGesture);
+                    avatar.PlayActionFromSource(acceptedGesture, AvatarActionSource.Backend);
                 }
             }
         }
@@ -234,7 +234,7 @@ namespace QuestMmdPlayer
 
             if (avatar != null)
             {
-                avatar.PlayAction(normalized);
+                avatar.PlayActionFromSource(normalized, AvatarActionSource.Manual);
             }
         }
 
@@ -302,7 +302,7 @@ namespace QuestMmdPlayer
             // A built-in fallback keeps the explicit request visible even when
             // no imported dance is installed or the VMD is not compatible.
             diagnostics?.Record("AvatarAction", "播放内置舞蹈回退动作");
-            avatar?.PlayAction("dance");
+            avatar?.PlayActionFromSource("dance", AvatarActionSource.Backend);
         }
 
         public static string NormalizeExpression(string expression)
@@ -345,7 +345,7 @@ namespace QuestMmdPlayer
                     out var gesture))
             {
                 diagnostics?.Record("AvatarAction", "自动待机动作：" + gesture);
-                avatar.PlayAction(gesture);
+                avatar.PlayActionFromSource(gesture, AvatarActionSource.Idle);
             }
         }
 
@@ -361,7 +361,8 @@ namespace QuestMmdPlayer
             var normalized = string.IsNullOrWhiteSpace(nextAction) ? "idle" : nextAction;
             diagnostics?.Record(
                 "AvatarAction",
-                "\u52a8\u4f5c\u5207\u6362: " + lastLoggedAction + " -> " + normalized);
+                "\u52a8\u4f5c\u5207\u6362: " + lastLoggedAction + " -> " + normalized +
+                " source=" + (avatar == null ? AvatarActionSource.Unknown : avatar.CurrentActionSource));
             diagnostics?.RecordStage("avatar_action", "completed", "action_state_changed");
             lastLoggedAction = normalized;
         }

@@ -310,6 +310,8 @@ namespace QuestMmdPlayer
                 case "audio_buffer": return "播放缓冲";
                 case "reply": return "回复结束";
                 case "avatar_action": return "角色动作";
+                case "hand_contact": return "手部触碰";
+                case "spatial_context": return "房间语义";
                 case "interrupt": return "打断";
                 default: return value;
             }

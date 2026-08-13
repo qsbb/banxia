@@ -327,6 +327,7 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(mainLayer.gameObject.activeSelf, Is.True);
                 Assert.That(debugLayer.gameObject.activeSelf, Is.True);
                 Assert.That(debugLayer.localPosition.x, Is.LessThan(-360f));
+                Assert.That(debugLayer.Find("Sidebar Background").GetComponent("CompanionMenuInputBlocker"), Is.Not.Null);
 
                 InvokeTargetMethod(menu, "ShowActionPanel");
                 Assert.That(debugLayer.gameObject.activeSelf, Is.True);

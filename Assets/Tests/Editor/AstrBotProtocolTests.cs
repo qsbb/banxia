@@ -229,6 +229,64 @@ namespace QuestMmdPlayer.Tests
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out error), Is.False);
         }
 
+        [Test]
+        public void SpatialContextPayloadIsBoundedAndContainsNoRoomGeometry()
+        {
+            var semantic = new RoomSemanticSnapshot
+            {
+                FloorCount = 2,
+                SeatCount = 3,
+                BedCount = 1,
+                TableCount = 4,
+                WallCount = 100,
+                DoorCount = -2,
+                WindowCount = 5
+            };
+            var capabilities = new SpatialCapabilitySnapshot
+            {
+                MetaOpenXr = SpatialCapabilityState.Available,
+                Occlusion = SpatialCapabilityState.Fallback
+            };
+
+            var payload = AstrBotBridge.CreateSpatialContextRequest(
+                "session-1", 7, semantic, capabilities);
+            var json = UnityEngine.JsonUtility.ToJson(payload);
+
+            Assert.That(payload.wall_count, Is.EqualTo(64));
+            Assert.That(payload.door_count, Is.Zero);
+            Assert.That(payload.scene_capture_available, Is.True);
+            Assert.That(payload.occlusion_available, Is.False);
+            Assert.That(json, Does.Contain("\"bed_count\":1"));
+            Assert.That(json, Does.Not.Contain("position"));
+            Assert.That(json, Does.Not.Contain("rotation"));
+            Assert.That(json, Does.Not.Contain("anchor"));
+            Assert.That(json, Does.Not.Contain("mesh"));
+            Assert.That(json, Does.Not.Contain("path"));
+        }
+
+        [Test]
+        public void SpatialContextSignatureIgnoresSessionAndRevisionForDedupe()
+        {
+            var left = new SpatialContextRequest
+            {
+                session_id = "session-a",
+                revision = 3,
+                floor_count = 1,
+                scene_capture_available = true
+            };
+            var right = new SpatialContextRequest
+            {
+                session_id = "session-b",
+                revision = 42,
+                floor_count = 1,
+                scene_capture_available = true
+            };
+
+            Assert.That(left.ContentSignature(), Is.EqualTo(right.ContentSignature()));
+            right.floor_count = 2;
+            Assert.That(left.ContentSignature(), Is.Not.EqualTo(right.ContentSignature()));
+        }
+
         private static AstrBotBridgeSettings ValidSettings()
         {
             return new AstrBotBridgeSettings

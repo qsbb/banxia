@@ -87,6 +87,9 @@ namespace QuestMmdPlayer
         public RoomPlacementCandidate PreparedSeatTarget { get; private set; }
         public bool HasPreparedRestingTarget { get; private set; }
         public RoomPlacementCandidate PreparedRestingTarget { get; private set; }
+        public SpatialCapabilitySnapshot SpatialCapabilities => roomUnderstanding == null
+            ? default
+            : roomUnderstanding.Capabilities;
         public bool IsRestingOrAligning => hasRestingPose || restingAlignmentActive || returningToStanding ||
             string.Equals(avatar == null ? string.Empty : avatar.CurrentAction, "sit", StringComparison.Ordinal) ||
             string.Equals(avatar == null ? string.Empty : avatar.CurrentAction, "lie_down", StringComparison.Ordinal);
@@ -441,11 +444,13 @@ namespace QuestMmdPlayer
             var viewer = new Pose(headCamera.transform.position, headCamera.transform.rotation);
             if (!roomUnderstanding.TryFindNearestSeat(viewer, out var target))
             {
+                diagnostics?.RecordStage("spatial", "limited", "seat_surface_unavailable");
                 return false;
             }
 
             PreparedSeatTarget = target;
             HasPreparedSeatTarget = true;
+            diagnostics?.RecordStage("spatial", "ready", "seat_surface_selected");
             return true;
         }
 
@@ -471,11 +476,13 @@ namespace QuestMmdPlayer
             var viewer = new Pose(headCamera.transform.position, headCamera.transform.rotation);
             if (!roomUnderstanding.TryFindNearestRestingSurface(viewer, out var target))
             {
+                diagnostics?.RecordStage("spatial", "limited", "rest_surface_unavailable");
                 return false;
             }
 
             PreparedRestingTarget = target;
             HasPreparedRestingTarget = true;
+            diagnostics?.RecordStage("spatial", "ready", "rest_surface_selected");
             return true;
         }
 
@@ -552,7 +559,7 @@ namespace QuestMmdPlayer
             if (!string.Equals(avatar.CurrentAction, "idle", StringComparison.Ordinal))
             {
                 internalRestActionChange = true;
-                avatar.PlayAction("idle");
+                avatar.PlayActionFromSource("idle", AvatarActionSource.System);
                 internalRestActionChange = false;
             }
             diagnostics?.RecordStage("avatar_action", "processing", "rest_return_started");
@@ -606,7 +613,7 @@ namespace QuestMmdPlayer
                 restingAlignmentActive = false;
                 hasRestingPose = true;
                 internalRestActionChange = true;
-                avatar.PlayAction(restingAction);
+                avatar.PlayActionFromSource(restingAction, AvatarActionSource.Backend);
                 internalRestActionChange = false;
                 diagnostics?.RecordStage("avatar_action", "completed", "rest_alignment_completed");
                 return;
@@ -620,7 +627,7 @@ namespace QuestMmdPlayer
             if (!string.IsNullOrWhiteSpace(next) && next != "idle")
             {
                 internalRestActionChange = true;
-                avatar.PlayAction(next);
+                avatar.PlayActionFromSource(next, AvatarActionSource.Backend);
                 internalRestActionChange = false;
             }
         }
@@ -960,6 +967,10 @@ namespace QuestMmdPlayer
                 maximumUserHeight);
             hasHeightCalibration = true;
             Debug.Log($"[AvatarPlacement] Height reset: {estimatedUserHeight:F2}m; floor={floorHeight:F3}.", this);
+            diagnostics?.RecordStage(
+                "spatial",
+                "ready",
+                hasCalibratedFloor ? "height_reset_with_floor" : "height_reset_fallback");
         }
 
         private void RequestFloorTrackingOrigin()

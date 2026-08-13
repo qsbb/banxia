@@ -22,6 +22,7 @@ namespace QuestMmdPlayer
         private float actionClock;
         private bool isPlaying = true;
         private string currentAction = "idle";
+        private AvatarActionSource currentActionSource = AvatarActionSource.Idle;
         private string currentEmotion = "neutral";
         private Transform upperBody;
         private Transform head;
@@ -77,6 +78,7 @@ namespace QuestMmdPlayer
         public Transform VisualRoot => visualRoot;
 
         public string CurrentAction => currentAction;
+        public AvatarActionSource CurrentActionSource => currentActionSource;
         public string CurrentEmotion => currentEmotion;
         public bool IsPlaying => isPlaying;
 
@@ -120,7 +122,7 @@ namespace QuestMmdPlayer
                 ApplyWave();
                 if (actionClock >= WaveDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "bow")
@@ -128,7 +130,7 @@ namespace QuestMmdPlayer
                 ApplyBow();
                 if (actionClock >= BowDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "nod")
@@ -136,7 +138,7 @@ namespace QuestMmdPlayer
                 ApplyNod();
                 if (actionClock >= NodDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "sway")
@@ -144,7 +146,7 @@ namespace QuestMmdPlayer
                 ApplySway();
                 if (actionClock >= SwayDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "dance")
@@ -152,7 +154,7 @@ namespace QuestMmdPlayer
                 ApplyDance();
                 if (actionClock >= DanceDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "raise_hand")
@@ -160,7 +162,7 @@ namespace QuestMmdPlayer
                 ApplyRaiseHand();
                 if (actionClock >= RaiseHandDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "turn_half")
@@ -168,7 +170,7 @@ namespace QuestMmdPlayer
                 ApplyTurnHalf();
                 if (actionClock >= TurnHalfDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "refuse")
@@ -176,7 +178,7 @@ namespace QuestMmdPlayer
                 ApplyRefuse();
                 if (actionClock >= RefuseDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "step_back")
@@ -184,7 +186,7 @@ namespace QuestMmdPlayer
                 ApplyStepBack();
                 if (actionClock >= StepBackDuration)
                 {
-                    PlayAction("idle");
+                    PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
             else if (currentAction == "sit")
@@ -706,9 +708,30 @@ namespace QuestMmdPlayer
 
         public void PlayAction(string actionName)
         {
+            PlayActionFromSource(actionName, AvatarActionSource.Manual);
+        }
+
+        public bool PlayActionFromSource(string actionName, AvatarActionSource source)
+        {
             var previous = currentAction;
+            var normalized = AvatarMotionArbiter.Normalize(actionName);
+            var importedBusy = string.Equals(currentAction, "vmd", StringComparison.Ordinal) &&
+                source != AvatarActionSource.Imported && source != AvatarActionSource.System;
+            var decision = AvatarMotionArbiter.Decide(
+                currentActionSource,
+                source,
+                currentAction,
+                normalized,
+                importedBusy);
+            if (!decision.Accepted)
+            {
+                Debug.Log("[AvatarAction] rejected=" + normalized + " source=" + source +
+                    " current=" + currentAction + " reason=" + decision.Reason, this);
+                return false;
+            }
             CaptureTransitionPose();
-            currentAction = string.IsNullOrWhiteSpace(actionName) ? "idle" : actionName.ToLowerInvariant();
+            currentAction = string.IsNullOrWhiteSpace(normalized) ? "idle" : normalized;
+            currentActionSource = currentAction == "idle" ? AvatarActionSource.Idle : source;
             actionClock = 0f;
             actionWorldStartPosition = transform.position;
             actionWorldTargetPosition = currentAction == "step_back"
@@ -721,7 +744,8 @@ namespace QuestMmdPlayer
             isPlaying = true;
             ActionChanged?.Invoke(currentAction);
             Debug.Log("[AvatarAction] transition=" + previous + "->" + currentAction +
-                " blend_ms=" + Mathf.RoundToInt(ActionTransitionSeconds * 1000f), this);
+                " source=" + source + " blend_ms=" + Mathf.RoundToInt(ActionTransitionSeconds * 1000f), this);
+            return true;
         }
 
         public void SetEmotion(string emotion)
@@ -747,7 +771,7 @@ namespace QuestMmdPlayer
             transform.position = initialPosition;
             transform.rotation = initialRotation;
             transform.localScale = initialScale;
-            PlayAction("idle");
+            PlayActionFromSource("idle", AvatarActionSource.System);
         }
     }
 }

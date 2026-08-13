@@ -13,6 +13,9 @@ namespace QuestMmdPlayer.Tests
         [TestCase("换个舞蹈吧", "dance_next")]
         [TestCase("把右手抬起来", "raise_hand")]
         [TestCase("转半圈看看", "turn_half")]
+        [TestCase("帮我跳个舞", "dance")]
+        [TestCase("让她随便跳个舞", "dance")]
+        [TestCase("让角色换个舞蹈", "dance_next")]
         public void DetectsExplicitActionRequest(string text, string expected)
         {
             Assert.That(ConversationActionIntent.TryDetect(text, out var action), Is.True);

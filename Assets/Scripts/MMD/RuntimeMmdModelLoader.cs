@@ -9,6 +9,16 @@ using UnityEngine;
 
 namespace QuestMmdPlayer
 {
+    public enum RuntimeModelLoadPhase
+    {
+        Idle,
+        Reading,
+        Building,
+        Ready,
+        Cancelled,
+        Failed
+    }
+
     [Serializable]
     public sealed class RuntimeMmdModelInfo
     {
@@ -56,6 +66,10 @@ namespace QuestMmdPlayer
         public PMXModel CurrentMmdModel => currentResult == null ? null : currentResult.model;
         public bool IsLoading { get; private set; }
         public string CurrentModelPath { get; private set; }
+        public RuntimeModelLoadPhase LoadPhase { get; private set; } = RuntimeModelLoadPhase.Idle;
+        public int LastLoadMilliseconds { get; private set; } = -1;
+        public int LastReadMilliseconds { get; private set; } = -1;
+        public int LastBuildMilliseconds { get; private set; } = -1;
 
         private void Awake()
         {
@@ -213,6 +227,8 @@ namespace QuestMmdPlayer
             loadCancellation = new CancellationTokenSource();
             var token = loadCancellation.Token;
             IsLoading = true;
+            LoadPhase = RuntimeModelLoadPhase.Reading;
+            var loadStartedAt = Time.realtimeSinceStartup;
             NotifyProgress("Reading PMX");
 
             PMXImportResult importedResult = null;
@@ -236,15 +252,21 @@ namespace QuestMmdPlayer
                 importedResult = null;
                 importedAvatarHost = null;
                 NotifyProgress("Model ready");
+                LoadPhase = RuntimeModelLoadPhase.Ready;
+                LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
                 NotifyAvatarLoaded(avatar);
                 return avatar;
             }
             catch (OperationCanceledException)
             {
+                LoadPhase = RuntimeModelLoadPhase.Cancelled;
+                LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
                 throw;
             }
             catch (Exception exception)
             {
+                LoadPhase = RuntimeModelLoadPhase.Failed;
+                LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
                 Debug.LogException(exception, this);
                 NotifyLoadFailed(exception.Message);
                 throw;
@@ -268,14 +290,18 @@ namespace QuestMmdPlayer
         {
             var budget = new UMTFrameBudget(frameBudgetMilliseconds);
             PMXModel model;
+            var readStartedAt = Time.realtimeSinceStartup;
             using (var stream = File.OpenRead(pmxPath))
             {
                 model = await PMXReader.ReadAsync(budget, stream, true);
             }
+            LastReadMilliseconds = ElapsedMilliseconds(readStartedAt);
 
             token.ThrowIfCancellationRequested();
             PreserveOriginalNames(model);
+            LoadPhase = RuntimeModelLoadPhase.Building;
             NotifyProgress("Building MMD materials and skeleton");
+            var buildStartedAt = Time.realtimeSinceStartup;
             var options = new PMXImportOptions
             {
                 sourcePath = pmxPath,
@@ -291,6 +317,7 @@ namespace QuestMmdPlayer
             // required to build meshes, textures, MMD physics, or morph data.
             token.ThrowIfCancellationRequested();
             var result = await PMXImporter.BuildUnityObjectsAsync(budget, model, options);
+            LastBuildMilliseconds = ElapsedMilliseconds(buildStartedAt);
             if (result.warnings.Count > 0)
             {
                 foreach (var warning in result.warnings)
@@ -300,6 +327,12 @@ namespace QuestMmdPlayer
             }
 
             return result;
+        }
+
+        public static int ElapsedMilliseconds(float startedAt, float now = -1f)
+        {
+            var current = now < 0f ? Time.realtimeSinceStartup : now;
+            return Mathf.Max(0, Mathf.RoundToInt((current - startedAt) * 1000f));
         }
 
         private static void PreserveOriginalNames(PMXModel model)

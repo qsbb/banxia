@@ -35,6 +35,8 @@ namespace QuestMmdPlayer
         [SerializeField, Range(.02f, .25f)] private float trackingLossVisualGrace = .10f;
         [SerializeField, Range(.02f, .08f)] private float pinchEnterDistance = .032f;
         [SerializeField, Range(.025f, .10f)] private float pinchReleaseDistance = .045f;
+        [SerializeField, Range(.04f, .5f)] private float contactFactUpdateInterval = .10f;
+        [SerializeField, Range(.25f, 5f)] private float contactDiagnosticHoverInterval = 1f;
         [SerializeField] private Material handMaterial;
 
         private readonly List<XRHandSubsystem> subsystems = new List<XRHandSubsystem>();
@@ -44,10 +46,34 @@ namespace QuestMmdPlayer
         private Transform trackingSpace;
         private AvatarContactRegion lastPhysicalContact;
         private float lastPhysicalContactLogAt = float.NegativeInfinity;
+        private readonly TrackedHandContactAggregator contactAggregator = new TrackedHandContactAggregator();
+        private readonly PokeInteractionLifecycle pokeLifecycle = new PokeInteractionLifecycle();
+        private RuntimeDebugLog diagnostics;
+        private float lastContactDiagnosticHoverAt = float.NegativeInfinity;
 
         public string Status { get; private set; } = "代理手等待 XR 输入";
         public int TrackedHandCount { get; private set; }
+        public int ActiveContactCount { get; private set; }
+        public TrackedHandContactFact LatestContactFact { get; private set; }
         public const int PhysicsProbeCount = 12;
+        public bool HandsVisible => showHands;
+
+        public void SetHandsVisible(bool visible)
+        {
+            showHands = visible;
+            // Do not feed the already-rendered state back into the state
+            // machine. Once showHands is false, visual.visible is also false;
+            // using it here made a later enable request unable to recover.
+            SetVisible(left, ShouldShowTrackedHand(left.inputSource, showHands), false);
+            SetVisible(right, ShouldShowTrackedHand(right.inputSource, showHands), false);
+        }
+
+        /// <summary>
+        /// Provider-neutral observations only. The detector does not move the
+        /// tracked hand or decide which avatar reaction should play.
+        /// </summary>
+        public event Action<TrackedHandContactFact> ContactFactChanged;
+        public event Action<PokeInteractionEvent> PokeEvent;
 
         private static readonly int[] PhysicsProbeJointIndices = { 1, 5, 10, 15, 20, 25 };
 
@@ -99,6 +125,7 @@ namespace QuestMmdPlayer
             internal Collider[] contactColliders;
             internal LineRenderer[] lines;
             internal TrackedHandContactRelay[] relays;
+            internal TrackedHandContactTracker[] contactTrackers;
             internal bool[] jointTracked;
             internal Vector3[] previousJointPositions;
             internal bool[] previousJointTracked;
@@ -151,6 +178,9 @@ namespace QuestMmdPlayer
 
         private void Awake()
         {
+            diagnostics = GetComponent<RuntimeDebugLog>();
+            contactAggregator.RawFactChanged += HandleRawContactFact;
+            contactAggregator.FactChanged += HandleContactFact;
             BuildHand(left);
             BuildHand(right);
         }
@@ -164,19 +194,18 @@ namespace QuestMmdPlayer
             tracked += UpdateTrackedHand(right, subsystem == null ? default(XRHand) : subsystem.rightHand, subsystem != null);
             TrackedHandCount = tracked;
             var trackingLabel = tracked == 2 ? "双手追踪" : tracked == 1 ? "单手追踪" : "控制器或无 XR 输入";
-            Status = trackingLabel + " | 左:" + left.inputSource + " 右:" + right.inputSource;
+            Status = trackingLabel + " | 左：" + left.inputSource + " 右：" + right.inputSource;
         }
 
-        private void FixedUpdate()
+        private void LateUpdate()
         {
-            // Hand joints and PMX proxies are driven from XR/animation Update
-            // callbacks. Explicitly publish those Transform changes before
-            // querying penetration or swept contacts; relying on
-            // Physics.autoSyncTransforms makes contact one frame late (or
-            // invisible on Quest where it is commonly disabled for performance).
+            // Hand joints are written in Update and the UMT avatar solver runs
+            // before this component (see DefaultExecutionOrder). Explicitly
+            // publish both sets of Transform changes before ComputePenetration.
             Physics.SyncTransforms();
             EvaluatePhysicalContacts(left);
             EvaluatePhysicalContacts(right);
+            ActiveContactCount = CountActiveContacts(left) + CountActiveContacts(right);
         }
 
         private void EvaluatePhysicalContacts(HandVisual visual)
@@ -184,18 +213,22 @@ namespace QuestMmdPlayer
             if (interaction == null || visual.root == null || !visual.root.activeInHierarchy ||
                 visual.contactColliders == null)
             {
+                EndContactFacts(visual);
                 return;
             }
 
             for (var index = 0; index < visual.contactColliders.Length; index++)
             {
+                var tracker = visual.contactTrackers == null ? null : visual.contactTrackers[index];
                 if (!(visual.contactColliders[index] is SphereCollider sphere) || !sphere.enabled)
                 {
+                    tracker?.Clear(Time.unscaledTime);
                     continue;
                 }
                 var probe = ContactProbeForJoint(JointIds[index]);
                 if (probe == TrackedHandContactProbe.None)
                 {
+                    tracker?.Clear(Time.unscaledTime);
                     continue;
                 }
                 var center = sphere.transform.TransformPoint(sphere.center);
@@ -215,19 +248,43 @@ namespace QuestMmdPlayer
                     out var sweptRegion,
                     out var contactPoint);
                 var region = swept ? sweptRegion : penetrationRegion;
-                if ((swept || hasPenetration) &&
-                    ShouldReportContact(probe, region, visual.pinching))
+                var reportsContact = (swept || hasPenetration) &&
+                    ShouldReportContact(probe, region, visual.pinching);
+                if (reportsContact)
                 {
                     // XR pose is authoritative: never displace the rendered hand.
                     // ComputePenetration returns the vector that would move the
                     // hand out of the avatar, so its inverse is the compliant
                     // push applied to the avatar pose/UMT physics response.
-                    var avatarPush = hasPenetration ? -penetrationCorrection : Vector3.zero;
-                    interaction.ReportTrackedHandContact(
+                    var observationPoint = swept ? contactPoint : center;
+                    var normal = hasPenetration && penetrationRegion == region &&
+                                 penetrationCorrection.sqrMagnitude > .0000001f
+                        ? penetrationCorrection.normalized
+                        : Vector3.zero;
+                    if (interaction.TryGetContactSurface(
+                            observationPoint,
+                            Mathf.Max(.005f, radius),
+                            region,
+                            out var surfacePoint,
+                            out var sampledNormal))
+                    {
+                        observationPoint = surfacePoint;
+                        if (normal.sqrMagnitude <= .0000001f)
+                        {
+                            normal = sampledNormal;
+                        }
+                    }
+                    tracker?.Observe(
                         region,
+                        observationPoint,
+                        normal,
+                        hasPenetration && penetrationRegion == region
+                            ? penetrationCorrection.magnitude
+                            : 0f,
                         visual.pinching,
-                        swept ? contactPoint : center,
-                        avatarPush);
+                        string.Equals(visual.inputSource, "hand_tracking", StringComparison.Ordinal),
+                        Time.unscaledTime,
+                        contactFactUpdateInterval);
                     if (lastPhysicalContact != region ||
                         Time.unscaledTime - lastPhysicalContactLogAt >= .75f)
                     {
@@ -236,8 +293,101 @@ namespace QuestMmdPlayer
                         Debug.Log("[HandTracking] Physical contact: " + region + " (continuous sweep).", this);
                     }
                 }
+                else
+                {
+                    tracker?.Clear(Time.unscaledTime);
+                }
                 visual.previousJointPositions[index] = center;
                 visual.previousJointTracked[index] = true;
+            }
+        }
+
+        private void HandleContactFact(TrackedHandContactFact fact)
+        {
+            LatestContactFact = fact;
+            // Publish Poke lifecycle from the aggregate stream, not individual
+            // probes, so a palm/fingertip handoff does not produce a false Exit.
+            PokeEvent?.Invoke(pokeLifecycle.Observe(fact));
+            var diagnosticNow = Time.unscaledTime;
+            if (diagnostics != null && ShouldRecordContactDiagnostic(
+                    fact.Phase,
+                    diagnosticNow,
+                    lastContactDiagnosticHoverAt,
+                    contactDiagnosticHoverInterval))
+            {
+                diagnostics.RecordStage(
+                    "hand_contact",
+                    fact.Phase == TrackedHandContactPhase.Ended ? "completed" : "processing",
+                    ContactDiagnosticCode(fact),
+                    elapsedMs: Mathf.RoundToInt(fact.DurationSeconds * 1000f));
+                if (fact.Phase != TrackedHandContactPhase.Ended)
+                {
+                    lastContactDiagnosticHoverAt = diagnosticNow;
+                }
+            }
+            // The aggregator emits one stable semantic fact for all active
+            // palm/fingertip probes. An Ended fact is intentionally forwarded
+            // only when no replacement contact remains; the interaction state
+            // machine owns the bounded release timeout.
+            if (fact.Phase == TrackedHandContactPhase.Ended || interaction == null)
+            {
+                return;
+            }
+
+            var avatarPush = fact.PenetrationDepth > .000001f
+                ? -fact.SurfaceNormal * fact.PenetrationDepth
+                : Vector3.zero;
+            interaction.ReportTrackedHandContact(
+                fact.Region,
+                fact.Pinching,
+                fact.Point,
+                avatarPush);
+        }
+
+        public static string ContactDiagnosticCode(TrackedHandContactFact fact)
+        {
+            var phase = fact.Phase == TrackedHandContactPhase.Began
+                ? "enter"
+                : fact.Phase == TrackedHandContactPhase.Ended ? "exit" : "hover";
+            var region = fact.Region.ToString().ToLowerInvariant();
+            return "hand_contact_" + phase + "_" + region;
+        }
+
+        public static bool ShouldRecordContactDiagnostic(
+            TrackedHandContactPhase phase,
+            float now,
+            float lastHoverAt,
+            float hoverInterval)
+        {
+            return phase != TrackedHandContactPhase.Updated ||
+                   now - lastHoverAt >= Mathf.Max(.25f, hoverInterval);
+        }
+
+        private void HandleRawContactFact(TrackedHandContactFact fact)
+        {
+            // Keep the public stream lossless for diagnostics. Semantic
+            // reactions consume the aggregate event above, so another active
+            // finger/palm probe cannot be cleared by this probe's Ended fact.
+            ContactFactChanged?.Invoke(fact);
+        }
+
+        private static int CountActiveContacts(HandVisual visual)
+        {
+            if (visual.contactTrackers == null) return 0;
+            var count = 0;
+            for (var index = 0; index < visual.contactTrackers.Length; index++)
+            {
+                if (visual.contactTrackers[index] != null && visual.contactTrackers[index].IsActive) count++;
+            }
+            return count;
+        }
+
+        private static void EndContactFacts(HandVisual visual)
+        {
+            if (visual.contactTrackers == null) return;
+            for (var index = 0; index < visual.contactTrackers.Length; index++)
+            {
+                visual.contactTrackers[index]?.Clear(Time.unscaledTime);
             }
         }
 
@@ -251,7 +401,7 @@ namespace QuestMmdPlayer
             if (hasSubsystem && hand.isTracked && TryGetHandPose(hand, visual))
             {
                 SetInputSource(visual, "hand_tracking");
-                SetVisible(visual, true, visual.meshRoot != null);
+                SetVisible(visual, true, false);
                 return 1;
             }
 
@@ -265,7 +415,7 @@ namespace QuestMmdPlayer
                 visual.lastTrackedPoseAt,
                 trackingLossVisualGrace))
             {
-                SetVisible(visual, true, visual.meshRoot != null);
+                SetVisible(visual, true, false);
                 return 0;
             }
 
@@ -286,7 +436,7 @@ namespace QuestMmdPlayer
             SetInputSource(visual, "none");
             if (IsTrackingGraceActive(Time.unscaledTime, visual.lastTrackedPoseAt, trackingLossVisualGrace))
             {
-                SetVisible(visual, true, visual.meshRoot != null);
+                SetVisible(visual, true, false);
                 return 0;
             }
             SetVisible(visual, false, false);
@@ -304,8 +454,7 @@ namespace QuestMmdPlayer
             visual.inputSource = source;
             if (source == "hand_tracking" && visual.meshRoot == null)
             {
-                visual.meshRoot = LoadOfficialMesh(visual);
-                ApplyOfficialMeshMaterial(visual);
+                Debug.Log("[HandTracking] " + visual.name + " using synchronized proxy mesh.", this);
             }
             Debug.Log(
                 "[HandTracking] " + visual.name + " input source: " + previous + " -> " + source +
@@ -377,7 +526,11 @@ namespace QuestMmdPlayer
         {
             visual.root = new GameObject("Tracked " + visual.name + " Proxy Hand");
             visual.root.transform.SetParent(transform, false);
-            visual.meshRoot = LoadOfficialMesh(visual);
+            // The prefab's XRHandMeshController only updates from its own
+            // event stream. This component samples XRHand joints directly, so
+            // instantiate no second mesh that could freeze during a provider
+            // switch; the generated proxy mesh stays synchronized.
+            visual.meshRoot = null;
             var body = visual.root.AddComponent<Rigidbody>();
             body.isKinematic = true;
             body.useGravity = false;
@@ -387,12 +540,12 @@ namespace QuestMmdPlayer
             visual.proxyRenderers = new Renderer[JointIds.Length];
             visual.contactColliders = new Collider[JointIds.Length];
             visual.relays = new TrackedHandContactRelay[JointIds.Length];
+            visual.contactTrackers = new TrackedHandContactTracker[JointIds.Length];
             visual.jointTracked = new bool[JointIds.Length];
             visual.previousJointPositions = new Vector3[JointIds.Length];
             visual.previousJointTracked = new bool[JointIds.Length];
             visual.runtimeMaterial = handMaterial != null ? handMaterial : ResolveMaterial(visual.color);
             visual.ownsRuntimeMaterial = handMaterial == null;
-            ApplyOfficialMeshMaterial(visual);
             for (var index = 0; index < visual.joints.Length; index++)
             {
                 var joint = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -412,6 +565,12 @@ namespace QuestMmdPlayer
                 relay.Initialize(interaction, visual.name, probe);
                 visual.joints[index] = joint;
                 visual.relays[index] = relay;
+                if (probe != TrackedHandContactProbe.None)
+                {
+                    var tracker = new TrackedHandContactTracker(visual.node, JointIds[index], probe);
+                    tracker.FactChanged += contactAggregator.Accept;
+                    visual.contactTrackers[index] = tracker;
+                }
             }
 
             visual.lines = new LineRenderer[Segments.GetLength(0)];
@@ -428,48 +587,6 @@ namespace QuestMmdPlayer
                 visual.lines[index] = line;
             }
             SetVisible(visual, false, false);
-        }
-
-        private GameObject LoadOfficialMesh(HandVisual visual)
-        {
-            var resourceName = visual.node == XRNode.LeftHand
-                ? "BanxiaHands/Prefabs/Left Hand Tracking"
-                : "BanxiaHands/Prefabs/Right Hand Tracking";
-            var prefab = Resources.Load<GameObject>(resourceName);
-            if (prefab == null)
-            {
-                Debug.LogWarning("[HandTracking] Official XR Hands mesh resource is unavailable; using proxy hand.", this);
-                return null;
-            }
-
-            var instance = Instantiate(prefab, transform);
-            instance.name = visual.name + " Official Hand Mesh";
-            instance.SetActive(false);
-            return instance;
-        }
-
-        private static void ApplyOfficialMeshMaterial(HandVisual visual)
-        {
-            if (visual.meshRoot == null || visual.runtimeMaterial == null)
-            {
-                return;
-            }
-
-            var renderers = visual.meshRoot.GetComponentsInChildren<Renderer>(true);
-            for (var index = 0; index < renderers.Length; index++)
-            {
-                renderers[index].sharedMaterial = visual.runtimeMaterial;
-                renderers[index].enabled = true;
-            }
-        }
-
-        private void UpdateOfficialMeshParent(HandVisual visual)
-        {
-            if (visual.meshRoot == null || trackingSpace == null || visual.meshRoot.transform.parent == trackingSpace)
-            {
-                return;
-            }
-            visual.meshRoot.transform.SetParent(trackingSpace, false);
         }
 
         private void UpdateLines(HandVisual visual)
@@ -490,14 +607,8 @@ namespace QuestMmdPlayer
 
         private void SetVisible(HandVisual visual, bool visible, bool showOfficialMesh)
         {
-            if (showOfficialMesh && visual.meshRoot == null)
-            {
-                visual.meshRoot = LoadOfficialMesh(visual);
-                ApplyOfficialMeshMaterial(visual);
-            }
             visual.visible = visible && showHands;
             visual.root.SetActive(visual.visible);
-            UpdateOfficialMeshParent(visual);
             var showProxy = visual.visible && !showOfficialMesh;
             if (visual.proxyRenderers != null)
             {
@@ -517,10 +628,6 @@ namespace QuestMmdPlayer
                         visual.jointTracked[Segments[index, 0]] &&
                         visual.jointTracked[Segments[index, 1]];
                 }
-            }
-            if (visual.meshRoot != null)
-            {
-                visual.meshRoot.SetActive(visual.visible && showOfficialMesh);
             }
         }
 
@@ -569,6 +676,12 @@ namespace QuestMmdPlayer
         {
             return string.Equals(inputSource, "hand_tracking", StringComparison.Ordinal) &&
                    IsTrackingGraceActive(now, lastTrackedAt, graceSeconds);
+        }
+
+        public static bool ShouldShowTrackedHand(string inputSource, bool showHands)
+        {
+            return showHands && !string.IsNullOrEmpty(inputSource) &&
+                   !string.Equals(inputSource, "none", StringComparison.Ordinal);
         }
 
         public static TrackedHandContactProbe ContactProbeForJoint(XRHandJointID joint)
@@ -633,6 +746,13 @@ namespace QuestMmdPlayer
 
         private void OnDestroy()
         {
+            EndContactFacts(left);
+            EndContactFacts(right);
+            // Tracker clears above already propagate raw/aggregate Ended facts;
+            // reset only removes any remaining aggregate state without
+            // emitting a duplicate lifecycle event.
+            contactAggregator.Reset(Time.unscaledTime);
+            pokeLifecycle.Reset();
             DestroyHand(left);
             DestroyHand(right);
         }
@@ -652,6 +772,351 @@ namespace QuestMmdPlayer
         PinchTip
     }
 
+    public enum TrackedHandContactPhase
+    {
+        Began,
+        Updated,
+        Ended
+    }
+
+    /// <summary>
+    /// Read-only XR contact evidence. Consumers may classify the fact into a
+    /// semantic action; the detector itself never chooses a reaction.
+    /// </summary>
+    public struct TrackedHandContactFact
+    {
+        public readonly int SequenceId;
+        public readonly TrackedHandContactPhase Phase;
+        public readonly XRNode HandNode;
+        public readonly XRHandJointID Joint;
+        public readonly TrackedHandContactProbe Probe;
+        public readonly AvatarContactRegion Region;
+        public readonly Vector3 Point;
+        public readonly Vector3 SurfaceNormal;
+        public readonly float PenetrationDepth;
+        public readonly float DurationSeconds;
+        public readonly bool Pinching;
+        public readonly bool UsesAuthoritativeTrackedPose;
+
+        public TrackedHandContactFact(
+            int sequenceId,
+            TrackedHandContactPhase phase,
+            XRNode handNode,
+            XRHandJointID joint,
+            TrackedHandContactProbe probe,
+            AvatarContactRegion region,
+            Vector3 point,
+            Vector3 surfaceNormal,
+            float penetrationDepth,
+            float durationSeconds,
+            bool pinching,
+            bool usesAuthoritativeTrackedPose)
+        {
+            SequenceId = sequenceId;
+            Phase = phase;
+            HandNode = handNode;
+            Joint = joint;
+            Probe = probe;
+            Region = region;
+            Point = point;
+            SurfaceNormal = surfaceNormal.sqrMagnitude > .0000001f
+                ? surfaceNormal.normalized
+                : Vector3.zero;
+            PenetrationDepth = Mathf.Max(0f, penetrationDepth);
+            DurationSeconds = Mathf.Max(0f, durationSeconds);
+            Pinching = pinching;
+            UsesAuthoritativeTrackedPose = usesAuthoritativeTrackedPose;
+        }
+    }
+
+    /// <summary>
+    /// Converts per-frame palm/fingertip observations into a stable lifecycle.
+    /// </summary>
+    public sealed class TrackedHandContactTracker
+    {
+        private readonly XRNode handNode;
+        private readonly XRHandJointID joint;
+        private readonly TrackedHandContactProbe probe;
+        private int sequenceId;
+        private float beganAt;
+        private float lastPublishedAt;
+        private AvatarContactRegion region;
+        private Vector3 point;
+        private Vector3 normal;
+        private float penetrationDepth;
+        private bool pinching;
+        private bool authoritativeTrackedPose;
+
+        public bool IsActive { get; private set; }
+        public event Action<TrackedHandContactFact> FactChanged;
+
+        public TrackedHandContactTracker(
+            XRNode handNode,
+            XRHandJointID joint,
+            TrackedHandContactProbe probe)
+        {
+            this.handNode = handNode;
+            this.joint = joint;
+            this.probe = probe;
+        }
+
+        public void Observe(
+            AvatarContactRegion nextRegion,
+            Vector3 nextPoint,
+            Vector3 nextNormal,
+            float nextPenetrationDepth,
+            bool nextPinching,
+            bool nextAuthoritativeTrackedPose,
+            float now,
+            float updateInterval = .1f)
+        {
+            if (nextRegion == AvatarContactRegion.None)
+            {
+                Clear(now);
+                return;
+            }
+
+            var identityChanged = IsActive &&
+                (region != nextRegion || pinching != nextPinching ||
+                 authoritativeTrackedPose != nextAuthoritativeTrackedPose);
+            if (identityChanged)
+            {
+                Clear(now);
+            }
+
+            point = nextPoint;
+            normal = nextNormal.sqrMagnitude > .0000001f ? nextNormal.normalized : Vector3.zero;
+            penetrationDepth = Mathf.Max(0f, nextPenetrationDepth);
+            pinching = nextPinching;
+            authoritativeTrackedPose = nextAuthoritativeTrackedPose;
+            region = nextRegion;
+
+            if (!IsActive)
+            {
+                IsActive = true;
+                sequenceId++;
+                beganAt = lastPublishedAt = now;
+                Publish(TrackedHandContactPhase.Began, now);
+                return;
+            }
+
+            if (now - lastPublishedAt >= Mathf.Max(.01f, updateInterval))
+            {
+                lastPublishedAt = now;
+                Publish(TrackedHandContactPhase.Updated, now);
+            }
+        }
+
+        public void Clear(float now)
+        {
+            if (!IsActive) return;
+            Publish(TrackedHandContactPhase.Ended, now);
+            IsActive = false;
+            region = AvatarContactRegion.None;
+        }
+
+        private void Publish(TrackedHandContactPhase phase, float now)
+        {
+            FactChanged?.Invoke(new TrackedHandContactFact(
+                sequenceId,
+                phase,
+                handNode,
+                joint,
+                probe,
+                region,
+                point,
+                normal,
+                penetrationDepth,
+                Mathf.Max(0f, now - beganAt),
+                pinching,
+                authoritativeTrackedPose));
+        }
+    }
+
+    /// <summary>
+    /// Aggregates the palm and fingertip lifecycle streams for a hand. Physics
+    /// exposes several probes, so an Ended event from one probe must not clear
+    /// a still-active contact from another probe. The selected fact is stable
+    /// for equal-priority contacts and prefers the current selection to avoid
+    /// semantic reaction churn.
+    /// </summary>
+    public sealed class TrackedHandContactAggregator
+    {
+        private struct ContactKey : System.IEquatable<ContactKey>
+        {
+            public readonly XRNode HandNode;
+            public readonly XRHandJointID Joint;
+            public readonly TrackedHandContactProbe Probe;
+            public readonly int SequenceId;
+
+            public ContactKey(TrackedHandContactFact fact)
+            {
+                HandNode = fact.HandNode;
+                Joint = fact.Joint;
+                Probe = fact.Probe;
+                SequenceId = fact.SequenceId;
+            }
+
+            public bool Equals(ContactKey other)
+            {
+                return HandNode == other.HandNode && Joint == other.Joint &&
+                       Probe == other.Probe && SequenceId == other.SequenceId;
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is ContactKey && Equals((ContactKey)obj);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    return (((int)HandNode * 397) ^ ((int)Joint * 17) ^ (int)Probe) * 31 ^ SequenceId;
+                }
+            }
+
+            public int StableOrder()
+            {
+                return (((int)HandNode * 1000) + ((int)Joint * 10) + (int)Probe) * 100000 + SequenceId;
+            }
+        }
+
+        private readonly Dictionary<ContactKey, TrackedHandContactFact> active =
+            new Dictionary<ContactKey, TrackedHandContactFact>();
+        private ContactKey selectedKey;
+        private bool hasSelected;
+
+        /// <summary>All raw probe lifecycle events, used by diagnostics.</summary>
+        public event Action<TrackedHandContactFact> RawFactChanged;
+
+        /// <summary>The currently selected aggregate semantic fact.</summary>
+        public event Action<TrackedHandContactFact> FactChanged;
+
+        public int ActiveCount => active.Count;
+
+        public void Accept(TrackedHandContactFact fact)
+        {
+            RawFactChanged?.Invoke(fact);
+            var key = new ContactKey(fact);
+            if (fact.Phase == TrackedHandContactPhase.Ended)
+            {
+                active.Remove(key);
+            }
+            else
+            {
+                // A tracker increments its sequence when semantic identity
+                // changes. Remove a stale sequence for the same physical
+                // probe even if an Ended callback was dropped by a consumer.
+                RemovePreviousSequenceForProbe(key);
+                active[key] = fact;
+            }
+
+            var previousSelected = hasSelected ? selectedKey : default(ContactKey);
+            var hadPrevious = hasSelected;
+            SelectBest();
+            if (!hasSelected)
+            {
+                // Forward the ending fact so observers can close a lifecycle;
+                // semantic consumers intentionally ignore Ended and expire by
+                // their own bounded timeout.
+                if (fact.Phase == TrackedHandContactPhase.Ended)
+                {
+                    FactChanged?.Invoke(fact);
+                }
+                return;
+            }
+
+            var selectedChanged = !hadPrevious || !selectedKey.Equals(previousSelected);
+            if (selectedChanged || selectedKey.Equals(key) && fact.Phase != TrackedHandContactPhase.Ended)
+            {
+                FactChanged?.Invoke(active[selectedKey]);
+            }
+        }
+
+        public void Reset(float now)
+        {
+            if (hasSelected)
+            {
+                var selected = active[selectedKey];
+                FactChanged?.Invoke(new TrackedHandContactFact(
+                    selected.SequenceId,
+                    TrackedHandContactPhase.Ended,
+                    selected.HandNode,
+                    selected.Joint,
+                    selected.Probe,
+                    selected.Region,
+                    selected.Point,
+                    selected.SurfaceNormal,
+                    selected.PenetrationDepth,
+                    selected.DurationSeconds,
+                    selected.Pinching,
+                    selected.UsesAuthoritativeTrackedPose));
+            }
+            active.Clear();
+            hasSelected = false;
+        }
+
+        private void SelectBest()
+        {
+            var bestKey = default(ContactKey);
+            var bestScore = int.MinValue;
+            foreach (var pair in active)
+            {
+                var score = ContactScore(pair.Value);
+                var staysSelected = hasSelected && pair.Key.Equals(selectedKey);
+                var winsStableTie = bestScore == score && !staysSelected &&
+                    (bestScore == int.MinValue || pair.Key.StableOrder() < bestKey.StableOrder());
+                if (score > bestScore || staysSelected || winsStableTie)
+                {
+                    bestScore = score;
+                    bestKey = pair.Key;
+                }
+            }
+            hasSelected = bestScore != int.MinValue;
+            if (hasSelected)
+            {
+                selectedKey = bestKey;
+            }
+        }
+
+        private void RemovePreviousSequenceForProbe(ContactKey incoming)
+        {
+            ContactKey stale = default(ContactKey);
+            var found = false;
+            foreach (var pair in active)
+            {
+                var key = pair.Key;
+                if (key.HandNode == incoming.HandNode && key.Joint == incoming.Joint &&
+                    key.Probe == incoming.Probe && key.SequenceId != incoming.SequenceId)
+                {
+                    stale = key;
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+            {
+                active.Remove(stale);
+                if (hasSelected && selectedKey.Equals(stale))
+                {
+                    hasSelected = false;
+                }
+            }
+        }
+
+        private static int ContactScore(TrackedHandContactFact fact)
+        {
+            var regionScore = fact.Region == AvatarContactRegion.Face ? 50 :
+                fact.Region == AvatarContactRegion.Head || fact.Region == AvatarContactRegion.Hair ? 40 :
+                fact.Region == AvatarContactRegion.Hand ? 30 :
+                fact.Region == AvatarContactRegion.Body || fact.Region == AvatarContactRegion.Limb ? 20 : 0;
+            var probeScore = fact.Probe == TrackedHandContactProbe.Palm ? 2 : 1;
+            return regionScore + probeScore;
+        }
+    }
+
+    [DefaultExecutionOrder(10700)]
     internal sealed class TrackedHandContactRelay : MonoBehaviour
     {
         private AvatarHumanInteraction interaction;
@@ -687,10 +1152,10 @@ namespace QuestMmdPlayer
 
         private void OnTriggerStay(Collider other)
         {
-            var proxy = other.GetComponent<AvatarContactProxy>();
-            if (proxy == null || interaction == null || !tracked ||
-                !QuestTrackedHandVisualizer.ShouldReportContact(probe, proxy.Region, pinching)) return;
-            interaction.ReportTrackedHandContact(proxy.Region, pinching, transform.position);
+            // Trigger callbacks are intentionally not semantic inputs. They
+            // can arrive before/after the ordered swept/penetration sample and
+            // would otherwise duplicate or resurrect a stale reaction. The
+            // owner visualizer publishes the canonical lifecycle fact.
         }
     }
 }

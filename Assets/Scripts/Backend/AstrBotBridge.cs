@@ -26,6 +26,7 @@ namespace QuestMmdPlayer
         [SerializeField] private float reconnectDelaySeconds = 1.5f;
         [SerializeField] private int requestTimeoutSeconds = 15;
         [SerializeField, Range(8, 256)] private int maxIncomingFramesPerUpdate = 64;
+        [SerializeField, Range(1f, 30f)] private float spatialContextUploadIntervalSeconds = 2f;
 
         private readonly ConcurrentQueue<SseEventFrame> incomingFrames = new ConcurrentQueue<SseEventFrame>();
         private AstrBotBridgeSettings settings;
@@ -72,6 +73,15 @@ namespace QuestMmdPlayer
         private int sseFramesDispatched;
         private int sseQueueDepthPeak;
         private int sseQueueDelayMaxMs;
+        private const string SpatialRevisionPreferenceKey = "banxia.spatial.revision.v1";
+        private RoomUnderstandingService spatialContextSource;
+        private SpatialContextRequest pendingSpatialContext;
+        private string pendingSpatialSignature = string.Empty;
+        private string sentSpatialSignature = string.Empty;
+        private Coroutine spatialContextUploadRoutine;
+        private float nextSpatialContextUploadAt;
+        private float lastSpatialContextUploadAt = float.NegativeInfinity;
+        private long spatialRevision;
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
@@ -156,6 +166,160 @@ namespace QuestMmdPlayer
                     Debug.LogWarning("[AstrBotBridge] Ignored invalid SSE event: " + error);
                 }
             }
+            TryStartSpatialContextUpload();
+        }
+
+        public void BindSpatialContext(RoomUnderstandingService source)
+        {
+            if (spatialContextSource != null)
+            {
+                spatialContextSource.SnapshotChanged -= QueueSpatialContextSnapshot;
+            }
+            spatialContextSource = source;
+            if (spatialContextSource != null)
+            {
+                spatialContextSource.SnapshotChanged += QueueSpatialContextSnapshot;
+                QueueSpatialContextSnapshot();
+            }
+        }
+
+        private void QueueSpatialContextSnapshot()
+        {
+            if (spatialContextSource == null || !spatialContextSource.HasRoomData)
+            {
+                pendingSpatialContext = null;
+                pendingSpatialSignature = string.Empty;
+                return;
+            }
+            var request = CreateSpatialContextRequest(
+                sessionId,
+                0,
+                spatialContextSource.SemanticSnapshot,
+                spatialContextSource.Capabilities);
+            var signature = request.ContentSignature();
+            if (string.Equals(signature, pendingSpatialSignature, StringComparison.Ordinal) ||
+                (pendingSpatialContext == null &&
+                 string.Equals(signature, sentSpatialSignature, StringComparison.Ordinal)))
+            {
+                return;
+            }
+            pendingSpatialContext = request;
+            pendingSpatialSignature = signature;
+        }
+
+        private void TryStartSpatialContextUpload()
+        {
+            if (pendingSpatialContext == null && spatialContextSource != null &&
+                spatialContextSource.HasRoomData && sessionReady &&
+                Time.unscaledTime - lastSpatialContextUploadAt >= 15f)
+            {
+                QueueSpatialContextHeartbeat();
+            }
+            if (!sessionReady || shuttingDown || pendingSpatialContext == null ||
+                spatialContextUploadRoutine != null || Time.unscaledTime < nextSpatialContextUploadAt)
+            {
+                return;
+            }
+            var request = pendingSpatialContext;
+            request.session_id = sessionId;
+            request.revision = NextSpatialRevision();
+            var signature = pendingSpatialSignature;
+            spatialContextUploadRoutine = StartCoroutine(UploadSpatialContext(request, signature));
+        }
+
+        private IEnumerator UploadSpatialContext(SpatialContextRequest payload, string signature)
+        {
+            var startedAt = DiagnosticTimestamp();
+            using (var request = CreateJsonRequest("spatial/context", JsonUtility.ToJson(payload)))
+            {
+                yield return request.SendWebRequest();
+                if (Succeeded(request))
+                {
+                    lastSpatialContextUploadAt = Time.unscaledTime;
+                    sentSpatialSignature = signature;
+                    if (string.Equals(signature, pendingSpatialSignature, StringComparison.Ordinal))
+                    {
+                        pendingSpatialContext = null;
+                        pendingSpatialSignature = string.Empty;
+                    }
+                    RecordStage(
+                        "spatial_context",
+                        "completed",
+                        "spatial_context_uploaded",
+                        request.responseCode,
+                        ElapsedMs(startedAt));
+                }
+                else
+                {
+                    RecordStage(
+                        "spatial_context",
+                        "failed",
+                        ReadFailureCode(request, "spatial_context_upload_failed"),
+                        request.responseCode,
+                        ElapsedMs(startedAt));
+                }
+            }
+            nextSpatialContextUploadAt = Time.unscaledTime +
+                Mathf.Clamp(spatialContextUploadIntervalSeconds, 1f, 30f);
+            spatialContextUploadRoutine = null;
+        }
+
+        private void QueueSpatialContextHeartbeat()
+        {
+            if (spatialContextSource == null || !spatialContextSource.HasRoomData)
+            {
+                return;
+            }
+            var request = CreateSpatialContextRequest(
+                sessionId,
+                0,
+                spatialContextSource.SemanticSnapshot,
+                spatialContextSource.Capabilities);
+            pendingSpatialContext = request;
+            pendingSpatialSignature = request.ContentSignature();
+        }
+
+        private long NextSpatialRevision()
+        {
+            if (spatialRevision <= 0)
+            {
+                long.TryParse(
+                    PlayerPrefs.GetString(SpatialRevisionPreferenceKey, "0"),
+                    out spatialRevision);
+            }
+            spatialRevision = Math.Max(
+                spatialRevision + 1L,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            PlayerPrefs.SetString(SpatialRevisionPreferenceKey, spatialRevision.ToString());
+            PlayerPrefs.Save();
+            return spatialRevision;
+        }
+
+        public static SpatialContextRequest CreateSpatialContextRequest(
+            string currentSessionId,
+            long revision,
+            RoomSemanticSnapshot snapshot,
+            SpatialCapabilitySnapshot capabilities)
+        {
+            return new SpatialContextRequest
+            {
+                session_id = currentSessionId ?? string.Empty,
+                revision = Math.Max(0L, revision),
+                floor_count = ClampSpatialCount(snapshot.FloorCount),
+                seat_count = ClampSpatialCount(snapshot.SeatCount),
+                bed_count = ClampSpatialCount(snapshot.BedCount),
+                table_count = ClampSpatialCount(snapshot.TableCount),
+                wall_count = ClampSpatialCount(snapshot.WallCount),
+                door_count = ClampSpatialCount(snapshot.DoorCount),
+                window_count = ClampSpatialCount(snapshot.WindowCount),
+                scene_capture_available = capabilities.SceneCaptureAvailable,
+                occlusion_available = capabilities.Occlusion == SpatialCapabilityState.Available
+            };
+        }
+
+        private static int ClampSpatialCount(int value)
+        {
+            return Math.Max(0, Math.Min(64, value));
         }
 
         public bool ReloadConfiguration()
@@ -480,6 +644,8 @@ namespace QuestMmdPlayer
                 {
                     nextSessionStartAt = 0f;
                     sessionReady = true;
+                    sentSpatialSignature = string.Empty;
+                    QueueSpatialContextSnapshot();
                     BackendChainStatus = ResolveBackendChainStatus(
                         ParseSessionChainStatus(request.downloadHandler.text), healthPipelineStatus);
                     SetStatus("AstrBot session ready (" + BackendChainStatus + ")");
@@ -504,6 +670,8 @@ namespace QuestMmdPlayer
                     // Reusing one persisted ID lets the next process reattach.
                     nextSessionStartAt = 0f;
                     sessionReady = true;
+                    sentSpatialSignature = string.Empty;
+                    QueueSpatialContextSnapshot();
                     SetStatus("Existing AstrBot session found; reconnecting SSE");
                     RecordStage(
                         "session",
@@ -1063,6 +1231,11 @@ namespace QuestMmdPlayer
                 StopCoroutine(connectionRoutine);
                 connectionRoutine = null;
             }
+            if (spatialContextUploadRoutine != null)
+            {
+                StopCoroutine(spatialContextUploadRoutine);
+                spatialContextUploadRoutine = null;
+            }
             if (activeSseRequest != null)
             {
                 activeSseRequest.Abort();
@@ -1079,8 +1252,19 @@ namespace QuestMmdPlayer
             BackendChainStatus = "chain unknown";
             healthPipelineStatus = "unknown";
             nextSessionStartAt = 0f;
+            nextSpatialContextUploadAt = 0f;
+            lastSpatialContextUploadAt = float.NegativeInfinity;
+            sentSpatialSignature = string.Empty;
             sessionId = string.Empty;
             while (incomingFrames.TryDequeue(out _)) { }
+        }
+
+        private void OnDestroy()
+        {
+            if (spatialContextSource != null)
+            {
+                spatialContextSource.SnapshotChanged -= QueueSpatialContextSnapshot;
+            }
         }
 
         private void FireAndForgetClose()

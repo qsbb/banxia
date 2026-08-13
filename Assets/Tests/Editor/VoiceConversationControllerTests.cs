@@ -493,6 +493,16 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ActionOnlyReplyEndIsAcceptedAfterAvatarIntent()
+        {
+            Assert.IsTrue(ConversationController.AcceptActionOnlyReplyEnd(true, string.Empty, 0));
+            Assert.IsTrue(ConversationController.AcceptActionOnlyReplyEnd(true, "   ", 0));
+            Assert.IsFalse(ConversationController.AcceptActionOnlyReplyEnd(false, string.Empty, 0));
+            Assert.IsFalse(ConversationController.AcceptActionOnlyReplyEnd(true, string.Empty, 1));
+            Assert.IsFalse(ConversationController.AcceptActionOnlyReplyEnd(true, "done", 0));
+        }
+
+        [Test]
         public void ExpressionMappingIsEmotionSpecificAndBounded()
         {
             Assert.That(

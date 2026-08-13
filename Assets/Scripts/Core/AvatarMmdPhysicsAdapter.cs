@@ -51,7 +51,17 @@ namespace QuestMmdPlayer
                 var radii = new float[QuestTrackedHandVisualizer.PhysicsProbeCount];
                 for (var index = 0; index < radii.Length; index++)
                 {
-                    radii[index] = index % 6 == 0 ? palmRadius : fingertipRadius;
+                    // Match the Bullet probe to the rendered/collision proxy
+                    // radius. Falling back to serialized defaults keeps the
+                    // adapter usable before XR has produced its first pose.
+                    var fallback = index % 6 == 0 ? palmRadius : fingertipRadius;
+                    radii[index] = trackedHands.TryGetPhysicsProbe(
+                            index,
+                            out _,
+                            out var probeRadius,
+                            out _)
+                        ? Mathf.Clamp(probeRadius, .004f, .08f)
+                        : fallback;
                 }
                 physicsManager.ConfigureExternalKinematicSpheres(radii);
                 configured = physicsManager.externalKinematicSphereCount == radii.Length;

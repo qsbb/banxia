@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using NUnit.Framework;
 using UnityEngine;
@@ -86,6 +86,23 @@ namespace QuestMmdPlayer.Tests
             Assert.That(timing.FirstEventMs, Is.EqualTo(-1));
             Assert.That(timing.FirstAudioMs, Is.EqualTo(-1));
             Assert.That(timing.ReplyAudioChunkCount, Is.Zero);
+        }
+
+        [Test]
+        public void DiagnosticsFormatterBuildsBoundedPanelText()
+        {
+            var snapshot = RuntimeDiagnosticsBuilder.Capture(null);
+            var timeline = "stage=voice status=processing trace=secret-token";
+            var text = RuntimeDiagnosticsFormatter.BuildPanelText(snapshot, "模型加载：超时", timeline, 3);
+
+            Assert.That(text, Does.Contain("状态：模型加载：超时"));
+            Assert.That(text, Does.Contain("链路：不可用"));
+            Assert.That(text, Does.Contain("手追：0只"));
+            Assert.That(text, Does.Contain("空间：未扫描"));
+            Assert.That(text, Does.Contain("动作：空闲"));
+            Assert.That(text, Does.Contain("来源未知"));
+            Assert.That(text, Does.Contain("最近阶段："));
+            Assert.That(text, Does.Not.Contain("trace=secret-token"));
         }
 
         [Test]

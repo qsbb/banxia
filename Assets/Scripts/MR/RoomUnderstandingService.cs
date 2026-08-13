@@ -5,7 +5,6 @@ using UnityEngine;
 using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.ARSubsystems;
 using UnityEngine.XR.Management;
-using UnityEngine.XR.OpenXR.Features.Meta;
 
 namespace QuestMmdPlayer
 {
@@ -16,13 +15,25 @@ namespace QuestMmdPlayer
         public PlaneClassification Classification;
         public Pose Pose;
         public Vector2 Size;
+        public RoomPlacementSurfaceKind? SemanticKind;
 
         public RoomSurfaceObservation(string id, PlaneClassification classification, Pose pose, Vector2 size)
+            : this(id, classification, pose, size, null)
+        {
+        }
+
+        public RoomSurfaceObservation(
+            string id,
+            PlaneClassification classification,
+            Pose pose,
+            Vector2 size,
+            RoomPlacementSurfaceKind? semanticKind)
         {
             Id = id ?? string.Empty;
             Classification = classification;
             Pose = pose;
             Size = size;
+            SemanticKind = semanticKind;
         }
     }
 
@@ -74,6 +85,7 @@ namespace QuestMmdPlayer
     {
         public int FloorCount;
         public int SeatCount;
+        public int BedCount;
         public int TableCount;
         public int WallCount;
         public int DoorCount;
@@ -81,7 +93,7 @@ namespace QuestMmdPlayer
 
         public string ToContextString()
         {
-            return $"房间 地面:{FloorCount} 座位:{SeatCount} 桌子:{TableCount} 墙:{WallCount} 门:{DoorCount} 窗:{WindowCount}";
+            return $"房间 地面:{FloorCount} 座位:{SeatCount} 床:{BedCount} 桌子:{TableCount} 墙:{WallCount} 门:{DoorCount} 窗:{WindowCount}";
         }
     }
 
@@ -108,6 +120,8 @@ namespace QuestMmdPlayer
         private float sceneCaptureTrackingStartedAt;
         private float sceneCaptureTrackingDeadline;
         private bool sceneCaptureTrackingRequested;
+        private string preferredPlacementSurfaceId = string.Empty;
+        private string lastCapabilitySignature = string.Empty;
 
         public event Action SnapshotChanged;
 
@@ -118,6 +132,7 @@ namespace QuestMmdPlayer
         public int TableCount { get; private set; }
         public int WallCount { get; private set; }
         public string Status { get; private set; } = "Room understanding is starting";
+        public SpatialCapabilitySnapshot Capabilities { get; private set; }
         public RoomSemanticSnapshot SemanticSnapshot => BuildSemanticSnapshot(surfaces);
         public string ContextSummary => SemanticSnapshot.ToContextString();
         public bool HasRoomData => surfaces.Count > 0;
@@ -126,6 +141,7 @@ namespace QuestMmdPlayer
         private void Awake()
         {
             ResolveDependencies();
+            RefreshCapabilities();
         }
 
         private void OnEnable()
@@ -161,18 +177,23 @@ namespace QuestMmdPlayer
         public void RefreshNow()
         {
             ResolveDependencies();
+            RefreshCapabilities();
+            if (SpatialCapabilityAdapter.TryReadMrukSurfaces(surfaces, out var mrukStatus))
+            {
+                FinishRefresh("MRUK", mrukStatus);
+                return;
+            }
             if (planeManager == null || !planeManager.isActiveAndEnabled)
             {
-                if (surfaces.Count == 0)
-                {
-                    Status = "Room tracking is idle; scan the room when needed";
-                }
+                surfaces.Clear();
+                placementCandidates.Clear();
+                FloorCount = SeatCount = TableCount = WallCount = 0;
+                Status = "Room tracking is idle; scan the room when needed";
+                SnapshotChanged?.Invoke();
                 return;
             }
 
             surfaces.Clear();
-            placementCandidates.Clear();
-            FloorCount = SeatCount = TableCount = WallCount = 0;
 
             foreach (var plane in planeManager.trackables)
             {
@@ -191,22 +212,9 @@ namespace QuestMmdPlayer
                     continue;
                 }
                 surfaces.Add(observation);
-                switch (observation.Classification)
-                {
-                    case PlaneClassification.Floor: FloorCount++; break;
-                    case PlaneClassification.Seat: SeatCount++; break;
-                    case PlaneClassification.Table: TableCount++; break;
-                    case PlaneClassification.Wall: WallCount++; break;
-                }
             }
 
-            surfaces.Sort(CompareObservations);
-            RebuildPlacementCandidates();
-
-            Status = surfaces.Count == 0
-                ? "No room surfaces found; run Quest room setup"
-                : ContextSummary;
-            SnapshotChanged?.Invoke();
+            FinishRefresh("ARPlane", "plane_tracking");
         }
 
         public bool RequestSceneCapture()
@@ -220,14 +228,13 @@ namespace QuestMmdPlayer
             var manager = XRGeneralSettings.Instance == null ? null : XRGeneralSettings.Instance.Manager;
             var loader = manager == null ? null : manager.activeLoader;
             var subsystem = loader == null ? null : loader.GetLoadedSubsystem<XRSessionSubsystem>();
-            if (!(subsystem is MetaOpenXRSessionSubsystem metaSession))
+            if (!SpatialCapabilityAdapter.TryRequestSceneCapture(subsystem, out var requested))
             {
                 if (planeManager != null) planeManager.enabled = false;
                 Status = "Meta scene capture is unavailable";
+                Debug.Log("[RoomUnderstanding] scene_capture unavailable; using plane/fallback path.", this);
                 return false;
             }
-
-            var requested = metaSession.TryRequestSceneCapture();
             sceneCaptureTrackingRequested = requested;
             sceneCaptureTrackingStartedAt = Time.unscaledTime;
             sceneCaptureTrackingDeadline = Time.unscaledTime + Mathf.Max(5f, sceneCaptureTrackingSeconds);
@@ -238,7 +245,22 @@ namespace QuestMmdPlayer
             Status = requested
                 ? "Quest room setup opened"
                 : "Quest room setup could not be opened";
+            Debug.Log($"[RoomUnderstanding] scene_capture requested={requested}; {Capabilities}", this);
             return requested;
+        }
+
+        public void RefreshCapabilities()
+        {
+            var manager = XRGeneralSettings.Instance == null ? null : XRGeneralSettings.Instance.Manager;
+            var loader = manager == null ? null : manager.activeLoader;
+            var subsystem = loader == null ? null : loader.GetLoadedSubsystem<XRSessionSubsystem>();
+            Capabilities = SpatialCapabilityAdapter.Detect(planeManager, xrOrigin, subsystem);
+            var signature = Capabilities.ToString();
+            if (!string.Equals(signature, lastCapabilitySignature, StringComparison.Ordinal))
+            {
+                lastCapabilitySignature = signature;
+                Debug.Log($"[RoomUnderstanding] capability {signature}", this);
+            }
         }
 
         public static bool ShouldStopExplicitTracking(
@@ -286,10 +308,12 @@ namespace QuestMmdPlayer
         public bool TryFindNearestSeat(Pose viewer, out RoomPlacementCandidate selected)
         {
             selected = default;
-            if (!TrySelectNearestPlacementCandidate(
+            if (!TrySelectStablePlacementCandidate(
                 placementCandidates,
                 RoomPlacementSurfaceKind.Seat,
                 viewer,
+                preferredPlacementSurfaceId,
+                .35f,
                 out var nearest))
             {
                 return false;
@@ -300,23 +324,43 @@ namespace QuestMmdPlayer
                 PlaneClassification.Seat,
                 nearest.SurfacePose,
                 nearest.Size);
-            return TryCreatePlacementCandidate(
+            var created = TryCreatePlacementCandidate(
                 surface,
                 viewer,
                 minimumSurfaceExtent,
                 minimumSeatWidth,
                 minimumSeatDepth,
                 out selected);
+            if (created) preferredPlacementSurfaceId = selected.SurfaceId;
+            return created;
         }
 
         public bool TryFindNearestRestingSurface(Pose viewer, out RoomPlacementCandidate selected)
         {
-            return TrySelectNearestRestingSurface(placementCandidates, viewer, out selected);
+            var found = TrySelectStableRestingSurface(
+                placementCandidates,
+                viewer,
+                preferredPlacementSurfaceId,
+                .35f,
+                out selected);
+            if (found) preferredPlacementSurfaceId = selected.SurfaceId;
+            return found;
         }
 
         public static bool TrySelectNearestRestingSurface(
             IReadOnlyList<RoomPlacementCandidate> candidates,
             Pose viewer,
+            out RoomPlacementCandidate selected)
+        {
+            return TrySelectStableRestingSurface(
+                candidates, viewer, string.Empty, 0f, out selected);
+        }
+
+        public static bool TrySelectStableRestingSurface(
+            IReadOnlyList<RoomPlacementCandidate> candidates,
+            Pose viewer,
+            string preferredSurfaceId,
+            float preferredSurfaceHysteresis,
             out RoomPlacementCandidate selected)
         {
             selected = default;
@@ -351,6 +395,12 @@ namespace QuestMmdPlayer
                 {
                     score -= .05f;
                 }
+                if (!string.IsNullOrEmpty(preferredSurfaceId) &&
+                    string.Equals(candidate.SurfaceId, preferredSurfaceId, StringComparison.Ordinal))
+                {
+                    var hysteresis = Mathf.Max(0f, preferredSurfaceHysteresis);
+                    score -= hysteresis * hysteresis;
+                }
                 if (!found || score < bestScore - .0001f ||
                     Mathf.Abs(score - bestScore) <= .0001f &&
                     string.CompareOrdinal(candidate.SurfaceId, selected.SurfaceId) < 0)
@@ -367,6 +417,18 @@ namespace QuestMmdPlayer
             IReadOnlyList<RoomPlacementCandidate> candidates,
             RoomPlacementSurfaceKind kind,
             Pose viewer,
+            out RoomPlacementCandidate selected)
+        {
+            return TrySelectStablePlacementCandidate(
+                candidates, kind, viewer, string.Empty, 0f, out selected);
+        }
+
+        public static bool TrySelectStablePlacementCandidate(
+            IReadOnlyList<RoomPlacementCandidate> candidates,
+            RoomPlacementSurfaceKind kind,
+            Pose viewer,
+            string preferredSurfaceId,
+            float preferredSurfaceHysteresis,
             out RoomPlacementCandidate selected)
         {
             selected = default;
@@ -394,6 +456,12 @@ namespace QuestMmdPlayer
                     Vector3.Dot(forward, horizontal.normalized) < 0f)
                 {
                     score += 16f;
+                }
+                if (!string.IsNullOrEmpty(preferredSurfaceId) &&
+                    string.Equals(candidate.SurfaceId, preferredSurfaceId, StringComparison.Ordinal))
+                {
+                    var hysteresis = Mathf.Max(0f, preferredSurfaceHysteresis);
+                    score -= hysteresis * hysteresis;
                 }
                 if (!found || score < bestScore - .0001f ||
                     (Mathf.Abs(score - bestScore) <= .0001f &&
@@ -492,7 +560,7 @@ namespace QuestMmdPlayer
                 return false;
             }
 
-            if (!TryResolvePlacementSurfaceKind(surface.Classification, out var kind))
+            if (!TryResolvePlacementSurfaceKind(surface, out var kind))
             {
                 return false;
             }
@@ -598,6 +666,18 @@ namespace QuestMmdPlayer
             return false;
         }
 
+        public static bool TryResolvePlacementSurfaceKind(
+            RoomSurfaceObservation surface,
+            out RoomPlacementSurfaceKind kind)
+        {
+            if (surface.SemanticKind.HasValue)
+            {
+                kind = surface.SemanticKind.Value;
+                return true;
+            }
+            return TryResolvePlacementSurfaceKind(surface.Classification, out kind);
+        }
+
         public static string BuildSummary(IEnumerable<RoomSurfaceObservation> observations)
         {
             return BuildSemanticSnapshot(observations).ToContextString();
@@ -610,10 +690,17 @@ namespace QuestMmdPlayer
             {
                 foreach (var observation in observations)
                 {
+                    if (observation.SemanticKind == RoomPlacementSurfaceKind.Bed)
+                    {
+                        snapshot.BedCount++;
+                        continue;
+                    }
                     switch (observation.Classification)
                     {
                         case PlaneClassification.Floor: snapshot.FloorCount++; break;
-                        case PlaneClassification.Seat: snapshot.SeatCount++; break;
+                        case PlaneClassification.Seat:
+                            if (CountsAsSeat(observation)) snapshot.SeatCount++;
+                            break;
                         case PlaneClassification.Table: snapshot.TableCount++; break;
                         case PlaneClassification.Wall: snapshot.WallCount++; break;
                         case PlaneClassification.Door: snapshot.DoorCount++; break;
@@ -630,6 +717,16 @@ namespace QuestMmdPlayer
                 IsFinite(observation.Pose.rotation) &&
                 IsFinite(observation.Size) &&
                 observation.Size.x > 0f && observation.Size.y > 0f;
+        }
+
+        public static bool CountsAsSeat(RoomSurfaceObservation observation)
+        {
+            // MRUK Bed uses PlaneClassification.Seat only because older
+            // ARSubsystems versions have no public Bed enum. Preserve it as a
+            // lying/sitting candidate without claiming that the room contains
+            // an extra chair or couch in the bounded semantic snapshot.
+            return observation.Classification == PlaneClassification.Seat &&
+                   observation.SemanticKind != RoomPlacementSurfaceKind.Bed;
         }
 
         private void RebuildPlacementCandidates()
@@ -650,6 +747,31 @@ namespace QuestMmdPlayer
                     placementCandidates.Add(candidate);
                 }
             }
+        }
+
+        private void FinishRefresh(string provider, string reason)
+        {
+            placementCandidates.Clear();
+            FloorCount = SeatCount = TableCount = WallCount = 0;
+            for (var index = 0; index < surfaces.Count; index++)
+            {
+                switch (surfaces[index].Classification)
+                {
+                    case PlaneClassification.Floor: FloorCount++; break;
+                    case PlaneClassification.Seat:
+                        if (CountsAsSeat(surfaces[index])) SeatCount++;
+                        break;
+                    case PlaneClassification.Table: TableCount++; break;
+                    case PlaneClassification.Wall: WallCount++; break;
+                }
+            }
+            surfaces.Sort(CompareObservations);
+            RebuildPlacementCandidates();
+            Status = surfaces.Count == 0
+                ? "No room surfaces found; run Quest room setup"
+                : ContextSummary;
+            Debug.Log($"[RoomUnderstanding] provider={provider}; surfaces={surfaces.Count}; reason={reason}", this);
+            SnapshotChanged?.Invoke();
         }
 
         private static int CompareObservations(RoomSurfaceObservation left, RoomSurfaceObservation right)

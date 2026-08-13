@@ -51,6 +51,69 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void HandVisibilityToggleCanRecoverAfterBeingDisabled()
+        {
+            Assert.IsTrue(QuestTrackedHandVisualizer.ShouldShowTrackedHand("hand_tracking", true));
+            Assert.IsFalse(QuestTrackedHandVisualizer.ShouldShowTrackedHand("hand_tracking", false));
+            Assert.IsFalse(QuestTrackedHandVisualizer.ShouldShowTrackedHand("none", true));
+            Assert.IsTrue(QuestTrackedHandVisualizer.ShouldShowTrackedHand("controller", true));
+        }
+
+        [Test]
+        public void PokeLifecycleMapsContactFactsToEnterHoverExitWithoutMovingPose()
+        {
+            var lifecycle = new PokeInteractionLifecycle();
+            var point = new Vector3(.2f, .3f, .4f);
+            var began = lifecycle.Observe(new TrackedHandContactFact(
+                1,
+                TrackedHandContactPhase.Began,
+                UnityEngine.XR.XRNode.RightHand,
+                UnityEngine.XR.Hands.XRHandJointID.IndexTip,
+                TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Face,
+                point,
+                Vector3.forward,
+                .01f,
+                0f,
+                true,
+                true));
+            Assert.AreEqual(PokeInteractionPhase.Enter, began.Phase);
+            Assert.IsTrue(lifecycle.IsActive);
+            Assert.AreEqual(point, began.Point);
+
+            var hover = lifecycle.Observe(new TrackedHandContactFact(
+                1,
+                TrackedHandContactPhase.Updated,
+                UnityEngine.XR.XRNode.RightHand,
+                UnityEngine.XR.Hands.XRHandJointID.IndexTip,
+                TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Face,
+                point + Vector3.up * .001f,
+                Vector3.forward,
+                .02f,
+                .1f,
+                true,
+                true));
+            Assert.AreEqual(PokeInteractionPhase.Hover, hover.Phase);
+
+            var ended = lifecycle.Observe(new TrackedHandContactFact(
+                1,
+                TrackedHandContactPhase.Ended,
+                UnityEngine.XR.XRNode.RightHand,
+                UnityEngine.XR.Hands.XRHandJointID.IndexTip,
+                TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Face,
+                point,
+                Vector3.forward,
+                0f,
+                .2f,
+                true,
+                true));
+            Assert.AreEqual(PokeInteractionPhase.Exit, ended.Phase);
+            Assert.IsFalse(lifecycle.IsActive);
+        }
+
+        [Test]
         public void ExistingContactUsesWiderReleaseThreshold()
         {
             Assert.AreEqual(.07f, AvatarTouchInteraction.ContactThreshold(false, .07f), .0001f);
@@ -356,6 +419,202 @@ namespace QuestMmdPlayer.Tests
                 Is.True);
             Assert.That(region, Is.EqualTo(AvatarContactRegion.Head));
             Assert.That(correction.magnitude, Is.GreaterThan(.0001f));
+        }
+
+        [Test]
+        public void ContactSurfaceReportsOutwardNormalWithoutMovingProbe()
+        {
+            avatarObject = new GameObject("SurfaceAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var head = new GameObject("Head");
+            head.transform.SetParent(avatarObject.transform, false);
+            var bone = head.AddComponent<MMDBoneTransform>();
+            bone.boneName = "head";
+            var body = head.AddComponent<MMDRigidBody>();
+            body.relatedBone = bone;
+            body.shape = PMXRigidBody.Shape.Sphere;
+            body.size = new Unity.Mathematics.float3(.1f, 0f, 0f);
+
+            serviceObject = new GameObject("TouchService");
+            var touch = serviceObject.AddComponent<AvatarTouchInteraction>();
+            touch.Bind(controller);
+            Physics.SyncTransforms();
+            var probe = new Vector3(.12f, 0f, 0f);
+
+            Assert.That(touch.TryGetContactSurface(
+                probe,
+                .03f,
+                AvatarContactRegion.Head,
+                out var surface,
+                out var normal), Is.True);
+            Assert.That(surface.x, Is.EqualTo(.1f).Within(.005f));
+            Assert.That(Vector3.Dot(normal, Vector3.right), Is.GreaterThan(.99f));
+            Assert.That(probe, Is.EqualTo(new Vector3(.12f, 0f, 0f)));
+        }
+
+        [Test]
+        public void ContactTrackerPublishesStableLifecycleDurationAndNormal()
+        {
+            var tracker = new TrackedHandContactTracker(
+                UnityEngine.XR.XRNode.LeftHand,
+                XRHandJointID.Palm,
+                TrackedHandContactProbe.Palm);
+            var facts = new System.Collections.Generic.List<TrackedHandContactFact>();
+            tracker.FactChanged += facts.Add;
+
+            tracker.Observe(
+                AvatarContactRegion.Head,
+                Vector3.one,
+                Vector3.up * 3f,
+                .02f,
+                false,
+                true,
+                10f,
+                .1f);
+            tracker.Observe(
+                AvatarContactRegion.Head,
+                Vector3.one,
+                Vector3.up,
+                .01f,
+                false,
+                true,
+                10.05f,
+                .1f);
+            tracker.Observe(
+                AvatarContactRegion.Head,
+                Vector3.one,
+                Vector3.up,
+                .01f,
+                false,
+                true,
+                10.12f,
+                .1f);
+            tracker.Clear(10.25f);
+
+            Assert.That(facts, Has.Count.EqualTo(3));
+            Assert.That(facts[0].Phase, Is.EqualTo(TrackedHandContactPhase.Began));
+            Assert.That(facts[1].Phase, Is.EqualTo(TrackedHandContactPhase.Updated));
+            Assert.That(facts[2].Phase, Is.EqualTo(TrackedHandContactPhase.Ended));
+            Assert.That(facts[2].DurationSeconds, Is.EqualTo(.25f).Within(.0001f));
+            Assert.That(facts[0].SurfaceNormal, Is.EqualTo(Vector3.up));
+            Assert.That(facts[0].UsesAuthoritativeTrackedPose, Is.True);
+            Assert.That(facts[0].SequenceId, Is.EqualTo(facts[2].SequenceId));
+        }
+
+        [Test]
+        public void ContactTrackerRestartsWhenSemanticIdentityChanges()
+        {
+            var tracker = new TrackedHandContactTracker(
+                UnityEngine.XR.XRNode.RightHand,
+                XRHandJointID.IndexTip,
+                TrackedHandContactProbe.PinchTip);
+            var facts = new System.Collections.Generic.List<TrackedHandContactFact>();
+            tracker.FactChanged += facts.Add;
+
+            tracker.Observe(
+                AvatarContactRegion.Face,
+                Vector3.zero,
+                Vector3.forward,
+                0f,
+                false,
+                true,
+                1f);
+            tracker.Observe(
+                AvatarContactRegion.Face,
+                Vector3.zero,
+                Vector3.forward,
+                .01f,
+                true,
+                true,
+                1.2f);
+
+            Assert.That(facts, Has.Count.EqualTo(3));
+            Assert.That(facts[0].Phase, Is.EqualTo(TrackedHandContactPhase.Began));
+            Assert.That(facts[1].Phase, Is.EqualTo(TrackedHandContactPhase.Ended));
+            Assert.That(facts[2].Phase, Is.EqualTo(TrackedHandContactPhase.Began));
+            Assert.That(facts[2].Pinching, Is.True);
+            Assert.That(facts[2].SequenceId, Is.GreaterThan(facts[0].SequenceId));
+        }
+
+        [Test]
+        public void ContactAggregatorKeepsSecondProbeWhenFirstEnds()
+        {
+            var aggregator = new TrackedHandContactAggregator();
+            var selected = new System.Collections.Generic.List<TrackedHandContactFact>();
+            aggregator.FactChanged += selected.Add;
+            var palm = new TrackedHandContactFact(
+                1, TrackedHandContactPhase.Began, UnityEngine.XR.XRNode.LeftHand,
+                XRHandJointID.Palm, TrackedHandContactProbe.Palm,
+                AvatarContactRegion.Body, Vector3.zero, Vector3.forward, .02f, 0f, false, true);
+            var finger = new TrackedHandContactFact(
+                1, TrackedHandContactPhase.Began, UnityEngine.XR.XRNode.LeftHand,
+                XRHandJointID.IndexTip, TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Head, Vector3.one, Vector3.up, .01f, 0f, false, true);
+            aggregator.Accept(palm);
+            aggregator.Accept(finger);
+            aggregator.Accept(new TrackedHandContactFact(
+                1, TrackedHandContactPhase.Ended, UnityEngine.XR.XRNode.LeftHand,
+                XRHandJointID.Palm, TrackedHandContactProbe.Palm,
+                AvatarContactRegion.Body, Vector3.zero, Vector3.forward, .02f, .2f, false, true));
+
+            Assert.That(aggregator.ActiveCount, Is.EqualTo(1));
+            Assert.That(selected[selected.Count - 1].Region, Is.EqualTo(AvatarContactRegion.Head));
+            Assert.That(selected[selected.Count - 1].Phase, Is.EqualTo(TrackedHandContactPhase.Began));
+        }
+
+        [Test]
+        public void ContactAggregatorPrefersHigherRegionButKeepsStableTie()
+        {
+            var aggregator = new TrackedHandContactAggregator();
+            var selected = new System.Collections.Generic.List<TrackedHandContactFact>();
+            aggregator.FactChanged += selected.Add;
+            var body = new TrackedHandContactFact(
+                2, TrackedHandContactPhase.Began, UnityEngine.XR.XRNode.RightHand,
+                XRHandJointID.Palm, TrackedHandContactProbe.Palm,
+                AvatarContactRegion.Body, Vector3.zero, Vector3.up, 0f, 0f, false, true);
+            var face = new TrackedHandContactFact(
+                3, TrackedHandContactPhase.Began, UnityEngine.XR.XRNode.RightHand,
+                XRHandJointID.IndexTip, TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Face, Vector3.one, Vector3.forward, 0f, 0f, true, true);
+            aggregator.Accept(body);
+            aggregator.Accept(face);
+            Assert.That(selected[selected.Count - 1].Region, Is.EqualTo(AvatarContactRegion.Face));
+            aggregator.Accept(new TrackedHandContactFact(
+                3, TrackedHandContactPhase.Updated, UnityEngine.XR.XRNode.RightHand,
+                XRHandJointID.IndexTip, TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Face, Vector3.one * 2f, Vector3.forward, 0f, .1f, true, true));
+            Assert.That(selected[selected.Count - 1].Region, Is.EqualTo(AvatarContactRegion.Face));
+            Assert.That(selected[selected.Count - 1].Point, Is.EqualTo(Vector3.one * 2f));
+        }
+
+        [Test]
+        public void ContactAggregatorReplacesOlderSequenceForSameProbe()
+        {
+            var aggregator = new TrackedHandContactAggregator();
+            aggregator.Accept(new TrackedHandContactFact(
+                1, TrackedHandContactPhase.Began, UnityEngine.XR.XRNode.LeftHand,
+                XRHandJointID.IndexTip, TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Head, Vector3.zero, Vector3.up, 0f, 0f, false, true));
+            aggregator.Accept(new TrackedHandContactFact(
+                2, TrackedHandContactPhase.Began, UnityEngine.XR.XRNode.LeftHand,
+                XRHandJointID.IndexTip, TrackedHandContactProbe.PinchTip,
+                AvatarContactRegion.Face, Vector3.one, Vector3.forward, 0f, 0f, true, true));
+
+            Assert.That(aggregator.ActiveCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ContactDiagnosticsAlwaysRecordLifecycleAndThrottleHover()
+        {
+            Assert.That(QuestTrackedHandVisualizer.ShouldRecordContactDiagnostic(
+                TrackedHandContactPhase.Began, 10f, 10f, 1f), Is.True);
+            Assert.That(QuestTrackedHandVisualizer.ShouldRecordContactDiagnostic(
+                TrackedHandContactPhase.Updated, 10.1f, 10f, 1f), Is.False);
+            Assert.That(QuestTrackedHandVisualizer.ShouldRecordContactDiagnostic(
+                TrackedHandContactPhase.Updated, 11.01f, 10f, 1f), Is.True);
+            Assert.That(QuestTrackedHandVisualizer.ShouldRecordContactDiagnostic(
+                TrackedHandContactPhase.Ended, 10.2f, 10f, 1f), Is.True);
         }
     }
 }

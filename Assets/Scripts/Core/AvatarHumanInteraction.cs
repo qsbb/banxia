@@ -10,7 +10,10 @@ namespace QuestMmdPlayer
     public enum HumanInteractionKind { None, Handshake, HeadPat, CheekPinch, BodyTouch }
 
     [DisallowMultipleComponent]
-    [DefaultExecutionOrder(11000)]
+    // MMD/VMD writes the base pose first (10900); touch reactions are a
+    // deliberate post-process so a real contact cannot be overwritten by the
+    // controller's action pose in the same frame.
+    [DefaultExecutionOrder(11100)]
     public sealed class AvatarHumanInteraction : MonoBehaviour
     {
         [SerializeField] bool inputEnabled = true;
@@ -92,6 +95,24 @@ namespace QuestMmdPlayer
             correction = Vector3.zero;
             region = AvatarContactRegion.None;
             return touch != null && touch.TryGetPenetrationCorrection(handCollider, out correction, out region);
+        }
+
+        public bool TryGetContactSurface(
+            Vector3 probePoint,
+            float radius,
+            AvatarContactRegion region,
+            out Vector3 surfacePoint,
+            out Vector3 surfaceNormal)
+        {
+            EnsureTouchSubscription();
+            surfacePoint = probePoint;
+            surfaceNormal = Vector3.zero;
+            return touch != null && touch.TryGetContactSurface(
+                probePoint,
+                radius,
+                region,
+                out surfacePoint,
+                out surfaceNormal);
         }
 
         sealed class HandData
@@ -334,13 +355,6 @@ namespace QuestMmdPlayer
         void Update()
         {
             if (avatar == null) return;
-            if (avatar.CurrentAction == "vmd")
-            {
-                if (current != HumanInteractionKind.None) SetState(HumanInteractionKind.None, false);
-                UnlockTouch();
-                Status = "Touch reactions paused during VMD motion";
-                return;
-            }
             if (!inputEnabled) { UnlockTouch(); return; }
             trackingSpace = QuestXrInputUtility.ResolveTrackingSpace(trackingSpace);
             Read(left);
@@ -378,23 +392,13 @@ namespace QuestMmdPlayer
         void LateUpdate()
         {
             if (avatar == null || bones == null) return;
-            if (avatar.CurrentAction == "vmd")
-            {
-                fade = 0f;
-                if (reactionPoseApplied || scaleChanged)
-                {
-                    RestorePose();
-                    RestoreMorphs();
-                    reactionPoseApplied = false;
-                }
-                return;
-            }
             var backendActive = backendReactionUntil > Time.unscaledTime;
-            var desired = backendActive
-                ? backendReactionKind
-                : localReactionsEnabled
-                    ? current
-                    : HumanInteractionKind.None;
+            var desired = SelectDesiredInteraction(
+                current,
+                currentInteractionIsPhysical,
+                backendReactionKind,
+                backendActive,
+                localReactionsEnabled);
             if (desired != HumanInteractionKind.None) fadeKind = desired;
             fade = NaturalMotionTransition.UpdateWeight(
                 fade,
@@ -425,6 +429,29 @@ namespace QuestMmdPlayer
             if (enableBoneReactions) ApplyBones(kind, fade);
             bones.ApplyTransition(Time.unscaledDeltaTime, .38f);
             reactionPoseApplied = true;
+        }
+
+        /// <summary>
+        /// Physical contact is the authoritative observation. A backend
+        /// reaction may remain queued, but it must not hide a hand that is
+        /// currently touching the avatar.
+        /// </summary>
+        public static HumanInteractionKind SelectDesiredInteraction(
+            HumanInteractionKind physicalKind,
+            bool physicalActive,
+            HumanInteractionKind backendKind,
+            bool backendActive,
+            bool localReactionsEnabled)
+        {
+            if (physicalActive && physicalKind != HumanInteractionKind.None)
+            {
+                return physicalKind;
+            }
+            if (backendActive && backendKind != HumanInteractionKind.None)
+            {
+                return backendKind;
+            }
+            return localReactionsEnabled ? physicalKind : HumanInteractionKind.None;
         }
 
         void Read(HandData data)

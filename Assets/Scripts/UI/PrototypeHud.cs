@@ -45,9 +45,9 @@ namespace QuestMmdPlayer
             GUILayout.Space(8f);
 
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Idle")) bootstrap.Avatar.PlayAction("idle");
-            if (GUILayout.Button("Wave")) bootstrap.Avatar.PlayAction("wave");
-            if (GUILayout.Button("Bow")) bootstrap.Avatar.PlayAction("bow");
+            if (GUILayout.Button("Idle")) bootstrap.Avatar.PlayActionFromSource("idle", AvatarActionSource.Manual);
+            if (GUILayout.Button("Wave")) bootstrap.Avatar.PlayActionFromSource("wave", AvatarActionSource.Manual);
+            if (GUILayout.Button("Bow")) bootstrap.Avatar.PlayActionFromSource("bow", AvatarActionSource.Manual);
             if (GUILayout.Button("Pause")) bootstrap.Avatar.TogglePlayback();
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();

@@ -171,6 +171,33 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PlaybackDiagnosticsStartFromSafeDefaults()
+        {
+            var host = new GameObject("VMD diagnostics");
+            try
+            {
+                var library = host.AddComponent<VmdActionLibrary>();
+
+                Assert.That(library.PlaybackPhase, Is.EqualTo(VmdPlaybackPhase.Idle));
+                Assert.That(library.CacheHitCount, Is.Zero);
+                Assert.That(library.CacheMissCount, Is.Zero);
+                Assert.That(library.CacheEvictionCount, Is.Zero);
+                Assert.That(library.LastPrepareMilliseconds, Is.EqualTo(-1));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [TestCase(10f, 10.125f, 125)]
+        [TestCase(2f, 1f, 0)]
+        public void ModelLoadElapsedTimeIsBounded(float startedAt, float now, int expected)
+        {
+            Assert.That(RuntimeMmdModelLoader.ElapsedMilliseconds(startedAt, now), Is.EqualTo(expected));
+        }
+
+        [Test]
         public void RecommendedDanceFallsBackToValidatedCustomActionWhenNameIsGeneric()
         {
             var selected = VmdActionLibrary.SelectRecommendedDance(new[]

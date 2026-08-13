@@ -426,7 +426,11 @@ namespace QuestMmdPlayer
                     }
                     break;
                 case ConversationEventType.ReplyEnd:
-                    if (string.IsNullOrWhiteSpace(stateMachine.ReplyText) && replyAudioChunkCount == 0)
+                    var actionOnlyReply = AcceptActionOnlyReplyEnd(
+                        backendActionReceived,
+                        stateMachine.ReplyText,
+                        replyAudioChunkCount);
+                    if (!actionOnlyReply && string.IsNullOrWhiteSpace(stateMachine.ReplyText) && replyAudioChunkCount == 0)
                     {
                         Debug.LogWarning(
                             $"[Conversation] Empty reply.end received; server text_sent={message.TextSent}, audio_sent={message.AudioSent}.",
@@ -435,6 +439,11 @@ namespace QuestMmdPlayer
                             "empty_backend_reply",
                             "Backend completed the turn without text or audio");
                         return;
+                    }
+                    if (actionOnlyReply)
+                    {
+                        Debug.Log("[Conversation] Action-only reply.end accepted; avatar intent was already applied.", this);
+                        diagnostics?.Record("AvatarAction", "action-only reply.end accepted after avatar intent; audio_buffer closed");
                     }
                     audioPlayer?.MarkStreamCompleted();
                     RecordStage(
@@ -715,6 +724,15 @@ namespace QuestMmdPlayer
             return !string.IsNullOrEmpty(gesture) &&
                 !string.Equals(gesture, "idle", StringComparison.Ordinal) &&
                 !string.Equals(gesture, "talk", StringComparison.Ordinal);
+        }
+
+        public static bool AcceptActionOnlyReplyEnd(
+            bool backendActionReceived,
+            string replyText,
+            int audioChunkCount)
+        {
+            return backendActionReceived && string.IsNullOrWhiteSpace(replyText) &&
+                audioChunkCount == 0;
         }
 
         private void BeginResponseWait(float now)

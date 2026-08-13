@@ -38,7 +38,7 @@ namespace QuestMmdPlayer
                 action = "lie_down";
                 return true;
             }
-            if (ContainsAny(value, "跳舞", "舞蹈", "跳个舞", "跳一支", "来段舞", "dance"))
+            if (ContainsAny(value, "跳舞", "舞蹈", "跳个舞", "跳一支", "来段舞", "帮我跳", "让她跳", "让角色跳", "dance"))
             {
                 action = "dance";
                 return true;

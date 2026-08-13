@@ -266,6 +266,32 @@ namespace QuestMmdPlayer.Tests
                 HumanInteractionKind.Handshake,
                 AvatarHumanInteraction.ClassifyPhysicalContact(AvatarContactRegion.Hand, false));
         }
+
+        [Test]
+        public void PhysicalContactWinsOverBackendReaction()
+        {
+            Assert.AreEqual(
+                HumanInteractionKind.HeadPat,
+                AvatarHumanInteraction.SelectDesiredInteraction(
+                    HumanInteractionKind.HeadPat,
+                    true,
+                    HumanInteractionKind.Handshake,
+                    true,
+                    true));
+        }
+
+        [Test]
+        public void BackendReactionIsUsedWhenNoPhysicalContactIsActive()
+        {
+            Assert.AreEqual(
+                HumanInteractionKind.Handshake,
+                AvatarHumanInteraction.SelectDesiredInteraction(
+                    HumanInteractionKind.None,
+                    false,
+                    HumanInteractionKind.Handshake,
+                    true,
+                    true));
+        }
         private void CreateBone(string objectName, string mmdName)
         {
             var boneObject = new GameObject(objectName);

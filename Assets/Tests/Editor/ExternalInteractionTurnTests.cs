@@ -24,6 +24,27 @@ namespace QuestMmdPlayer.Tests
             Assert.AreEqual(ConversationState.Idle, machine.State);
         }
 
+        [Test]
+        public void ActionOnlyReplyEndIsAcceptedAfterAvatarIntent()
+        {
+            Assert.IsTrue(ConversationController.AcceptActionOnlyReplyEnd(
+                true,
+                string.Empty,
+                0));
+            Assert.IsFalse(ConversationController.AcceptActionOnlyReplyEnd(
+                false,
+                string.Empty,
+                0));
+            Assert.IsFalse(ConversationController.AcceptActionOnlyReplyEnd(
+                true,
+                "text",
+                0));
+            Assert.IsFalse(ConversationController.AcceptActionOnlyReplyEnd(
+                true,
+                string.Empty,
+                1));
+        }
+
         private static ConversationEvent Event(
             string turnId,
             ConversationEventType type,

@@ -85,6 +85,7 @@ namespace QuestMmdPlayer
                 Locomotion = gameObject.GetComponent<QuestVrLocomotion>() ?? gameObject.AddComponent<QuestVrLocomotion>();
             }
             RoomUnderstanding = gameObject.GetComponent<RoomUnderstandingService>() ?? gameObject.AddComponent<RoomUnderstandingService>();
+            AstrBot.BindSpatialContext(RoomUnderstanding);
             if (createAvatarPlacement)
             {
                 Placement = gameObject.GetComponent<AvatarPlacementService>() ?? gameObject.AddComponent<AvatarPlacementService>();
@@ -400,7 +401,7 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            Avatar?.PlayAction(normalized);
+            Avatar?.PlayActionFromSource(normalized, AvatarActionSource.Backend);
         }
     }
 }

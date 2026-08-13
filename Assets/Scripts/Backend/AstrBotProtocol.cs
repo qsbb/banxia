@@ -572,4 +572,41 @@ namespace QuestMmdPlayer
         public string protocol_version = AstrBotProtocol.Version;
         public string session_id;
     }
+
+    /// <summary>
+    /// Coarse, privacy-bounded room facts. This wire object intentionally has
+    /// no free text, image, mesh, pose, dimensions, anchor IDs, or device IDs.
+    /// </summary>
+    [Serializable]
+    public sealed class SpatialContextRequest
+    {
+        public string session_id;
+        public int schema_version = 1;
+        public long revision;
+        public int floor_count;
+        public int seat_count;
+        public int bed_count;
+        public int table_count;
+        public int wall_count;
+        public int door_count;
+        public int window_count;
+        public bool scene_capture_available;
+        public bool occlusion_available;
+
+        public string ContentSignature()
+        {
+            return string.Join(
+                ":",
+                schema_version,
+                floor_count,
+                seat_count,
+                bed_count,
+                table_count,
+                wall_count,
+                door_count,
+                window_count,
+                scene_capture_available ? 1 : 0,
+                occlusion_available ? 1 : 0);
+        }
+    }
 }

@@ -428,7 +428,7 @@ namespace QuestMmdPlayer
 
             if (rightHand.PrimaryDown)
             {
-                avatar.PlayAction("wave");
+                avatar.PlayActionFromSource("wave", AvatarActionSource.Manual);
             }
 
             if (rightHand.SecondaryDown)
@@ -438,7 +438,7 @@ namespace QuestMmdPlayer
 
             if (leftHand.PrimaryDown)
             {
-                avatar.PlayAction("bow");
+                avatar.PlayActionFromSource("bow", AvatarActionSource.Manual);
             }
 
             if (leftHand.SecondaryDown)
@@ -697,6 +697,67 @@ namespace QuestMmdPlayer
             }
 
             return bestPriority > 0;
+        }
+
+        /// <summary>
+        /// Observes the nearest proxy surface without moving the tracked hand.
+        /// </summary>
+        public bool TryGetContactSurface(
+            Vector3 probePoint,
+            float radius,
+            AvatarContactRegion region,
+            out Vector3 surfacePoint,
+            out Vector3 surfaceNormal)
+        {
+            surfacePoint = probePoint;
+            surfaceNormal = Vector3.zero;
+            if (avatar == null || region == AvatarContactRegion.None)
+            {
+                return false;
+            }
+
+            var safeRadius = Mathf.Max(.005f, radius);
+            var bestDistanceSquared = float.PositiveInfinity;
+            Collider bestCollider = null;
+            for (var index = 0; index < contactProxies.Count; index++)
+            {
+                var proxy = contactProxies[index];
+                if (proxy == null || proxy.Region != region || !proxy.isActiveAndEnabled)
+                {
+                    continue;
+                }
+                var collider = proxy.Collider;
+                if (collider == null || !collider.enabled)
+                {
+                    continue;
+                }
+                var closest = collider.ClosestPoint(probePoint);
+                var distanceSquared = (closest - probePoint).sqrMagnitude;
+                if (distanceSquared > safeRadius * safeRadius || distanceSquared >= bestDistanceSquared)
+                {
+                    continue;
+                }
+                bestDistanceSquared = distanceSquared;
+                bestCollider = collider;
+                surfacePoint = closest;
+            }
+
+            if (bestCollider == null)
+            {
+                return false;
+            }
+
+            var outward = probePoint - surfacePoint;
+            if (outward.sqrMagnitude <= .0000001f)
+            {
+                outward = probePoint - bestCollider.bounds.center;
+            }
+            if (outward.sqrMagnitude <= .0000001f)
+            {
+                outward = avatar.transform.forward;
+            }
+            surfaceNormal = outward.normalized;
+            return true;
         }
 
         public bool TryGetContactRegionSwept(Vector3 from, Vector3 to, float radius, out AvatarContactRegion region, out Vector3 contactPoint)
@@ -1262,6 +1323,10 @@ namespace QuestMmdPlayer
         Limb
     }
 
+    // UMT's MMDTransformManager solves bones at order 10000. Proxies must
+    // follow those solved transforms before QuestTrackedHandVisualizer samples
+    // contacts at order 10800; the default order caused stale one-frame poses.
+    [DefaultExecutionOrder(10600)]
     internal sealed class AvatarContactProxy : MonoBehaviour
     {
         public AvatarContactRegion Region;

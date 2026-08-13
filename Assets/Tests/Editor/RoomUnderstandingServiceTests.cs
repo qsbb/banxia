@@ -8,6 +8,13 @@ namespace QuestMmdPlayer.Tests
 {
     public sealed class RoomUnderstandingServiceTests
     {
+        private sealed class FakeMrukAnchor : MonoBehaviour
+        {
+            public string Label { get; set; }
+            public Rect? PlaneRect { get; set; }
+            public Bounds? VolumeBounds { get; set; }
+        }
+
         [Test]
         public void ExplicitRoomTrackingStopsAfterSnapshotOrDeadline()
         {
@@ -31,7 +38,7 @@ namespace QuestMmdPlayer.Tests
 
             Assert.That(
                 RoomUnderstandingService.BuildSummary(observations),
-                Is.EqualTo("房间 地面:1 座位:1 桌子:1 墙:1 门:0 窗:0"));
+                Is.EqualTo("房间 地面:1 座位:1 床:0 桌子:1 墙:1 门:0 窗:0"));
         }
 
         [Test]
@@ -72,6 +79,218 @@ namespace QuestMmdPlayer.Tests
                 .35f,
                 out var selected), Is.True);
             Assert.That(selected.Id, Is.EqualTo("previous"));
+        }
+
+        [Test]
+        public void StablePlacementSelectionKeepsPreferredSeatWhenCandidatesJitter()
+        {
+            var candidates = new[]
+            {
+                new RoomPlacementCandidate(
+                    "previous-seat",
+                    RoomPlacementSurfaceKind.Seat,
+                    new Pose(new Vector3(0f, .45f, 1.05f), Quaternion.identity),
+                    new Pose(new Vector3(0f, .45f, 1.05f), Quaternion.identity),
+                    new Vector2(.8f, .6f),
+                    true),
+                new RoomPlacementCandidate(
+                    "slightly-nearer",
+                    RoomPlacementSurfaceKind.Seat,
+                    new Pose(new Vector3(0f, .45f, 1f), Quaternion.identity),
+                    new Pose(new Vector3(0f, .45f, 1f), Quaternion.identity),
+                    new Vector2(.8f, .6f),
+                    true)
+            };
+
+            Assert.That(RoomUnderstandingService.TrySelectStablePlacementCandidate(
+                candidates,
+                RoomPlacementSurfaceKind.Seat,
+                new Pose(Vector3.zero, Quaternion.identity),
+                "previous-seat",
+                .35f,
+                out var selected), Is.True);
+            Assert.That(selected.SurfaceId, Is.EqualTo("previous-seat"));
+        }
+
+        [Test]
+        public void StableRestingSelectionKeepsPreferredSurfaceAcrossRefresh()
+        {
+            var candidates = new[]
+            {
+                new RoomPlacementCandidate(
+                    "preferred-bed",
+                    RoomPlacementSurfaceKind.Bed,
+                    new Pose(new Vector3(0f, .5f, 1.05f), Quaternion.identity),
+                    new Pose(new Vector3(0f, .5f, 1.05f), Quaternion.identity),
+                    new Vector2(1.8f, .8f),
+                    true,
+                    true),
+                new RoomPlacementCandidate(
+                    "near-seat",
+                    RoomPlacementSurfaceKind.Seat,
+                    new Pose(new Vector3(0f, .45f, 1f), Quaternion.identity),
+                    new Pose(new Vector3(0f, .45f, 1f), Quaternion.identity),
+                    new Vector2(.8f, .6f),
+                    true)
+            };
+
+            Assert.That(RoomUnderstandingService.TrySelectStableRestingSurface(
+                candidates,
+                new Pose(Vector3.zero, Quaternion.identity),
+                "preferred-bed",
+                .35f,
+                out var selected), Is.True);
+            Assert.That(selected.SurfaceId, Is.EqualTo("preferred-bed"));
+        }
+
+        [Test]
+        public void OptionalMrukProbeDoesNotRequireMrukAssembly()
+        {
+            Assert.That(SpatialCapabilityAdapter.HasOptionalMruk(), Is.False);
+        }
+
+        [Test]
+        public void CapabilitySnapshotHasExplicitUnavailableDefaults()
+        {
+            var snapshot = new SpatialCapabilitySnapshot();
+
+            Assert.That(snapshot.Mruk, Is.EqualTo(SpatialCapabilityState.Unavailable));
+            Assert.That(snapshot.PlaneTracking, Is.EqualTo(SpatialCapabilityState.Unavailable));
+            Assert.That(snapshot.Occlusion, Is.EqualTo(SpatialCapabilityState.Unavailable));
+            Assert.That(snapshot.VirtualCollision, Is.EqualTo(SpatialCapabilityState.Unavailable));
+            Assert.That(snapshot.SceneCaptureAvailable, Is.False);
+        }
+
+        [TestCase("FLOOR", PlaneClassification.Floor, RoomPlacementSurfaceKind.Floor)]
+        [TestCase("WALL_FACE", PlaneClassification.Wall, null)]
+        [TestCase("TABLE", PlaneClassification.Table, RoomPlacementSurfaceKind.Table)]
+        [TestCase("COUCH", PlaneClassification.Seat, RoomPlacementSurfaceKind.Couch)]
+        [TestCase("BED", PlaneClassification.Seat, RoomPlacementSurfaceKind.Bed)]
+        public void MrukSemanticLabelsMapWithoutImportingMruk(
+            string label,
+            PlaneClassification expectedClassification,
+            RoomPlacementSurfaceKind? expectedKind)
+        {
+            Assert.That(SpatialCapabilityAdapter.TryMapMrukLabel(
+                label,
+                out var classification,
+                out var semanticKind), Is.True);
+            Assert.That(classification, Is.EqualTo(expectedClassification));
+            Assert.That(semanticKind, Is.EqualTo(expectedKind));
+        }
+
+        [Test]
+        public void MrukUnsupportedLabelsAreClosedByDefault()
+        {
+            Assert.That(SpatialCapabilityAdapter.TryMapMrukLabel(
+                "GLOBAL_MESH",
+                out _,
+                out _), Is.False);
+        }
+
+        [Test]
+        public void MrukBedSemanticSurvivesArFoundationSeatProjection()
+        {
+            var bed = new RoomSurfaceObservation(
+                "mruk-bed",
+                PlaneClassification.Seat,
+                new Pose(new Vector3(0f, .5f, 1f), Quaternion.identity),
+                new Vector2(2f, 1f),
+                RoomPlacementSurfaceKind.Bed);
+
+            Assert.That(RoomUnderstandingService.TryCreatePlacementCandidate(
+                bed,
+                new Pose(Vector3.zero, Quaternion.identity),
+                .35f,
+                .45f,
+                .35f,
+                out var candidate), Is.True);
+            Assert.That(candidate.Kind, Is.EqualTo(RoomPlacementSurfaceKind.Bed));
+            Assert.That(candidate.SupportsLying, Is.True);
+        }
+
+        [Test]
+        public void MrukBedDoesNotMasqueradeAsSeatButCouchDoes()
+        {
+            var observations = new[]
+            {
+                new RoomSurfaceObservation(
+                    "mruk-bed-runtime",
+                    PlaneClassification.Seat,
+                    new Pose(Vector3.zero, Quaternion.identity),
+                    new Vector2(2f, 1f),
+                    RoomPlacementSurfaceKind.Bed),
+                new RoomSurfaceObservation(
+                    "mruk-couch-runtime",
+                    PlaneClassification.Seat,
+                    new Pose(Vector3.forward, Quaternion.identity),
+                    new Vector2(1.8f, .7f),
+                    RoomPlacementSurfaceKind.Couch)
+            };
+
+            var snapshot = RoomUnderstandingService.BuildSemanticSnapshot(observations);
+
+            Assert.That(snapshot.SeatCount, Is.EqualTo(1));
+            Assert.That(snapshot.FloorCount, Is.Zero);
+            Assert.That(snapshot.TableCount, Is.Zero);
+            Assert.That(RoomUnderstandingService.CountsAsSeat(observations[0]), Is.False);
+            Assert.That(RoomUnderstandingService.CountsAsSeat(observations[1]), Is.True);
+        }
+
+        [Test]
+        public void MrukPlaneAnchorProjectsOnlySemanticPoseAndBounds()
+        {
+            var root = new GameObject("MRUK projection fixture");
+            try
+            {
+                root.transform.SetPositionAndRotation(
+                    new Vector3(1f, .45f, 2f),
+                    Quaternion.Euler(0f, 25f, 0f));
+                var anchor = root.AddComponent<FakeMrukAnchor>();
+                anchor.Label = "COUCH";
+                anchor.PlaneRect = new Rect(-.7f, -.25f, 1.8f, .7f);
+                anchor.VolumeBounds = new Bounds(Vector3.zero, new Vector3(1.8f, .7f, .6f));
+
+                Assert.That(SpatialCapabilityAdapter.TryProjectMrukAnchor(
+                    anchor,
+                    0,
+                    out var observation), Is.True);
+                Assert.That(observation.Id, Does.StartWith("mruk-couch-"));
+                Assert.That(observation.Classification, Is.EqualTo(PlaneClassification.Seat));
+                Assert.That(observation.SemanticKind, Is.EqualTo(RoomPlacementSurfaceKind.Couch));
+                Assert.That(
+                    Vector3.Distance(
+                        observation.Pose.position,
+                        root.transform.TransformPoint(new Vector3(.2f, .1f, 0f))),
+                    Is.LessThan(.0001f));
+                Assert.That(observation.Pose.rotation, Is.EqualTo(root.transform.rotation));
+                Assert.That(observation.Size, Is.EqualTo(new Vector2(1.8f, .7f)));
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void MrukProjectionRejectsGlobalMeshEvenWhenItHasBounds()
+        {
+            var root = new GameObject("MRUK global mesh fixture");
+            try
+            {
+                var anchor = root.AddComponent<FakeMrukAnchor>();
+                anchor.Label = "GLOBAL_MESH";
+                anchor.VolumeBounds = new Bounds(Vector3.zero, Vector3.one);
+
+                Assert.That(SpatialCapabilityAdapter.TryProjectMrukAnchor(
+                    anchor,
+                    0,
+                    out _), Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
         }
 
         [Test]
@@ -219,6 +438,25 @@ namespace QuestMmdPlayer.Tests
             Assert.That(json, Does.Not.Contain("Surface"));
             Assert.That(json, Does.Not.Contain("Position"));
             Assert.That(json, Does.Not.Contain("Size"));
+        }
+
+        [Test]
+        public void BedHasItsOwnBoundedSemanticCount()
+        {
+            var observations = new[]
+            {
+                new RoomSurfaceObservation(
+                    "bed",
+                    PlaneClassification.Seat,
+                    new Pose(Vector3.zero, Quaternion.identity),
+                    new Vector2(2f, 1.2f),
+                    RoomPlacementSurfaceKind.Bed)
+            };
+
+            var snapshot = RoomUnderstandingService.BuildSemanticSnapshot(observations);
+
+            Assert.That(snapshot.BedCount, Is.EqualTo(1));
+            Assert.That(snapshot.SeatCount, Is.Zero);
         }
 
         [Test]

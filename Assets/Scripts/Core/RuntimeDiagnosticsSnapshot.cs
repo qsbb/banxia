@@ -53,6 +53,7 @@ namespace QuestMmdPlayer
         public PlacementDiagnostics Placement { get; }
         public RoomDiagnostics Room { get; }
         public MotionDiagnostics Motion { get; }
+        public ModelLoadDiagnostics ModelLoad { get; }
 
         internal RuntimeDiagnosticsSnapshot(
             float capturedAtRealtimeSeconds,
@@ -65,7 +66,8 @@ namespace QuestMmdPlayer
             PassthroughDiagnostics passthrough,
             PlacementDiagnostics placement,
             RoomDiagnostics room,
-            MotionDiagnostics motion)
+            MotionDiagnostics motion,
+            ModelLoadDiagnostics modelLoad)
         {
             SchemaVersion = CurrentSchemaVersion;
             CapturedAtRealtimeSeconds = Mathf.Max(0f, capturedAtRealtimeSeconds);
@@ -79,6 +81,7 @@ namespace QuestMmdPlayer
             Placement = placement;
             Room = room;
             Motion = motion;
+            ModelLoad = modelLoad;
         }
     }
 
@@ -102,6 +105,12 @@ namespace QuestMmdPlayer
     {
         public bool HandVisualizerAvailable { get; }
         public int TrackedHandCount { get; }
+        public int ActiveContactCount { get; }
+        public TrackedHandContactPhase LastContactPhase { get; }
+        public AvatarContactRegion LastContactRegion { get; }
+        public bool LastContactPinching { get; }
+        public float LastContactPenetrationDepth { get; }
+        public float LastContactDurationSeconds { get; }
         public bool TouchAvailable { get; }
         public bool TouchInputEnabled { get; }
         public bool Touched { get; }
@@ -121,6 +130,22 @@ namespace QuestMmdPlayer
         {
             HandVisualizerAvailable = hands != null;
             TrackedHandCount = hands == null ? 0 : Mathf.Clamp(hands.TrackedHandCount, 0, 2);
+            ActiveContactCount = hands == null ? 0 : Mathf.Max(0, hands.ActiveContactCount);
+            var hasContactFact = hands != null && (hands.ActiveContactCount > 0 ||
+                hands.LatestContactFact.Region != AvatarContactRegion.None);
+            LastContactPhase = hasContactFact
+                ? hands.LatestContactFact.Phase
+                : TrackedHandContactPhase.Ended;
+            LastContactRegion = hasContactFact
+                ? hands.LatestContactFact.Region
+                : AvatarContactRegion.None;
+            LastContactPinching = hasContactFact && hands.LatestContactFact.Pinching;
+            LastContactPenetrationDepth = hasContactFact
+                ? Mathf.Max(0f, hands.LatestContactFact.PenetrationDepth)
+                : 0f;
+            LastContactDurationSeconds = hasContactFact
+                ? Mathf.Max(0f, hands.LatestContactFact.DurationSeconds)
+                : 0f;
             TouchAvailable = touch != null;
             TouchInputEnabled = touch != null && touch.InputEnabled;
             Touched = touch != null && touch.IsTouched;
@@ -340,6 +365,12 @@ namespace QuestMmdPlayer
         public int SeatCount { get; }
         public int TableCount { get; }
         public int WallCount { get; }
+        public SpatialCapabilityState MetaOpenXr { get; }
+        public SpatialCapabilityState Mruk { get; }
+        public SpatialCapabilityState PlaneTracking { get; }
+        public SpatialCapabilityState Occlusion { get; }
+        public SpatialCapabilityState VirtualCollision { get; }
+        public bool SceneCaptureRequested { get; }
 
         internal RoomDiagnostics(RoomUnderstandingService room)
         {
@@ -353,6 +384,13 @@ namespace QuestMmdPlayer
             SeatCount = room == null ? 0 : Mathf.Max(0, room.SeatCount);
             TableCount = room == null ? 0 : Mathf.Max(0, room.TableCount);
             WallCount = room == null ? 0 : Mathf.Max(0, room.WallCount);
+            var capabilities = room == null ? default : room.Capabilities;
+            MetaOpenXr = capabilities.MetaOpenXr;
+            Mruk = capabilities.Mruk;
+            PlaneTracking = capabilities.PlaneTracking;
+            Occlusion = capabilities.Occlusion;
+            VirtualCollision = capabilities.VirtualCollision;
+            SceneCaptureRequested = room != null && room.IsSceneCaptureTrackingRequested;
         }
     }
 
@@ -361,6 +399,7 @@ namespace QuestMmdPlayer
     {
         public bool AvatarAvailable { get; }
         public bool AvatarActionPlaying { get; }
+        public AvatarActionSource CurrentActionSource { get; }
         public bool IdlePoseBound { get; }
         public AvatarIdlePreset IdlePreset { get; }
         public bool VmdLibraryAvailable { get; }
@@ -371,6 +410,11 @@ namespace QuestMmdPlayer
         public bool VmdPlaying { get; }
         public bool HoldingEndPose { get; }
         public bool BlendingOut { get; }
+        public VmdPlaybackPhase PlaybackPhase { get; }
+        public int ActionCacheHits { get; }
+        public int ActionCacheMisses { get; }
+        public int ActionCacheEvictions { get; }
+        public int LastActionPrepareMs { get; }
         public bool FullBodyMotionBusy { get; }
         public bool ConversationPresentationActive { get; }
         public bool SemanticContactOwnsInteraction { get; }
@@ -384,6 +428,7 @@ namespace QuestMmdPlayer
         {
             AvatarAvailable = avatar != null;
             AvatarActionPlaying = avatar != null && avatar.IsPlaying;
+            CurrentActionSource = avatar == null ? AvatarActionSource.Unknown : avatar.CurrentActionSource;
             IdlePoseBound = idle != null && idle.IsBound;
             IdlePreset = idle == null ? AvatarIdlePreset.Relaxed : idle.Preset;
             VmdLibraryAvailable = vmd != null;
@@ -394,9 +439,34 @@ namespace QuestMmdPlayer
             VmdPlaying = vmd != null && vmd.IsPlaying;
             HoldingEndPose = vmd != null && vmd.IsHoldingEndPose;
             BlendingOut = vmd != null && vmd.IsBlendingOut;
+            PlaybackPhase = vmd == null ? VmdPlaybackPhase.Idle : vmd.PlaybackPhase;
+            ActionCacheHits = vmd == null ? 0 : vmd.CacheHitCount;
+            ActionCacheMisses = vmd == null ? 0 : vmd.CacheMissCount;
+            ActionCacheEvictions = vmd == null ? 0 : vmd.CacheEvictionCount;
+            LastActionPrepareMs = vmd == null ? -1 : vmd.LastPrepareMilliseconds;
             FullBodyMotionBusy = AvatarActionPlaying || VmdLoading || VmdPlaying || HoldingEndPose || BlendingOut;
             ConversationPresentationActive = conversation != null && conversation.State != ConversationState.Idle;
             SemanticContactOwnsInteraction = human != null && human.HasSemanticContact;
+        }
+    }
+
+    public sealed class ModelLoadDiagnostics
+    {
+        public bool Available { get; }
+        public bool Loading { get; }
+        public RuntimeModelLoadPhase Phase { get; }
+        public int LastTotalMs { get; }
+        public int LastReadMs { get; }
+        public int LastBuildMs { get; }
+
+        internal ModelLoadDiagnostics(RuntimeMmdModelLoader loader)
+        {
+            Available = loader != null;
+            Loading = loader != null && loader.IsLoading;
+            Phase = loader == null ? RuntimeModelLoadPhase.Idle : loader.LoadPhase;
+            LastTotalMs = loader == null ? -1 : loader.LastLoadMilliseconds;
+            LastReadMs = loader == null ? -1 : loader.LastReadMilliseconds;
+            LastBuildMs = loader == null ? -1 : loader.LastBuildMilliseconds;
         }
     }
 
@@ -455,7 +525,8 @@ namespace QuestMmdPlayer
                     owner == null ? null : owner.IdlePose,
                     owner == null ? null : owner.VmdActions,
                     conversation,
-                    owner == null ? null : owner.HumanInteraction));
+                    owner == null ? null : owner.HumanInteraction),
+                new ModelLoadDiagnostics(owner == null ? null : owner.ModelLoader));
         }
 
         public static RuntimeMenuLayer DetectMenuLayer(CompanionWorldMenu menu)

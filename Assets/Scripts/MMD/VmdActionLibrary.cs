@@ -10,6 +10,16 @@ using UnityEngine;
 
 namespace QuestMmdPlayer
 {
+    public enum VmdPlaybackPhase
+    {
+        Idle,
+        Loading,
+        Playing,
+        HoldingEndPose,
+        BlendingOut,
+        Failed
+    }
+
     [Serializable]
     public sealed class VmdActionLimits
     {
@@ -388,7 +398,8 @@ namespace QuestMmdPlayer
     }
 
     // UMT transform solver runs at 10000 in LateUpdate; VMD owns the final bone write.
-    [DefaultExecutionOrder(11000)]
+    // Write imported motion before the post-process human interaction layer.
+    [DefaultExecutionOrder(10900)]
     [DisallowMultipleComponent]
     public sealed class VmdActionLibrary : MonoBehaviour
     {
@@ -459,6 +470,11 @@ namespace QuestMmdPlayer
         public bool IsHoldingEndPose => endPoseHoldActive;
         public bool IsBlendingOut => blendOutActive;
         public int PreparedActionCount => preparedActions.Count;
+        public VmdPlaybackPhase PlaybackPhase { get; private set; } = VmdPlaybackPhase.Idle;
+        public int CacheHitCount { get; private set; }
+        public int CacheMissCount { get; private set; }
+        public int CacheEvictionCount { get; private set; }
+        public int LastPrepareMilliseconds { get; private set; } = -1;
         public bool IsPrepared(string actionId) => !string.IsNullOrEmpty(actionId) && preparedActions.ContainsKey(actionId);
 
         private sealed class BoneBinding
@@ -679,6 +695,7 @@ namespace QuestMmdPlayer
             boundAvatar = null;
             transformManager = null;
             lastPlayedActionId = string.Empty;
+            PlaybackPhase = VmdPlaybackPhase.Idle;
         }
 
         public async Task<bool> PlayAsync(string actionId)
@@ -704,6 +721,7 @@ namespace QuestMmdPlayer
             }
 
             IsLoading = true;
+            PlaybackPhase = VmdPlaybackPhase.Loading;
             PlaybackChanged?.Invoke();
             var requestGeneration = generation;
             var requestModel = boundModel;
@@ -720,6 +738,7 @@ namespace QuestMmdPlayer
                     string.Equals(prepared.sourceCacheKey, source.cacheKey, StringComparison.Ordinal))
                 {
                     usedPreparedCache = true;
+                    CacheHitCount++;
                     prepared.lastUsedAt = Time.unscaledTime;
                     info = prepared.info;
                     nextBones = prepared.bones;
@@ -729,6 +748,7 @@ namespace QuestMmdPlayer
                 }
                 else
                 {
+                    CacheMissCount++;
                     preparedActions.Remove(actionId);
                     info = VmdActionFilePolicy.Inspect(source.motionPath, actionId, limits);
                     if (!string.IsNullOrEmpty(source.facialPath))
@@ -817,18 +837,22 @@ namespace QuestMmdPlayer
                 lastPlayedActionId = info.Id;
                 BeginPhysicsArbitration();
                 IsPlaying = true;
-                boundAvatar?.PlayAction("vmd");
+                PlaybackPhase = VmdPlaybackPhase.Playing;
+                boundAvatar?.PlayActionFromSource("vmd", AvatarActionSource.Imported);
                 ProgressChanged?.Invoke("正在播放 " + info.DisplayName);
                 Debug.Log(
                     "[VmdActionLibrary] Playback ready: action=" + info.Id +
                     " cache=" + usedPreparedCache +
                     " elapsed_ms=" + Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)),
                     this);
+                LastPrepareMilliseconds = Mathf.Max(
+                    0,
+                    Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f));
                 diagnostics?.RecordStage(
                     "avatar_action",
                     "completed",
                     usedPreparedCache ? "vmd_playback_cached" : "vmd_playback_prepared",
-                    elapsedMs: Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)));
+                    elapsedMs: LastPrepareMilliseconds);
                 PlaybackChanged?.Invoke();
                 return true;
             }
@@ -840,6 +864,10 @@ namespace QuestMmdPlayer
                 exception is OverflowException)
             {
                 ReportFailure("VMD 动作加载失败：" + exception.Message);
+                PlaybackPhase = VmdPlaybackPhase.Failed;
+                LastPrepareMilliseconds = Mathf.Max(
+                    0,
+                    Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f));
                 Debug.LogWarning(
                     "[VmdActionLibrary] Playback failed: action=" + actionId +
                     " elapsed_ms=" + Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)) +
@@ -849,7 +877,7 @@ namespace QuestMmdPlayer
                     "avatar_action",
                     "failed",
                     "vmd_load_failed",
-                    elapsedMs: Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)));
+                    elapsedMs: LastPrepareMilliseconds);
                 return false;
             }
             finally
@@ -1092,6 +1120,7 @@ namespace QuestMmdPlayer
             foreach (var actionId in expired)
             {
                 preparedActions.Remove(actionId);
+                CacheEvictionCount++;
             }
 
             var maximum = Mathf.Clamp(maxPreparedActionCount, 1, 8);
@@ -1107,6 +1136,7 @@ namespace QuestMmdPlayer
                     break;
                 }
                 preparedActions.Remove(oldest);
+                CacheEvictionCount++;
             }
         }
 
@@ -1137,6 +1167,7 @@ namespace QuestMmdPlayer
 
             endPoseHoldActive = true;
             endPoseHoldClock = 0f;
+            PlaybackPhase = VmdPlaybackPhase.HoldingEndPose;
             diagnostics?.RecordStage("avatar_action", "processing", "vmd_end_pose_hold");
         }
 
@@ -1195,6 +1226,7 @@ namespace QuestMmdPlayer
             IsPlaying = false;
             blendOutActive = true;
             blendOutClock = 0f;
+            PlaybackPhase = VmdPlaybackPhase.BlendingOut;
             diagnostics?.RecordStage("avatar_action", "processing", "vmd_blend_out");
             PlaybackChanged?.Invoke();
         }
@@ -1246,8 +1278,9 @@ namespace QuestMmdPlayer
             blendOutActive = false;
             CurrentActionId = string.Empty;
             IsPlaying = false;
+            PlaybackPhase = VmdPlaybackPhase.Idle;
             EndPhysicsArbitration();
-            boundAvatar?.PlayAction("idle");
+            boundAvatar?.PlayActionFromSource("idle", AvatarActionSource.System);
             if (hadPlayback)
             {
                 diagnostics?.RecordStage("avatar_action", "completed", "vmd_idle_restored");
