@@ -853,7 +853,11 @@ namespace QuestMmdPlayer
             {
                 using (var stream = File.OpenRead(pmxPath))
                 {
-                    model = await PMXReader.ReadAsync(budget, stream, true);
+                    model = await PMXReader.ReadAsync(
+                        budget,
+                        stream,
+                        true,
+                        token);
                 }
                 token.ThrowIfCancellationRequested();
                 LastReadMilliseconds = ElapsedMilliseconds(readStartedAt);

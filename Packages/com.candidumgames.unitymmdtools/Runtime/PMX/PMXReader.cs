@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -24,21 +25,28 @@ namespace UMT
         {
             using MMDBinaryReader reader = new MMDBinaryReader(stream, true);
             PMXModel model = ScriptableObject.CreateInstance<PMXModel>();
+            try
+            {
+                ReadHeader(reader, ref model.header, strictVersion);
+                ReadModelInfo(reader, model);
+                ReadVertices(reader, model);
+                ReadFaces(reader, model);
+                ReadTextures(reader, model);
+                ReadMaterials(reader, model);
+                ReadBones(reader, model);
+                ReadMorphs(reader, model);
+                ReadDisplayFrames(reader, model);
+                ReadRigidBodies(reader, model);
+                ReadJoints(reader, model);
+                Validate(model);
 
-            ReadHeader(reader, ref model.header, strictVersion);
-            ReadModelInfo(reader, model);
-            ReadVertices(reader, model);
-            ReadFaces(reader, model);
-            ReadTextures(reader, model);
-            ReadMaterials(reader, model);
-            ReadBones(reader, model);
-            ReadMorphs(reader, model);
-            ReadDisplayFrames(reader, model);
-            ReadRigidBodies(reader, model);
-            ReadJoints(reader, model);
-            Validate(model);
-
-            return model;
+                return model;
+            }
+            catch
+            {
+                PMXUtilities.DestroyRuntimeObject(model);
+                throw;
+            }
         }
 
         /// <summary>
@@ -49,33 +57,53 @@ namespace UMT
         /// <param name="strictVersion">When true, requires the file version to match the supported PMX version.</param>
         /// <returns>The parsed PMX model as a new <see cref="ScriptableObject"/>.</returns>
         /// <exception cref="InvalidDataException">Thrown when the stream contains invalid or unsupported PMX data.</exception>
-        public static async Task<PMXModel> ReadAsync(UMTFrameBudget frameBudget, Stream stream, bool strictVersion = true)
+        public static async Task<PMXModel> ReadAsync(
+            UMTFrameBudget frameBudget,
+            Stream stream,
+            bool strictVersion = true,
+            CancellationToken cancellationToken = default)
         {
             using MMDBinaryReader reader = new MMDBinaryReader(stream, true);
             PMXModel model = ScriptableObject.CreateInstance<PMXModel>();
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ReadHeader(reader, ref model.header, strictVersion);
+                ReadModelInfo(reader, model);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                await ReadVerticesAsync(frameBudget, reader, model, cancellationToken);
+                await ReadFacesAsync(frameBudget, reader, model, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                ReadTextures(reader, model);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                ReadMaterials(reader, model);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                ReadBones(reader, model);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                await ReadMorphsAsync(frameBudget, reader, model, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                ReadDisplayFrames(reader, model);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                ReadRigidBodies(reader, model);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                ReadJoints(reader, model);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                await ValidateAsync(frameBudget, model, cancellationToken);
 
-            ReadHeader(reader, ref model.header, strictVersion);
-            ReadModelInfo(reader, model);
-            await frameBudget.YieldIfNeeded();
-            await ReadVerticesAsync(frameBudget, reader, model);
-            await ReadFacesAsync(frameBudget, reader, model);
-            await frameBudget.YieldIfNeeded();
-            ReadTextures(reader, model);
-            await frameBudget.YieldIfNeeded();
-            ReadMaterials(reader, model);
-            await frameBudget.YieldIfNeeded();
-            ReadBones(reader, model);
-            await frameBudget.YieldIfNeeded();
-            await ReadMorphsAsync(frameBudget, reader, model);
-            ReadDisplayFrames(reader, model);
-            await frameBudget.YieldIfNeeded();
-            ReadRigidBodies(reader, model);
-            await frameBudget.YieldIfNeeded();
-            ReadJoints(reader, model);
-            await frameBudget.YieldIfNeeded();
-            await ValidateAsync(frameBudget, model);
-
-            return model;
+                return model;
+            }
+            catch
+            {
+                PMXUtilities.DestroyRuntimeObject(model);
+                throw;
+            }
         }
 
         private static void ReadHeader(MMDBinaryReader reader, ref PMXHeader header, bool strictVersion)
@@ -164,12 +192,18 @@ namespace UMT
         private static async Task ReadVerticesAsync(
             UMTFrameBudget frameBudget,
             MMDBinaryReader reader,
-            PMXModel model)
+            PMXModel model,
+            CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int count = ReadNonNegativeCount(reader);
             model.vertices = new PMXVertex[count];
             for (int i = 0; i < count; ++i)
             {
+                if ((i & 255) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
                 PMXVertex vertex = new PMXVertex
                 {
                     position = ReadPosition(reader),
@@ -192,9 +226,11 @@ namespace UMT
                 if ((i & 255) == 255)
                 {
                     await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
             await frameBudget.YieldIfNeeded();
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         private static PMXWeight ReadWeight(MMDBinaryReader reader, PMXHeader header)
@@ -273,8 +309,10 @@ namespace UMT
         private static async Task ReadFacesAsync(
             UMTFrameBudget frameBudget,
             MMDBinaryReader reader,
-            PMXModel model)
+            PMXModel model,
+            CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int count = ReadNonNegativeCount(reader);
             if (count % 3 != 0)
             {
@@ -284,13 +322,19 @@ namespace UMT
             model.indices = new uint[count];
             for (int i = 0; i < count; ++i)
             {
+                if ((i & 1023) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
                 model.indices[i] = reader.ReadVertexIndex(model.header.vertexIndexSize);
                 if ((i & 1023) == 1023)
                 {
                     await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
             await frameBudget.YieldIfNeeded();
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         private static void ReadTextures(MMDBinaryReader reader, PMXModel model)
@@ -452,12 +496,15 @@ namespace UMT
         private static async Task ReadMorphsAsync(
             UMTFrameBudget frameBudget,
             MMDBinaryReader reader,
-            PMXModel model)
+            PMXModel model,
+            CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int count = ReadNonNegativeCount(reader);
             model.morphs = new PMXMorph[count];
             for (int i = 0; i < count; ++i)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 PMXMorph morph = new PMXMorph
                 {
                     originalName = reader.ReadPMXText(model.header.textEncoding),
@@ -469,14 +516,20 @@ namespace UMT
                 morph.offsets = new PMXMorphOffset[offsetCount];
                 for (int offsetIndex = 0; offsetIndex < offsetCount; ++offsetIndex)
                 {
+                    if ((offsetIndex & 511) == 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
                     morph.offsets[offsetIndex] = ReadMorphOffset(reader, model.header, morph.type);
                     if ((offsetIndex & 511) == 511)
                     {
                         await frameBudget.YieldIfNeeded();
+                        cancellationToken.ThrowIfCancellationRequested();
                     }
                 }
                 model.morphs[i] = morph;
                 await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
             }
         }
 
@@ -692,10 +745,17 @@ namespace UMT
             }
         }
 
-        private static async Task ValidateAsync(UMTFrameBudget frameBudget, PMXModel model)
+        private static async Task ValidateAsync(
+            UMTFrameBudget frameBudget,
+            PMXModel model,
+            CancellationToken cancellationToken)
         {
             for (int i = 0; i < model.indices.Length; ++i)
             {
+                if ((i & 2047) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
                 if (model.indices[i] >= model.vertices.Length)
                 {
                     throw new InvalidDataException($"Vertex index {model.indices[i]} at face index {i} is out of range.");
@@ -703,6 +763,7 @@ namespace UMT
                 if ((i & 2047) == 2047)
                 {
                     await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
 
@@ -716,6 +777,7 @@ namespace UMT
                 throw new InvalidDataException($"Material face index total {materialFaceTotal} does not match face index count {model.indices.Length}.");
             }
             await frameBudget.YieldIfNeeded();
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         private static int ReadNonNegativeCount(MMDBinaryReader reader)

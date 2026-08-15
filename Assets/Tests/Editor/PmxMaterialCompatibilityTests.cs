@@ -1,6 +1,7 @@
 using System.Collections;
 using System.IO;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -151,6 +152,83 @@ namespace QuestMmdPlayer.Tests
                 if (texture != null) Object.DestroyImmediate(texture);
                 Object.DestroyImmediate(model);
             }
+        }
+
+        [UnityTest]
+        public IEnumerator CancellationDuringAsyncReadDestroysPartialModel()
+        {
+            var before = Resources.FindObjectsOfTypeAll<PMXModel>().Length;
+            using var stream = new MemoryStream(BuildLargePartialPmx(4096), false);
+            using var cancellation = new CancellationTokenSource();
+            Task<PMXModel> read = PMXReader.ReadAsync(
+                new UMTFrameBudget(0d),
+                stream,
+                true,
+                cancellation.Token);
+
+            yield return null;
+            Assert.That(read.IsCompleted, Is.False,
+                "The synthetic PMX must still be in its budgeted vertex loop.");
+            cancellation.Cancel();
+            while (!read.IsCompleted)
+            {
+                yield return null;
+            }
+
+            Assert.That(read.IsCanceled, Is.True,
+                read.Exception?.GetBaseException().ToString());
+            Assert.Throws<System.OperationCanceledException>(
+                () => read.GetAwaiter().GetResult());
+            Assert.That(
+                Resources.FindObjectsOfTypeAll<PMXModel>().Length,
+                Is.EqualTo(before),
+                "A cancelled PMX read must not retain its partial ScriptableObject.");
+        }
+
+        [Test]
+        public void InvalidSynchronousReadDestroysPartialModel()
+        {
+            var before = Resources.FindObjectsOfTypeAll<PMXModel>().Length;
+            using var stream = new MemoryStream(new byte[] { 0x00 }, false);
+            Assert.Catch(() => PMXReader.Read(stream, true));
+            Assert.That(
+                Resources.FindObjectsOfTypeAll<PMXModel>().Length,
+                Is.EqualTo(before),
+                "A failed PMX read must not retain its partial ScriptableObject.");
+        }
+
+        private static byte[] BuildLargePartialPmx(int vertexCount)
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new BinaryWriter(stream, Encoding.UTF8, true))
+            {
+                writer.Write(Encoding.ASCII.GetBytes("PMX "));
+                writer.Write(2.0f);
+                writer.Write((byte)8);
+                writer.Write((byte)PMXHeader.TextEncoding.UTF8);
+                writer.Write((byte)0);
+                for (var i = 0; i < 6; i++)
+                {
+                    writer.Write((byte)1);
+                }
+                for (var i = 0; i < 4; i++)
+                {
+                    writer.Write(0);
+                }
+
+                writer.Write(vertexCount);
+                for (var i = 0; i < vertexCount; i++)
+                {
+                    for (var value = 0; value < 8; value++)
+                    {
+                        writer.Write(0f);
+                    }
+                    writer.Write((byte)PMXWeight.Type.BDEF1);
+                    writer.Write((sbyte)0);
+                    writer.Write(1f);
+                }
+            }
+            return stream.ToArray();
         }
 
         [TestCase(.5f, 0f)]
