@@ -308,7 +308,7 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void DuplicatePmxPrefersCompletePackageWithTextures()
+        public void IdenticalPmxWithDifferentResourceSetsRemainSelectable()
         {
             temporaryDirectory = Path.Combine(Path.GetTempPath(), "banxia-pmx-duplicate-" + System.Guid.NewGuid());
             var imported = Path.Combine(temporaryDirectory, "Imported");
@@ -324,13 +324,18 @@ namespace QuestMmdPlayer.Tests
 
             var discovered = DiscoverInstalledModels(temporaryDirectory);
 
-            Assert.That(discovered.Count, Is.EqualTo(1));
-            Assert.That(discovered[0].Path, Is.EqualTo(Path.GetFullPath(completeModel)));
-            Assert.That(discovered[0].PackageRoot, Is.EqualTo(Path.GetFullPath(complete)));
+            Assert.That(discovered.Count, Is.EqualTo(2));
+            CollectionAssert.AreEquivalent(
+                new[]
+                {
+                    Path.GetFullPath(completeModel),
+                    Path.GetFullPath(Path.Combine(incomplete, "角色.pmx"))
+                },
+                discovered.Select(model => model.Path));
         }
 
         [Test]
-        public void DuplicatePmxRecoversReadableNameButKeepsCompletePackagePath()
+        public void IdenticalPmxInSeparatePackagesKeepIndependentNames()
         {
             temporaryDirectory = Path.Combine(Path.GetTempPath(), "banxia-pmx-name-recovery-" + System.Guid.NewGuid());
             var complete = Path.Combine(temporaryDirectory, "Imported", "完整模型包");
@@ -345,10 +350,9 @@ namespace QuestMmdPlayer.Tests
 
             var discovered = DiscoverInstalledModels(temporaryDirectory);
 
-            Assert.That(discovered.Count, Is.EqualTo(1));
-            Assert.That(discovered[0].DisplayName, Is.EqualTo("休日冒险"));
-            Assert.That(discovered[0].Path, Is.EqualTo(Path.GetFullPath(completeModel)));
-            Assert.That(discovered[0].PackageRoot, Is.EqualTo(Path.GetFullPath(complete)));
+            Assert.That(discovered.Count, Is.EqualTo(2));
+            Assert.That(discovered.Any(model => model.DisplayName == "休日冒险"), Is.True);
+            Assert.That(discovered.Any(model => model.Path == Path.GetFullPath(completeModel)), Is.True);
         }
 
         [Test]

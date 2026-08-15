@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Unity.Burst;
 using Unity.Collections;
@@ -55,7 +56,8 @@ namespace UMT
             PMXModel model,
             string modelName,
             IReadOnlyList<PMXMorphLinkedMaterialGroup> materialGroups,
-            Matrix4x4[] bindposes)
+            Matrix4x4[] bindposes,
+            CancellationToken cancellationToken = default)
         {
             if (frameBudget == null)
             {
@@ -69,6 +71,7 @@ namespace UMT
             {
                 foreach (PMXMorphLinkedMaterialGroup materialGroup in materialGroups)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     string meshName = GetMeshName(
                         model,
                         modelName,
@@ -84,7 +87,16 @@ namespace UMT
                     importedMesh.name = meshName;
                     meshes.Add(importedMesh);
                     await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
+            }
+            catch
+            {
+                foreach (PMXImportedMesh importedMesh in meshes)
+                {
+                    PMXUtilities.DestroyRuntimeObject(importedMesh?.mesh);
+                }
+                throw;
             }
             finally
             {

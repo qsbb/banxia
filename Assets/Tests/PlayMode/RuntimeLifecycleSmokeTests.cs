@@ -16,6 +16,59 @@ namespace QuestMmdPlayer.PlayModeTests
     public sealed class RuntimeLifecycleSmokeTests
     {
         [UnityTest]
+        public IEnumerator RapidModelReplacementCancelsOldBuildWithoutClearingNewState()
+        {
+            var pmxPath = Environment.GetEnvironmentVariable("BANXIA_TEST_PMX");
+            if (string.IsNullOrWhiteSpace(pmxPath) || !File.Exists(pmxPath))
+            {
+                Assert.Ignore("BANXIA_TEST_PMX is not configured for this run.");
+            }
+
+            var root = new GameObject("Rapid real PMX replacement test");
+            try
+            {
+                var loader = root.AddComponent(RuntimeType(
+                    "QuestMmdPlayer.RuntimeMmdModelLoader"));
+                SetField(loader, "restoreStarted", true);
+                var first = (Task)Invoke(
+                    loader,
+                    "LoadFromFileAsync",
+                    pmxPath,
+                    Path.GetDirectoryName(pmxPath));
+                yield return null;
+                Assert.That(first.IsCompleted, Is.False);
+
+                var second = (Task)Invoke(
+                    loader,
+                    "LoadFromFileAsync",
+                    pmxPath,
+                    Path.GetDirectoryName(pmxPath));
+                while (!first.IsCompleted || !second.IsCompleted)
+                {
+                    yield return null;
+                }
+
+                Assert.That(first.IsCanceled, Is.True);
+                if (second.IsFaulted)
+                {
+                    throw second.Exception?.GetBaseException() ??
+                        new InvalidOperationException("Replacement PMX load failed.");
+                }
+                Assert.That(second.IsCompletedSuccessfully, Is.True);
+                Assert.That(Read<bool>(loader, "IsLoading"), Is.False);
+                Assert.That(
+                    Read<object>(loader, "LoadPhase").ToString(),
+                    Is.EqualTo("Ready"));
+                Assert.That(Read<GameObject>(loader, "CurrentModel"), Is.Not.Null);
+            }
+            finally
+            {
+                UnityEngine.Object.Destroy(root);
+            }
+            yield return null;
+        }
+
+        [UnityTest]
         public IEnumerator OptionalRealPmxUsesTheRuntimeBudgetedPipeline()
         {
             var pmxPath = Environment.GetEnvironmentVariable("BANXIA_TEST_PMX");

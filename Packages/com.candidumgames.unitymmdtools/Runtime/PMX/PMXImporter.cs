@@ -254,7 +254,11 @@ namespace UMT
         /// <param name="options">Import options; a default instance is used when null.</param>
         /// <returns>The import result containing the built Unity objects.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="model"/> is null.</exception>
-        public static async Task<PMXImportResult> BuildUnityObjectsAsync(UMTFrameBudget frameBudget, PMXModel model, PMXImportOptions options = null)
+        public static async Task<PMXImportResult> BuildUnityObjectsAsync(
+            UMTFrameBudget frameBudget,
+            PMXModel model,
+            PMXImportOptions options = null,
+            CancellationToken cancellationToken = default)
         {
             if (model == null)
             {
@@ -267,93 +271,145 @@ namespace UMT
                 model = model,
             };
 
-            string modelName = PMXUtilities.GetModelName(model, options);
-            result.root = new GameObject(modelName);
-            if (options.parent != null)
+            try
             {
-                result.root.transform.SetParent(options.parent, false);
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                string modelName = PMXUtilities.GetModelName(model, options);
+                result.root = new GameObject(modelName);
+                if (options.parent != null)
+                {
+                    result.root.transform.SetParent(options.parent, false);
+                }
 
-            List<PMXMorphLinkedMaterialGroup> materialGroups = PMXMorphBuilder.BuildMorphLinkedMaterialGroups(model);
-            await frameBudget.YieldIfNeeded();
+                List<PMXMorphLinkedMaterialGroup> materialGroups = PMXMorphBuilder.BuildMorphLinkedMaterialGroups(model);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
 
-            using (UMTTiming.Measure(options.timingCallback, "Load Textures"))
-            {
-                result.texturesByIndex = options.loadTextures != null
-                    ? LoadTextures(model, options, result)
-                    : await PMXTextureLoader.LoadAsync(
+                using (UMTTiming.Measure(options.timingCallback, "Load Textures"))
+                {
+                    result.texturesByIndex = options.loadTextures != null
+                        ? LoadTextures(model, options, result)
+                        : await PMXTextureLoader.LoadAsync(
+                            frameBudget,
+                            model,
+                            options,
+                            result,
+                            cancellationToken);
+                    foreach (Texture2D texture in result.texturesByIndex)
+                    {
+                        if (texture != null && !result.textures.Contains(texture))
+                        {
+                            result.textures.Add(texture);
+                        }
+                    }
+                }
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using (UMTTiming.Measure(options.timingCallback, "Build Materials"))
+                {
+                    result.materials.AddRange(await PMXMaterialBuilder.BuildAsync(
                         frameBudget,
                         model,
                         options,
-                        result);
-                foreach (Texture2D texture in result.texturesByIndex)
-                {
-                    if (texture != null && !result.textures.Contains(texture))
-                    {
-                        result.textures.Add(texture);
-                    }
-                }
-            }
-            await frameBudget.YieldIfNeeded();
-
-            using (UMTTiming.Measure(options.timingCallback, "Build Materials"))
-            {
-                result.materials.AddRange(await PMXMaterialBuilder.BuildAsync(
-                    frameBudget,
-                    model,
-                    options,
-                    modelName,
-                    result.texturesByIndex));
-            }
-            await frameBudget.YieldIfNeeded();
-
-            Matrix4x4[] bindposes;
-            using (UMTTiming.Measure(options.timingCallback, "Build Skeleton"))
-            {
-                result.bones = PMXBoneBuilder.BuildBones(model, result.root.transform);
-                bindposes = PMXBoneBuilder.BuildBindposes(result.root.transform, result.bones);
-            }
-            await frameBudget.YieldIfNeeded();
-
-            if (options.createAvatar || result.mmdTransformResult.transformManager != null)
-            {
-                using (UMTTiming.Measure(options.timingCallback, "Build Avatar"))
-                {
-                    result.avatarResult = PMXAvatarBuilder.Build(model, result.root, result.bones, modelName, RequireResources(options, "build a humanoid avatar"));
+                        modelName,
+                        result.texturesByIndex,
+                        cancellationToken));
                 }
                 await frameBudget.YieldIfNeeded();
-            }
+                cancellationToken.ThrowIfCancellationRequested();
 
-            using (UMTTiming.Measure(options.timingCallback, "Build Meshes"))
-            {
-                result.meshes.AddRange(await PMXMeshBuilder.BuildAsync(
-                    frameBudget,
-                    model,
-                    modelName,
-                    materialGroups,
-                    bindposes));
-            }
-            await frameBudget.YieldIfNeeded();
-
-            using (UMTTiming.Measure(options.timingCallback, "Build Renderers"))
-            {
-                PMXRendererBuilder.Build(model, result.root, result.meshes, result.materials, result.bones);
-            }
-            await frameBudget.YieldIfNeeded();
-
-            using (UMTTiming.Measure(options.timingCallback, "Build Runtime"))
-            {
-                result.mmdTransformResult = MMDTransformBuilder.Build(model, result.root, result.bones);
-
-                if (result.mmdTransformResult.transformManager != null)
+                Matrix4x4[] bindposes;
+                using (UMTTiming.Measure(options.timingCallback, "Build Skeleton"))
                 {
-                    BuildSDEFSkinners(model, result, options);
-                    MMDTransformBuilder.RefreshInitialTransforms(result.mmdTransformResult.transformManager);
+                    result.bones = PMXBoneBuilder.BuildBones(model, result.root.transform);
+                    bindposes = PMXBoneBuilder.BuildBindposes(result.root.transform, result.bones);
+                }
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (options.createAvatar || result.mmdTransformResult.transformManager != null)
+                {
+                    using (UMTTiming.Measure(options.timingCallback, "Build Avatar"))
+                    {
+                        result.avatarResult = PMXAvatarBuilder.Build(model, result.root, result.bones, modelName, RequireResources(options, "build a humanoid avatar"));
+                    }
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                using (UMTTiming.Measure(options.timingCallback, "Build Meshes"))
+                {
+                    result.meshes.AddRange(await PMXMeshBuilder.BuildAsync(
+                        frameBudget,
+                        model,
+                        modelName,
+                        materialGroups,
+                        bindposes,
+                        cancellationToken));
+                }
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using (UMTTiming.Measure(options.timingCallback, "Build Renderers"))
+                {
+                    PMXRendererBuilder.Build(model, result.root, result.meshes, result.materials, result.bones);
+                }
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using (UMTTiming.Measure(options.timingCallback, "Build Runtime"))
+                {
+                    result.mmdTransformResult = MMDTransformBuilder.Build(model, result.root, result.bones);
+
+                    if (result.mmdTransformResult.transformManager != null)
+                    {
+                        BuildSDEFSkinners(model, result, options);
+                        MMDTransformBuilder.RefreshInitialTransforms(result.mmdTransformResult.transformManager);
+                    }
+                }
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return result;
+            }
+            catch
+            {
+                DestroyPartialResult(result);
+                throw;
+            }
+        }
+
+        internal static void DestroyPartialResult(PMXImportResult result)
+        {
+            if (result == null)
+            {
+                return;
+            }
+
+            HashSet<UnityEngine.Object> destroyed = new HashSet<UnityEngine.Object>();
+            void DestroyOnce(UnityEngine.Object value)
+            {
+                if (value != null && destroyed.Add(value))
+                {
+                    PMXUtilities.DestroyRuntimeObject(value);
                 }
             }
-            await frameBudget.YieldIfNeeded();
 
-            return result;
+            DestroyOnce(result.root);
+            DestroyOnce(result.avatarResult?.avatar);
+            foreach (PMXImportedMesh importedMesh in result.meshes)
+            {
+                DestroyOnce(importedMesh?.mesh);
+            }
+            foreach (Material material in result.materials)
+            {
+                DestroyOnce(material);
+            }
+            foreach (Texture2D texture in result.textures)
+            {
+                DestroyOnce(texture);
+            }
         }
 
         private static Texture2D[] LoadTextures(PMXModel model, PMXImportOptions options, PMXImportResult result)

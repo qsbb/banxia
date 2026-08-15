@@ -63,6 +63,7 @@ namespace QuestMmdPlayer
         [SerializeField] private Vector3 spawnPosition = new Vector3(0f, 0f, 2.2f);
 
         private CancellationTokenSource loadCancellation;
+        private long loadGeneration;
         private PMXImportResult currentResult;
         private AvatarController currentAvatar;
         private readonly List<ParsedModelCacheEntry> parsedModelCache = new List<ParsedModelCacheEntry>();
@@ -276,45 +277,11 @@ namespace QuestMmdPlayer
                     -1));
             }
 
-            var selectedCandidates = new List<ModelCatalogCandidate>();
-            foreach (var sameLength in candidates.GroupBy(candidate => candidate.Length))
-            {
-                var lengthGroup = sameLength.ToArray();
-                if (lengthGroup.Length == 1)
-                {
-                    selectedCandidates.Add(lengthGroup[0]);
-                    continue;
-                }
-
-                foreach (var sameContent in lengthGroup.GroupBy(candidate =>
-                    TryComputeSha256(candidate.Path, out var hash)
-                        ? hash
-                        : "path:" + candidate.Path,
-                    StringComparer.OrdinalIgnoreCase))
-                {
-                    var rawContentCopies = sameContent.ToArray();
-                    var contentCopies = rawContentCopies.Length <= 1
-                        ? rawContentCopies
-                        : rawContentCopies
-                            .Select(candidate => candidate.WithTextureCount(
-                                CountTextureResources(candidate.PackageRoot)))
-                            .ToArray();
-                    var selected = contentCopies
-                        .OrderByDescending(candidate => candidate.TextureCount)
-                        .ThenBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
-                        .First();
-                    var recoveredDisplayName = contentCopies
-                        .Select(candidate => new
-                        {
-                            FileName = Path.GetFileNameWithoutExtension(candidate.Path) ?? string.Empty,
-                            DisplayName = ResolveDisplayName(candidate.Path)
-                        })
-                        .Where(value => !LooksCorruptedDisplayName(value.FileName))
-                        .Select(value => value.DisplayName)
-                        .FirstOrDefault(value => !LooksCorruptedDisplayName(value));
-                    selectedCandidates.Add(selected.WithDisplayName(recoveredDisplayName));
-                }
-            }
+            // Identical PMX geometry can intentionally ship with different
+            // adjacent textures. Keep every installed candidate selectable;
+            // path-based display suffixes make duplicates explicit instead of
+            // silently discarding a valid skin or clothing variant.
+            var selectedCandidates = candidates;
 
             selectedCandidates.Sort((left, right) =>
                 StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path));
@@ -670,9 +637,7 @@ namespace QuestMmdPlayer
             }
             return LoadFromFileAsync(
                 model.Path,
-                string.IsNullOrWhiteSpace(model.PackageRoot)
-                    ? System.IO.Path.GetDirectoryName(model.Path)
-                    : model.PackageRoot);
+                System.IO.Path.GetDirectoryName(model.Path));
         }
 
         public bool DeleteInstalledPackage(RuntimeMmdModelInfo model)
@@ -761,10 +726,12 @@ namespace QuestMmdPlayer
             // queried the catalog. Refresh once before a manual or restored load.
             InvalidateInstalledModelCache();
 
-            loadCancellation?.Cancel();
-            loadCancellation?.Dispose();
-            loadCancellation = new CancellationTokenSource();
-            var token = loadCancellation.Token;
+            var previousCancellation = loadCancellation;
+            var currentCancellation = new CancellationTokenSource();
+            loadCancellation = currentCancellation;
+            previousCancellation?.Cancel();
+            var token = currentCancellation.Token;
+            var generation = Interlocked.Increment(ref loadGeneration);
             IsLoading = true;
             LoadPhase = RuntimeModelLoadPhase.Reading;
             LastFailurePhase = RuntimeModelLoadPhase.Idle;
@@ -824,25 +791,31 @@ namespace QuestMmdPlayer
             }
             catch (OperationCanceledException)
             {
-                LastFailurePhase = LoadPhase;
-                LoadPhase = RuntimeModelLoadPhase.Cancelled;
-                LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
-                Debug.LogWarning("[ModelLoad] cancelled name=" + displayName +
-                    " phase=" + LastFailurePhase +
-                    " totalMs=" + LastLoadMilliseconds);
+                if (generation == loadGeneration)
+                {
+                    LastFailurePhase = LoadPhase;
+                    LoadPhase = RuntimeModelLoadPhase.Cancelled;
+                    LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
+                    Debug.LogWarning("[ModelLoad] cancelled name=" + displayName +
+                        " phase=" + LastFailurePhase +
+                        " totalMs=" + LastLoadMilliseconds);
+                }
                 throw;
             }
             catch (Exception exception)
             {
-                LastFailurePhase = LoadPhase;
-                LoadPhase = RuntimeModelLoadPhase.Failed;
-                LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
-                Debug.LogWarning("[ModelLoad] failed name=" + displayName +
-                    " phase=" + LastFailurePhase +
-                    " totalMs=" + LastLoadMilliseconds +
-                    " error=" + exception.GetType().Name);
-                Debug.LogException(exception, this);
-                NotifyLoadFailed(exception.Message);
+                if (generation == loadGeneration)
+                {
+                    LastFailurePhase = LoadPhase;
+                    LoadPhase = RuntimeModelLoadPhase.Failed;
+                    LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
+                    Debug.LogWarning("[ModelLoad] failed name=" + displayName +
+                        " phase=" + LastFailurePhase +
+                        " totalMs=" + LastLoadMilliseconds +
+                        " error=" + exception.GetType().Name);
+                    Debug.LogException(exception, this);
+                    NotifyLoadFailed(exception.Message);
+                }
                 throw;
             }
             finally
@@ -854,7 +827,15 @@ namespace QuestMmdPlayer
                         importedAvatarHost,
                         IsParsedModelCached(importedResult.model));
                 }
-                IsLoading = false;
+                if (generation == loadGeneration)
+                {
+                    IsLoading = false;
+                }
+                if (ReferenceEquals(loadCancellation, currentCancellation))
+                {
+                    loadCancellation = null;
+                }
+                currentCancellation.Dispose();
             }
         }
 
@@ -874,6 +855,7 @@ namespace QuestMmdPlayer
                 {
                     model = await PMXReader.ReadAsync(budget, stream, true);
                 }
+                token.ThrowIfCancellationRequested();
                 LastReadMilliseconds = ElapsedMilliseconds(readStartedAt);
                 StoreParsedModel(pmxPath, model);
             }
@@ -918,7 +900,12 @@ namespace QuestMmdPlayer
             // rename/romanization pass needs optional dictionary assets and is not
             // required to build meshes, textures, MMD physics, or morph data.
             token.ThrowIfCancellationRequested();
-            var result = await PMXImporter.BuildUnityObjectsAsync(budget, model, options);
+            var result = await PMXImporter.BuildUnityObjectsAsync(
+                budget,
+                model,
+                options,
+                token);
+            token.ThrowIfCancellationRequested();
             LastBuildMilliseconds = ElapsedMilliseconds(buildStartedAt);
             if (result.warnings.Count > 0)
             {

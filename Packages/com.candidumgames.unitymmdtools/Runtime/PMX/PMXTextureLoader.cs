@@ -2,6 +2,7 @@ using B83.Image.BMP;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -44,7 +45,8 @@ namespace UMT
             UMTFrameBudget frameBudget,
             PMXModel model,
             PMXImportOptions options,
-            PMXImportResult result)
+            PMXImportResult result,
+            CancellationToken cancellationToken = default)
         {
             if (frameBudget == null)
             {
@@ -56,13 +58,16 @@ namespace UMT
 
             for (int i = 0; i < model.texturePaths.Length; ++i)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 texturesByIndex[i] = await LoadTextureAsync(
                     i,
                     model.texturePaths[i].ToString(),
                     loadedTextures,
                     options,
-                    result);
+                    result,
+                    cancellationToken);
                 await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             return texturesByIndex;
@@ -73,7 +78,8 @@ namespace UMT
             string texturePath,
             Dictionary<string, Texture2D> loadedTextures,
             PMXImportOptions options,
-            PMXImportResult result)
+            PMXImportResult result,
+            CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(texturePath))
             {
@@ -96,18 +102,24 @@ namespace UMT
                 ".tga",
                 StringComparison.OrdinalIgnoreCase))
             {
-                DecodedTga decoded = await Task.Run(() => DecodeTga(textureFullPath));
+                DecodedTga decoded = await Task.Run(
+                    () => DecodeTga(textureFullPath),
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 texture = new Texture2D(decoded.width, decoded.height, TextureFormat.RGBA32, false);
                 texture.SetPixels32(decoded.pixels);
                 texture.Apply(false, false);
             }
             else if (IsUnityWebTexture(textureFullPath))
             {
-                texture = await LoadUnityWebTextureAsync(textureFullPath);
+                texture = await LoadUnityWebTextureAsync(textureFullPath, cancellationToken);
             }
             else
             {
-                byte[] textureBytes = await Task.Run(() => File.ReadAllBytes(textureFullPath));
+                byte[] textureBytes = await Task.Run(
+                    () => File.ReadAllBytes(textureFullPath),
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 texture = DecodeTexture(textureFullPath, textureBytes);
             }
             if (texture == null)
@@ -131,7 +143,9 @@ namespace UMT
                 string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static async Task<Texture2D> LoadUnityWebTextureAsync(string textureFullPath)
+        private static async Task<Texture2D> LoadUnityWebTextureAsync(
+            string textureFullPath,
+            CancellationToken cancellationToken)
         {
             string uri = new Uri(textureFullPath).AbsoluteUri;
             using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(uri, false))
@@ -139,8 +153,10 @@ namespace UMT
                 UnityWebRequestAsyncOperation operation = request.SendWebRequest();
                 while (!operation.isDone)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     await Task.Yield();
                 }
+                cancellationToken.ThrowIfCancellationRequested();
                 if (request.result != UnityWebRequest.Result.Success)
                 {
                     return null;
@@ -235,7 +251,7 @@ namespace UMT
             return null;
         }
 
-        private static string ResolveTexturePath(string texturePath, PMXImportOptions options)
+        internal static string ResolveTexturePath(string texturePath, PMXImportOptions options)
         {
             string baseDirectory = !string.IsNullOrEmpty(options.textureBaseDirectory) ? options.textureBaseDirectory : Path.GetDirectoryName(options.sourcePath);
             if (string.IsNullOrEmpty(baseDirectory) || !Directory.Exists(baseDirectory))
@@ -270,15 +286,23 @@ namespace UMT
                 return null;
             }
 
+            string recursiveMatch = null;
             foreach (string file in Directory.GetFiles(baseDirectory, "*", SearchOption.AllDirectories))
             {
                 if (string.Equals(Path.GetFileName(file), fileName, StringComparison.OrdinalIgnoreCase))
                 {
-                    return file;
+                    if (recursiveMatch != null &&
+                        !string.Equals(recursiveMatch, file, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Ambiguous basename fallback must fail closed. Picking
+                        // the first file can cross-load a sibling PMX variant.
+                        return null;
+                    }
+                    recursiveMatch = file;
                 }
             }
 
-            return null;
+            return recursiveMatch;
         }
     }
 }

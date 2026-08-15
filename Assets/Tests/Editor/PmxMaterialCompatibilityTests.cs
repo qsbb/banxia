@@ -1,7 +1,12 @@
+using System.Collections;
+using System.IO;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using UMT;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace QuestMmdPlayer.Tests
 {
@@ -63,6 +68,87 @@ namespace QuestMmdPlayer.Tests
             }
             finally
             {
+                Object.DestroyImmediate(model);
+            }
+        }
+
+        [Test]
+        public void AmbiguousRecursiveTextureBasenameFailsClosed()
+        {
+            var root = Path.Combine(
+                Path.GetTempPath(),
+                "banxia-texture-ambiguity-" + System.Guid.NewGuid().ToString("N"));
+            var first = Path.Combine(root, "variant-a");
+            var second = Path.Combine(root, "variant-b");
+            Directory.CreateDirectory(first);
+            Directory.CreateDirectory(second);
+            File.WriteAllBytes(Path.Combine(first, "face.png"), new byte[] { 1 });
+            File.WriteAllBytes(Path.Combine(second, "face.png"), new byte[] { 2 });
+            try
+            {
+                var options = new PMXImportOptions
+                {
+                    sourcePath = Path.Combine(root, "model.pmx"),
+                    textureBaseDirectory = root
+                };
+                var method = typeof(PMXTextureLoader).GetMethod(
+                    "ResolveTexturePath",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                Assert.That(method, Is.Not.Null);
+
+                Assert.That(
+                    method.Invoke(null, new object[] { "face.png", options }),
+                    Is.Null,
+                    "A sibling variant's texture must never be selected arbitrarily.");
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator CancelledAsyncBuildDestroysPartialRootAndTextures()
+        {
+            var model = ScriptableObject.CreateInstance<PMXModel>();
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            var cancellation = new CancellationTokenSource();
+            var modelName = "banxia-cancel-cleanup-" + System.Guid.NewGuid().ToString("N");
+            var options = new PMXImportOptions
+            {
+                sourceName = modelName,
+                applyRenames = false,
+                createAvatar = false,
+                loadTextures = (_, __) => new[] { texture },
+                timingCallback = (stage, _) =>
+                {
+                    if (stage == "Load Textures") cancellation.Cancel();
+                }
+            };
+            try
+            {
+                Task<PMXImportResult> build = PMXImporter.BuildUnityObjectsAsync(
+                    new UMTFrameBudget(1000d),
+                    model,
+                    options,
+                    cancellation.Token);
+                while (!build.IsCompleted)
+                {
+                    yield return null;
+                }
+
+                Assert.That(build.IsCanceled, Is.True,
+                    build.Exception?.GetBaseException().ToString());
+                Assert.Throws<System.OperationCanceledException>(
+                    () => build.GetAwaiter().GetResult());
+
+                Assert.That(GameObject.Find(modelName), Is.Null);
+                Assert.That(texture == null, Is.True);
+            }
+            finally
+            {
+                cancellation.Dispose();
+                if (texture != null) Object.DestroyImmediate(texture);
                 Object.DestroyImmediate(model);
             }
         }

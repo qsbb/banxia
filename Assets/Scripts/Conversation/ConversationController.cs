@@ -37,6 +37,7 @@ namespace QuestMmdPlayer
         private string pendingLocalAction = string.Empty;
         private bool localActionStarted;
         private bool backendActionReceived;
+        private bool backendActionDecisionReceived;
         private bool backendSttReported;
         private bool backendDecisionReported;
         private bool backendTtsReported;
@@ -234,6 +235,7 @@ namespace QuestMmdPlayer
             pendingLocalAction = string.Empty;
             localActionStarted = false;
             backendActionReceived = false;
+            backendActionDecisionReceived = false;
             var turnId = stateMachine.Begin(string.Empty);
             ResetTurnTiming();
             NotifyStateChanged();
@@ -314,6 +316,7 @@ namespace QuestMmdPlayer
             pendingLocalAction = string.Empty;
             localActionStarted = false;
             backendActionReceived = false;
+            backendActionDecisionReceived = false;
             TryQueueLocalAction(text);
             var turnId = stateMachine.Begin(text);
             ResetTurnTiming();
@@ -481,6 +484,7 @@ namespace QuestMmdPlayer
                     break;
                 case ConversationEventType.AvatarIntent:
                     var actionApplied = ApplyAvatarIntent(message);
+                    backendActionDecisionReceived |= IsAuthoritativeActionDecision(message);
                     backendActionReceived |= actionApplied && IsExecutableAvatarAction(message.Gesture);
                     break;
                 case ConversationEventType.Error:
@@ -803,11 +807,15 @@ namespace QuestMmdPlayer
 
         private void TryRunLocalActionFallback()
         {
-            if (localActionStarted || backendActionReceived)
+            if (localActionStarted || backendActionReceived || backendActionDecisionReceived)
             {
                 if (backendActionReceived)
                 {
                     diagnostics?.Record("AvatarAction", "后端已返回可执行动作，本地动作回退未运行");
+                }
+                else if (backendActionDecisionReceived)
+                {
+                    diagnostics?.Record("AvatarAction", "后端已明确本轮动作决策，本地关键词回退未运行");
                 }
                 pendingLocalAction = string.Empty;
                 localActionStarted = false;
@@ -844,6 +852,19 @@ namespace QuestMmdPlayer
             return !string.IsNullOrEmpty(gesture) &&
                 !string.Equals(gesture, "idle", StringComparison.Ordinal) &&
                 !string.Equals(gesture, "talk", StringComparison.Ordinal);
+        }
+
+        private static bool IsAuthoritativeActionDecision(ConversationEvent message)
+        {
+            if (message == null)
+            {
+                return false;
+            }
+            return !string.IsNullOrWhiteSpace(message.ActionId) ||
+                string.Equals(
+                    message.ReasonCode,
+                    "fast_action_no_action",
+                    StringComparison.Ordinal);
         }
 
         public static bool AcceptActionOnlyReplyEnd(

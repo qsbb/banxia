@@ -117,7 +117,8 @@ namespace UMT
             PMXModel model,
             PMXImportOptions options,
             string modelName,
-            Texture2D[] texturesByIndex)
+            Texture2D[] texturesByIndex,
+            CancellationToken cancellationToken = default)
         {
             if (frameBudget == null)
             {
@@ -126,18 +127,31 @@ namespace UMT
             List<Material> materials = new List<Material>(model.materials.Length);
             SourcePixelCache sourcePixels = new SourcePixelCache(model, options, texturesByIndex);
             int indicesOffset = 0;
-            for (int i = 0; i < model.materials.Length; ++i)
+            try
             {
-                int faceIndexStart = indicesOffset;
-                indicesOffset += model.materials[i].faceIndexCount;
-                materials.Add(BuildMaterialEntry(
-                    model,
-                    options,
-                    texturesByIndex,
-                    sourcePixels,
-                    i,
-                    faceIndexStart));
-                await frameBudget.YieldIfNeeded();
+                for (int i = 0; i < model.materials.Length; ++i)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int faceIndexStart = indicesOffset;
+                    indicesOffset += model.materials[i].faceIndexCount;
+                    materials.Add(BuildMaterialEntry(
+                        model,
+                        options,
+                        texturesByIndex,
+                        sourcePixels,
+                        i,
+                        faceIndexStart));
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+            }
+            catch
+            {
+                foreach (Material material in materials)
+                {
+                    PMXUtilities.DestroyRuntimeObject(material);
+                }
+                throw;
             }
             return materials;
         }
@@ -664,38 +678,9 @@ namespace UMT
 
             private string ResolvePath(string texturePath)
             {
-                if (string.IsNullOrWhiteSpace(texturePath) || string.IsNullOrEmpty(m_BaseDirectory) || !Directory.Exists(m_BaseDirectory))
-                {
-                    return null;
-                }
-
-                string[] candidates =
-                {
-                    Path.Combine(m_BaseDirectory, texturePath),
-                    Path.Combine(m_BaseDirectory, texturePath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)),
-                };
-                foreach (string candidate in candidates)
-                {
-                    string resolved = Path.GetFullPath(candidate);
-                    if (File.Exists(resolved))
-                    {
-                        return resolved;
-                    }
-                }
-
-                string fileName = Path.GetFileName(texturePath);
-                if (string.IsNullOrEmpty(fileName))
-                {
-                    return null;
-                }
-                foreach (string file in Directory.GetFiles(m_BaseDirectory, "*", SearchOption.AllDirectories))
-                {
-                    if (string.Equals(Path.GetFileName(file), fileName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return file;
-                    }
-                }
-                return null;
+                return PMXTextureLoader.ResolveTexturePath(
+                    texturePath,
+                    new PMXImportOptions { textureBaseDirectory = m_BaseDirectory });
             }
 
             /// <summary>

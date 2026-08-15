@@ -1,5 +1,7 @@
 #if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using NUnit.Framework;
 
@@ -166,6 +168,46 @@ namespace QuestMmdPlayer.Tests
             Assert.That(json, Does.Not.Contain("source"));
             Assert.That(json, Does.Not.Contain("elapsed_ms"));
             Assert.That(retryJson, Is.EqualTo(json), "Retries must preserve the exact receipt_id and body.");
+        }
+
+        [Test]
+        public void ActionResultDeliveryQueuePreservesLifecycleOrderWithOneWorker()
+        {
+            var openType = typeof(AstrBotBridge).Assembly.GetType(
+                "QuestMmdPlayer.OrderedDeliveryQueue`1");
+            Assert.That(openType, Is.Not.Null);
+            var queueType = openType.MakeGenericType(typeof(string));
+            var queue = Activator.CreateInstance(queueType, true);
+            var enqueue = queueType.GetMethod(
+                "Enqueue",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var dequeue = queueType.GetMethod(
+                "TryDequeue",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var complete = queueType.GetMethod(
+                "CompleteWorker",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(enqueue, Is.Not.Null);
+            Assert.That(dequeue, Is.Not.Null);
+            Assert.That(complete, Is.Not.Null);
+
+            Assert.That(enqueue.Invoke(queue, new object[] { "accepted" }), Is.True);
+            Assert.That(enqueue.Invoke(queue, new object[] { "started" }), Is.False);
+            Assert.That(enqueue.Invoke(queue, new object[] { "completed" }), Is.False);
+
+            var actual = new List<string>();
+            while (true)
+            {
+                var arguments = new object[] { null };
+                if (!(bool)dequeue.Invoke(queue, arguments)) break;
+                actual.Add((string)arguments[0]);
+            }
+            CollectionAssert.AreEqual(
+                new[] { "accepted", "started", "completed" },
+                actual);
+
+            complete.Invoke(queue, null);
+            Assert.That(enqueue.Invoke(queue, new object[] { "next-action" }), Is.True);
         }
 
         [TestCase("dance_next")]

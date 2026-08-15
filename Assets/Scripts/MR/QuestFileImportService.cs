@@ -356,7 +356,12 @@ namespace QuestMmdPlayer
             {
                 try
                 {
-                    await modelLoader.LoadFromFileAsync(candidate, targetRoot);
+                    // PMX texture paths are relative to the PMX itself. Using
+                    // the package root here lets sibling variants steal files
+                    // with the same basename and can produce a white model.
+                    await modelLoader.LoadFromFileAsync(
+                        candidate,
+                        Path.GetDirectoryName(candidate));
                     selectedPmx = candidate;
                     selectedName = Path.GetFileNameWithoutExtension(candidate);
                     lastException = null;

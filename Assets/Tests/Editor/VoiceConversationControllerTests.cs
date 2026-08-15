@@ -614,6 +614,48 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void FastActionNoActionSuppressesLegacyKeywordFallback()
+        {
+            owner = new GameObject("Fast action no-action test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+
+            var actions = new System.Collections.Generic.List<string>();
+            avatar.ActionChanged += action => actions.Add(action);
+            controller.StartConversation("请挥手");
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                Emotion = "neutral",
+                Gesture = "talk",
+                LookAt = "user",
+                ReasonCode = "fast_action_no_action"
+            });
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyTextDelta,
+                TurnId = controller.TurnId,
+                Text = "这次先不挥手。"
+            });
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyEnd,
+                TurnId = controller.TurnId,
+                TextSent = true,
+                AudioSent = false
+            });
+
+            Assert.That(actions, Does.Not.Contain("wave"));
+            Assert.That(avatar.CurrentAction, Is.Not.EqualTo("wave"));
+            Assert.That(transport.InterruptCount, Is.EqualTo(0));
+        }
+
+        [Test]
         public void ExpressionMappingIsEmotionSpecificAndBounded()
         {
             Assert.That(

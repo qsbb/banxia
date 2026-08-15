@@ -10,6 +10,42 @@ using UnityEngine.Networking;
 
 namespace QuestMmdPlayer
 {
+    internal sealed class OrderedDeliveryQueue<T>
+    {
+        private readonly Queue<T> pending = new Queue<T>();
+        private bool workerActive;
+
+        internal int Count => pending.Count;
+
+        internal bool Enqueue(T item)
+        {
+            pending.Enqueue(item);
+            if (workerActive)
+            {
+                return false;
+            }
+
+            workerActive = true;
+            return true;
+        }
+
+        internal bool TryDequeue(out T item)
+        {
+            return pending.TryDequeue(out item);
+        }
+
+        internal void CompleteWorker()
+        {
+            workerActive = false;
+        }
+
+        internal void Reset()
+        {
+            pending.Clear();
+            workerActive = false;
+        }
+    }
+
     /// <summary>
     /// AstrBot Embodiment Bridge protocol 1.0 transport. Secrets are loaded from a
     /// JSON file under Application.persistentDataPath and are never serialized
@@ -84,7 +120,22 @@ namespace QuestMmdPlayer
         private long spatialRevision;
         private readonly HashSet<string> actionReceiptKeys = new HashSet<string>(StringComparer.Ordinal);
         private readonly Queue<string> actionReceiptOrder = new Queue<string>();
+        private readonly OrderedDeliveryQueue<ActionResultDelivery> actionResultDeliveries =
+            new OrderedDeliveryQueue<ActionResultDelivery>();
+        private Coroutine actionResultDeliveryRoutine;
         private const int MaxActionReceiptKeys = 512;
+
+        private sealed class ActionResultDelivery
+        {
+            internal readonly string Json;
+            internal readonly AvatarActionReceipt Receipt;
+
+            internal ActionResultDelivery(string json, AvatarActionReceipt receipt)
+            {
+                Json = json;
+                Receipt = receipt;
+            }
+        }
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
@@ -518,11 +569,29 @@ namespace QuestMmdPlayer
                 actionReceiptKeys.Remove(actionReceiptOrder.Dequeue());
             }
 
-            // Receipts are observational. A failed or unavailable endpoint must
-            // never inject a conversation error or change the local animation.
-            StartCoroutine(PostActionResult(CreateActionResultJson(sessionId, receipt), receipt));
+            // One worker preserves accepted -> started -> terminal HTTP arrival
+            // order. Receipts are observational: delivery failure never changes
+            // the local animation or injects a conversation error.
+            var delivery = new ActionResultDelivery(
+                CreateActionResultJson(sessionId, receipt),
+                receipt);
+            if (actionResultDeliveries.Enqueue(delivery))
+            {
+                actionResultDeliveryRoutine = StartCoroutine(DrainActionResults());
+            }
             RecordStage("avatar_action", "completed", "action_receipt_queued", traceId: RuntimeDebugLog.TraceLabel(receipt.TurnId));
             return true;
+        }
+
+        private IEnumerator DrainActionResults()
+        {
+            while (!shuttingDown && actionResultDeliveries.TryDequeue(out var delivery))
+            {
+                yield return PostActionResult(delivery.Json, delivery.Receipt);
+            }
+
+            actionResultDeliveries.CompleteWorker();
+            actionResultDeliveryRoutine = null;
         }
 
         public static string CreateActionResultJson(string activeSessionId, AvatarActionReceipt receipt)
@@ -1333,6 +1402,11 @@ namespace QuestMmdPlayer
                 StopCoroutine(spatialContextUploadRoutine);
                 spatialContextUploadRoutine = null;
             }
+            if (actionResultDeliveryRoutine != null)
+            {
+                StopCoroutine(actionResultDeliveryRoutine);
+                actionResultDeliveryRoutine = null;
+            }
             if (activeSseRequest != null)
             {
                 activeSseRequest.Abort();
@@ -1355,6 +1429,7 @@ namespace QuestMmdPlayer
             sessionId = string.Empty;
             actionReceiptKeys.Clear();
             actionReceiptOrder.Clear();
+            actionResultDeliveries.Reset();
             while (incomingFrames.TryDequeue(out _)) { }
         }
 
