@@ -9,7 +9,7 @@ namespace QuestMmdPlayer.Editor
 {
     public static class QuestMmdPlayerRuntimeSmokeTest
     {
-        [MenuItem("Quest MMD Player/Run Runtime PMX Smoke Test")]
+        [MenuItem("伴夏/Run Runtime PMX Smoke Test")]
         public static void Run()
         {
             string pmxPath = EditorUtility.OpenFilePanel("Select a local PMX model", string.Empty, "pmx");

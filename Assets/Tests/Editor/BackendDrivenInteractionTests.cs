@@ -18,6 +18,7 @@ namespace QuestMmdPlayer.Tests
         }
 
         [TestCase(ConversationState.Idle, false, true, true)]
+        [TestCase(ConversationState.Thinking, false, true, true)]
         [TestCase(ConversationState.Listening, false, true, false)]
         [TestCase(ConversationState.Speaking, false, true, false)]
         [TestCase(ConversationState.Idle, true, true, false)]
@@ -31,6 +32,38 @@ namespace QuestMmdPlayer.Tests
             Assert.AreEqual(
                 expected,
                 AvatarConversationPresenter.ShouldUseIdleUserGaze(conversationState, semanticContact, enabled));
+        }
+
+        [Test]
+        public void ThinkingOverridesAStaleAwayGaze()
+        {
+            Assert.AreEqual(
+                "user",
+                AvatarConversationPresenter.ResolveGazeMode(
+                    ConversationState.Thinking,
+                    true,
+                    "away"));
+            Assert.AreEqual(
+                "away",
+                AvatarConversationPresenter.ResolveGazeMode(
+                    ConversationState.Speaking,
+                    false,
+                    "away"));
+        }
+
+        [Test]
+        public void PresenterReportsWhetherBackendActionWasActuallyAccepted()
+        {
+            avatarObject = new GameObject("TestAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+
+            serviceObject = new GameObject("PresenterService");
+            var presenter = serviceObject.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(controller, null, null);
+
+            Assert.IsTrue(presenter.ApplyIntent("happy", "wave", "user"));
+            Assert.IsFalse(presenter.ApplyIntent("happy", "wave", "user"));
         }
 
         [Test]
@@ -73,6 +106,30 @@ namespace QuestMmdPlayer.Tests
             Assert.AreEqual("step_back", stepBack);
             Assert.IsTrue(behavior.TryAcceptIntent("talk", true, true, 8f, out var talk));
             Assert.AreEqual("talk", talk);
+        }
+
+        [TestCase("dance")]
+        [TestCase("dance_next")]
+        public void DanceRequestsCanSwitchAnImportedMotionAlreadyInProgress(string action)
+        {
+            var behavior = new AvatarBehaviorCoordinator();
+            behavior.Reset(0f, 0f);
+
+            Assert.That(
+                behavior.TryAcceptIntent(action, false, true, 1f, out var accepted),
+                Is.True);
+            Assert.That(accepted, Is.EqualTo(action));
+        }
+
+        [Test]
+        public void NonDanceGesturesCannotInterruptAnImportedMotion()
+        {
+            var behavior = new AvatarBehaviorCoordinator();
+            behavior.Reset(0f, 0f);
+
+            Assert.That(
+                behavior.TryAcceptIntent("turn_half", false, true, 1f, out _),
+                Is.False);
         }
 
         [TestCase(ConversationState.Idle, false, false, "idle", true)]

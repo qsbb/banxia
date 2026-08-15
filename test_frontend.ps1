@@ -22,13 +22,16 @@ function CheckSource([string]$relativePath, [string[]]$tokens) {
     }
 }
 
-Write-Host "Quest MMD Player automated checks" -ForegroundColor Cyan
+Write-Host "Banxia automated checks" -ForegroundColor Cyan
 Write-Host "Project: $projectRoot"
 
 $requiredFiles = @(
     "Packages/manifest.json",
     "Packages/com.candidumgames.unitymmdtools/package.json",
     "Packages/com.candidumgames.unitymmdtools/Runtime/MMDRuntime/MMDPhysicsManager.cs",
+    "Packages/com.candidumgames.unitymmdtools/Runtime/PMX/PMXMeshBuilder.cs",
+    "Packages/com.candidumgames.unitymmdtools/Runtime/PMX/PMXImporter.cs",
+    "Packages/com.candidumgames.unitymmdtools/Runtime/PMX/PMXTextureLoader.cs",
     "ProjectSettings/ProjectVersion.txt",
     "Assets/Scripts/Core/AvatarController.cs",
     "Assets/Scripts/Core/AvatarMotionArbiter.cs",
@@ -46,6 +49,7 @@ $requiredFiles = @(
     "Assets/Scripts/Conversation/QuestMicrophoneInput.cs",
     "Assets/Scripts/Conversation/Pcm16StreamAudioPlayer.cs",
     "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs",
+    "Assets/Scripts/MMD/AvatarQaCapture.cs",
     "Assets/Scripts/MMD/VmdActionLibrary.cs",
     "Assets/Scripts/MR/RoomUnderstandingService.cs",
     "Assets/Scripts/MR/SpatialCapabilityAdapter.cs",
@@ -81,7 +85,7 @@ foreach ($file in $requiredFiles) { CheckFile $file }
 $manifestPath = Join-Path $projectRoot "Packages/manifest.json"
 try {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    foreach ($package in @("com.unity.xr.meta-openxr", "com.unity.xr.openxr", "com.unity.xr.management", "com.unity.xr.hands", "com.unity.render-pipelines.universal", "com.unity.modules.animation", "com.unity.modules.imageconversion")) {
+    foreach ($package in @("com.unity.xr.meta-openxr", "com.unity.xr.openxr", "com.unity.xr.management", "com.unity.xr.hands", "com.unity.render-pipelines.universal", "com.unity.modules.animation", "com.unity.modules.imageconversion", "com.unity.modules.unitywebrequest", "com.unity.modules.unitywebrequesttexture")) {
         if ($manifest.dependencies.PSObject.Properties.Name -contains $package) { Pass "package: $package" }
         else { Fail "package missing: $package" }
     }
@@ -98,6 +102,9 @@ try {
 } catch { Fail "embedded UMT metadata invalid: $($_.Exception.Message)" }
 
 $sourceChecks = @{
+    "Packages/com.candidumgames.unitymmdtools/Runtime/PMX/PMXMeshBuilder.cs" = @("BuildAsync", "Allocator.Persistent", "YieldIfNeeded")
+    "Packages/com.candidumgames.unitymmdtools/Runtime/PMX/PMXImporter.cs" = @("PMXMeshBuilder.BuildAsync", "Build Renderers")
+    "Packages/com.candidumgames.unitymmdtools/Runtime/PMX/PMXTextureLoader.cs" = @("UnityWebRequestTexture.GetTexture", "Task.Run", "YieldIfNeeded")
     "Assets/Scripts/Core/AvatarMotionArbiter.cs" = @("AvatarActionSource", "AvatarMotionDecision", "imported_motion_busy", "lower_priority_than_current")
     "Assets/Scripts/Core/XRInteractionCompatibility.cs" = @("IAvatarPokeInteractor", "IAvatarPokeInteractable", "PokeInteractionLifecycle")
     "Assets/Scripts/Core/AvatarController.cs" = @("PlayActionFromSource", "CurrentActionSource", "CaptureActionPose")
@@ -105,13 +112,14 @@ $sourceChecks = @{
     "Assets/Scripts/Core/AvatarMmdPhysicsAdapter.cs" = @("ConfigureExternalKinematicSpheres", "SetExternalKinematicSpherePose")
     "Assets/Scripts/Core/QuestTrackedHandVisualizer.cs" = @("ShouldShowTrackedHand", "TrackedHandContactAggregator", "Physics.SyncTransforms", "ContactDiagnosticCode", "ShouldRecordContactDiagnostic", "contactDiagnosticHoverInterval")
     "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "BeginPhysicsArbitration", "StopAndReturnToIdle")
+    "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("SelectedModelPreference", "RestoreLastModelAsync", "ParsedModelCacheCapacity", "TrimParsedModelCache", "ModelCache")
     "Assets/Scripts/Conversation/AvatarConversationPresenter.cs" = @("ApplyIntent", "PlayRecommendedDance", "PlayActionFromSource")
     "Assets/Scripts/Conversation/ConversationController.cs" = @("BeginVoiceInput", "PushVoiceAudio", "HandleTransportEvent", "backend_total")
     "Assets/Scripts/Backend/AstrBotBridge.cs" = @("TryIngestCommandJson", "CommandReceived", "sse_dispatch", "X-Embodiment-Bridge-Key", "BindSpatialContext", "UploadSpatialContext", "spatial/context", "SpatialRevisionPreferenceKey", "HasRoomData")
     "Assets/Scripts/Backend/AstrBotProtocol.cs" = @("SpatialContextRequest", "floor_count", "bed_count", "scene_capture_available", "ContentSignature")
     "Assets/Scripts/MR/SpatialCapabilityAdapter.cs" = @("HasOptionalMruk", "TryRequestSceneCapture", "SpatialCapabilitySnapshot")
     "Assets/Scripts/MR/RoomUnderstandingService.cs" = @("TryFindNearestSeat", "TryFindNearestRestingSurface", "CountsAsSeat", "BedCount", "BuildSemanticSnapshot")
-    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("TouchScreenKeyboard", "RefreshExternalActions", "ImportFile", "PlayActionFromSource", "CompanionMenuInputBlocker")
+    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("TouchScreenKeyboard", "RefreshExternalActions", "ImportFile", "StopCurrentAction", "CompanionMenuInputBlocker", "open_model_list", "load_first_model", "capture_first_model", "[ModelCatalog] UI page=")
     "Assets/Scripts/UI/RuntimeDiagnosticsFormatter.cs" = @("BuildPanelText", "FormatMotion", "SourceName", "AppendTimeline")
     "Assets/Scripts/Core/QuestQualitySettings.cs" = @("XRSettings.eyeTextureResolutionScale", "XRSettings.renderViewportScale", "QuestQualityPreset.Clear", "PlayerPrefs.Save")
     "Assets/Scripts/MR/QuestFileImportService.cs" = @("OpenPicker", "OnAndroidFileImported", "ExtractArchiveSafely", "MaximumExpandedArchiveBytes", "VmdActionFilePolicy")
@@ -134,7 +142,11 @@ $models = Get-ChildItem -LiteralPath (Join-Path $projectRoot "Assets") -Recurse 
 if ($models) { Fail "production Assets contains avatar model sources" } else { Pass "no bundled avatar models" }
 
 $openXr = Get-Content -LiteralPath (Join-Path $projectRoot "Assets/XR/Settings/OpenXRPackageSettings.asset") -Raw
-if ($openXr -match "forceRemoveInternetPermission:\s*0") { Pass "private LAN permission is preserved" } else { Fail "unexpected internet permission removal" }
+if ($openXr -match "forceRemoveInternetPermission:\s*0") { Pass "OpenXR keeps the private LAN permission by default" }
+else { Pass "OpenXR default may remove INTERNET; final manifest postprocessor restores it" }
+$manifestPostprocessor = Get-Content -LiteralPath (Join-Path $projectRoot "Assets/Editor/QuestPrivateLanManifestPostprocessor.cs") -Raw
+if ($manifestPostprocessor.Contains('EnsurePermission(document, "android.permission.INTERNET")')) { Pass "final Android manifest restores INTERNET permission" }
+else { Fail "final Android manifest does not restore INTERNET permission" }
 if ($openXr -match "m_enabled:\s*1\s*\r?\n\s*nameUi: Hand Tracking Subsystem") { Pass "OpenXR hand tracking enabled" }
 else { Fail "OpenXR hand tracking disabled" }
 

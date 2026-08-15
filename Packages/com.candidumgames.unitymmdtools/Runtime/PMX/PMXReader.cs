@@ -57,9 +57,8 @@ namespace UMT
             ReadHeader(reader, ref model.header, strictVersion);
             ReadModelInfo(reader, model);
             await frameBudget.YieldIfNeeded();
-            ReadVertices(reader, model);
-            await frameBudget.YieldIfNeeded();
-            ReadFaces(reader, model);
+            await ReadVerticesAsync(frameBudget, reader, model);
+            await ReadFacesAsync(frameBudget, reader, model);
             await frameBudget.YieldIfNeeded();
             ReadTextures(reader, model);
             await frameBudget.YieldIfNeeded();
@@ -67,16 +66,14 @@ namespace UMT
             await frameBudget.YieldIfNeeded();
             ReadBones(reader, model);
             await frameBudget.YieldIfNeeded();
-            ReadMorphs(reader, model);
-            await frameBudget.YieldIfNeeded();
+            await ReadMorphsAsync(frameBudget, reader, model);
             ReadDisplayFrames(reader, model);
             await frameBudget.YieldIfNeeded();
             ReadRigidBodies(reader, model);
             await frameBudget.YieldIfNeeded();
             ReadJoints(reader, model);
             await frameBudget.YieldIfNeeded();
-            Validate(model);
-            await frameBudget.YieldIfNeeded();
+            await ValidateAsync(frameBudget, model);
 
             return model;
         }
@@ -164,6 +161,42 @@ namespace UMT
             }
         }
 
+        private static async Task ReadVerticesAsync(
+            UMTFrameBudget frameBudget,
+            MMDBinaryReader reader,
+            PMXModel model)
+        {
+            int count = ReadNonNegativeCount(reader);
+            model.vertices = new PMXVertex[count];
+            for (int i = 0; i < count; ++i)
+            {
+                PMXVertex vertex = new PMXVertex
+                {
+                    position = ReadPosition(reader),
+                    normal = ReadRotatedVector3(reader),
+                    uv = reader.ReadVec2(),
+                };
+
+                int additionalUVCount = model.header.additionalUVCount;
+                if (additionalUVCount > 0)
+                {
+                    vertex.additionalUV1 = additionalUVCount >= 1 ? reader.ReadVec4() : float4.zero;
+                    vertex.additionalUV2 = additionalUVCount >= 2 ? reader.ReadVec4() : float4.zero;
+                    vertex.additionalUV3 = additionalUVCount >= 3 ? reader.ReadVec4() : float4.zero;
+                    vertex.additionalUV4 = additionalUVCount >= 4 ? reader.ReadVec4() : float4.zero;
+                }
+
+                vertex.weight = ReadWeight(reader, model.header);
+                vertex.edgeScale = reader.ReadF32();
+                model.vertices[i] = vertex;
+                if ((i & 255) == 255)
+                {
+                    await frameBudget.YieldIfNeeded();
+                }
+            }
+            await frameBudget.YieldIfNeeded();
+        }
+
         private static PMXWeight ReadWeight(MMDBinaryReader reader, PMXHeader header)
         {
             byte typeValue = reader.ReadU8();
@@ -235,6 +268,29 @@ namespace UMT
             {
                 model.indices[i] = reader.ReadVertexIndex(model.header.vertexIndexSize);
             }
+        }
+
+        private static async Task ReadFacesAsync(
+            UMTFrameBudget frameBudget,
+            MMDBinaryReader reader,
+            PMXModel model)
+        {
+            int count = ReadNonNegativeCount(reader);
+            if (count % 3 != 0)
+            {
+                throw new InvalidDataException($"PMX face index count {count} is not divisible by 3.");
+            }
+
+            model.indices = new uint[count];
+            for (int i = 0; i < count; ++i)
+            {
+                model.indices[i] = reader.ReadVertexIndex(model.header.vertexIndexSize);
+                if ((i & 1023) == 1023)
+                {
+                    await frameBudget.YieldIfNeeded();
+                }
+            }
+            await frameBudget.YieldIfNeeded();
         }
 
         private static void ReadTextures(MMDBinaryReader reader, PMXModel model)
@@ -390,6 +446,37 @@ namespace UMT
                     morph.offsets[offsetIndex] = ReadMorphOffset(reader, model.header, morph.type);
                 }
                 model.morphs[i] = morph;
+            }
+        }
+
+        private static async Task ReadMorphsAsync(
+            UMTFrameBudget frameBudget,
+            MMDBinaryReader reader,
+            PMXModel model)
+        {
+            int count = ReadNonNegativeCount(reader);
+            model.morphs = new PMXMorph[count];
+            for (int i = 0; i < count; ++i)
+            {
+                PMXMorph morph = new PMXMorph
+                {
+                    originalName = reader.ReadPMXText(model.header.textEncoding),
+                    originalNameEN = reader.ReadPMXText(model.header.textEncoding),
+                    panel = reader.ReadU8(),
+                    type = (PMXMorph.Type)reader.ReadU8(),
+                };
+                int offsetCount = ReadNonNegativeCount(reader);
+                morph.offsets = new PMXMorphOffset[offsetCount];
+                for (int offsetIndex = 0; offsetIndex < offsetCount; ++offsetIndex)
+                {
+                    morph.offsets[offsetIndex] = ReadMorphOffset(reader, model.header, morph.type);
+                    if ((offsetIndex & 511) == 511)
+                    {
+                        await frameBudget.YieldIfNeeded();
+                    }
+                }
+                model.morphs[i] = morph;
+                await frameBudget.YieldIfNeeded();
             }
         }
 
@@ -603,6 +690,32 @@ namespace UMT
             {
                 throw new InvalidDataException($"Material face index total {materialFaceTotal} does not match face index count {model.indices.Length}.");
             }
+        }
+
+        private static async Task ValidateAsync(UMTFrameBudget frameBudget, PMXModel model)
+        {
+            for (int i = 0; i < model.indices.Length; ++i)
+            {
+                if (model.indices[i] >= model.vertices.Length)
+                {
+                    throw new InvalidDataException($"Vertex index {model.indices[i]} at face index {i} is out of range.");
+                }
+                if ((i & 2047) == 2047)
+                {
+                    await frameBudget.YieldIfNeeded();
+                }
+            }
+
+            int materialFaceTotal = 0;
+            foreach (PMXMaterial material in model.materials)
+            {
+                materialFaceTotal += material.faceIndexCount;
+            }
+            if (materialFaceTotal != model.indices.Length)
+            {
+                throw new InvalidDataException($"Material face index total {materialFaceTotal} does not match face index count {model.indices.Length}.");
+            }
+            await frameBudget.YieldIfNeeded();
         }
 
         private static int ReadNonNegativeCount(MMDBinaryReader reader)

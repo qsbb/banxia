@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace QuestMmdPlayer
@@ -22,6 +23,7 @@ namespace QuestMmdPlayer
 
         public bool IsConnected => true;
         public string Status => "Local mock transport ready";
+        public List<AvatarActionReceipt> ActionReceipts { get; } = new List<AvatarActionReceipt>();
 
         public void StartTurn(string turnId, string userText)
         {
@@ -92,6 +94,13 @@ namespace QuestMmdPlayer
             Emit(string.Empty, ConversationEventType.AvatarIntent, emotion: emotion, gesture: interactionName);
             StartCoroutine(EndInteractionReaction());
             return string.Empty;
+        }
+
+        public bool SendActionResult(AvatarActionReceipt receipt)
+        {
+            if (receipt == null) return false;
+            ActionReceipts.Add(receipt);
+            return true;
         }
 
         private IEnumerator StreamReply(string turnId, string userText)

@@ -2,6 +2,7 @@ using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace QuestMmdPlayer.Tests
 {
@@ -89,6 +90,17 @@ namespace QuestMmdPlayer.Tests
             Assert.That(opened, Is.EqualTo(.2f).Within(.0001f));
             Assert.That(released, Is.EqualTo(.12f).Within(.0001f));
             Assert.That(released, Is.GreaterThan(0f));
+        }
+
+        [Test]
+        public void AudioOutputLatencyUsesHardwareSampleRate()
+        {
+            Assert.That(
+                Pcm16StreamAudioPlayer.CalculateOutputLatencySeconds(256, 4, 48000),
+                Is.EqualTo(0.021333d).Within(.000001d));
+            Assert.That(
+                Pcm16StreamAudioPlayer.CalculateOutputLatencySeconds(0, 4, 48000),
+                Is.Zero);
         }
         [Test]
         public void WorldMenuModalLayersBlockUnderlyingButtonColliders()
@@ -256,6 +268,13 @@ namespace QuestMmdPlayer.Tests
                 ?.GetValue(menu);
         }
 
+        private static void SetMenuField<T>(CompanionWorldMenu menu, string name, T value)
+        {
+            typeof(CompanionWorldMenu)
+                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.SetValue(menu, value);
+        }
+
         private static Component FindButtonTarget(BoxCollider collider)
         {
             return collider
@@ -294,7 +313,7 @@ namespace QuestMmdPlayer.Tests
                 menu.Initialize(owner);
                 menu.ShowInFront();
 
-                var root = GameObject.Find("Companion World Menu");
+                var root = GetMenuField<GameObject>(menu, "menuRoot");
                 Assert.That(root, Is.Not.Null);
                 Assert.That(root.GetComponentsInChildren<BoxCollider>(true).Length, Is.GreaterThanOrEqualTo(55));
                 Assert.That(root.transform.Find("Appearance Layer/\u626b\u63cf\u623f\u95f4"), Is.Not.Null);
@@ -311,14 +330,25 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(root.transform.Find("Action Presets Layer/刷新外部动作"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/导入文件"), Is.Not.Null);
                 Assert.That(root.transform.Find("Action Presets Layer/播放选中"), Is.Not.Null);
-                Assert.That(root.transform.Find("Action Presets Layer/点头"), Is.Not.Null);
+                Assert.That(root.transform.Find("Main Menu Layer/挥手"), Is.Null);
+                Assert.That(root.transform.Find("Main Menu Layer/摸摸头"), Is.Null);
+                Assert.That(root.transform.Find("Main Menu Layer/握手"), Is.Null);
+                Assert.That(root.transform.Find("Main Menu Layer/捏脸"), Is.Null);
+                Assert.That(root.transform.Find("Action Presets Layer/挥手"), Is.Null);
+                Assert.That(root.transform.Find("Action Presets Layer/鞠躬"), Is.Null);
+                Assert.That(root.transform.Find("Action Presets Layer/点头"), Is.Null);
+                Assert.That(root.transform.Find("Action Presets Layer/轻摆"), Is.Null);
                 Assert.That(root.transform.Find("Appearance Layer/描边开关"), Is.Not.Null);
                 Assert.That(root.transform.Find("Appearance Layer/站立校准"), Is.Not.Null);
                 Assert.That(root.transform.Find("Appearance Layer/画质"), Is.Not.Null);
                 Assert.That(root.transform.Find("Appearance Layer/表情：模型默认"), Is.Not.Null);
                 Assert.That(root.transform.Find("Appearance Layer/角色模型"), Is.Not.Null);
-                Assert.That(root.transform.Find("Model Library Layer/导入模型"), Is.Not.Null);
                 Assert.That(root.transform.Find("Model Library Layer/加载选中"), Is.Not.Null);
+                Assert.That(root.transform.Find("Model Library Layer/选择模型"), Is.Not.Null);
+                Assert.That(root.transform.Find("Model Library Layer/导入模型包"), Is.Not.Null);
+                Assert.That(root.transform.Find("Model Library Layer/Installed Model List/删除模型包"), Is.Not.Null);
+                Assert.That(root.transform.Find("Model Library Layer/Installed Model List/上一页"), Is.Not.Null);
+                Assert.That(root.transform.Find("Model Library Layer/Installed Model List/下一页"), Is.Not.Null);
                 Assert.That(root.transform.Find("Quality Layer/清晰"), Is.Not.Null);
 
                 InvokeTargetMethod(menu, "ShowDebugPanel");
@@ -354,6 +384,103 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(debugLayer.gameObject.activeSelf, Is.True);
                 Assert.That(menu.ActiveLayer, Is.EqualTo(RuntimeMenuLayer.TextInput));
                 Assert.That(mainLayer.gameObject.activeSelf, Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(ownerObject);
+                Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
+        public void ModelListModalBlocksUnderlyingModelButtons()
+        {
+            var cameraObject = new GameObject("Model List Camera");
+            var ownerObject = new GameObject("Model List Owner");
+            try
+            {
+                cameraObject.tag = "MainCamera";
+                cameraObject.AddComponent<Camera>();
+                var owner = ownerObject.AddComponent<QuestMmdPlayerBootstrap>();
+                var menu = ownerObject.AddComponent<CompanionWorldMenu>();
+                menu.Initialize(owner);
+                menu.ShowInFront();
+
+                InvokeMenuMethod(menu, "ShowModelPanel");
+                InvokeMenuMethod(menu, "ShowModelList");
+                var root = GetMenuField<GameObject>(menu, "menuRoot");
+                var modelLayer = root.transform.Find("Model Library Layer");
+                var list = modelLayer.Find("Installed Model List");
+                var underlying = modelLayer
+                    .GetComponentsInChildren<BoxCollider>(true)
+                    .Where(value => value.transform.parent == modelLayer)
+                    .ToArray();
+
+                Assert.That(list.gameObject.activeSelf, Is.True);
+                Assert.That(menu.ActiveLayer, Is.EqualTo(RuntimeMenuLayer.ModelList));
+                Assert.That(underlying.Length, Is.GreaterThan(0));
+                Assert.That(underlying.All(value => !value.enabled), Is.True);
+                Assert.That(list.Find("List Background").GetComponent<BoxCollider>(), Is.Not.Null);
+                Assert.That(list.GetComponentsInChildren<BoxCollider>(true).Any(value => value.enabled), Is.True);
+
+                InvokeMenuMethod(menu, "HideModelList");
+                Assert.That(menu.ActiveLayer, Is.EqualTo(RuntimeMenuLayer.Models));
+                Assert.That(underlying.All(value => value.enabled), Is.True);
+            }
+            finally
+            {
+                Object.DestroyImmediate(ownerObject);
+                Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
+        public void ModelListUsesFixedPagesAndSelectionStaysInTheList()
+        {
+            var cameraObject = new GameObject("Model List Selection Camera");
+            var ownerObject = new GameObject("Model List Selection Owner");
+            try
+            {
+                cameraObject.tag = "MainCamera";
+                cameraObject.AddComponent<Camera>();
+                var owner = ownerObject.AddComponent<QuestMmdPlayerBootstrap>();
+                var menu = ownerObject.AddComponent<CompanionWorldMenu>();
+                menu.Initialize(owner);
+                menu.ShowInFront();
+
+                InvokeMenuMethod(menu, "ShowModelPanel");
+                var options = GetMenuField<System.Collections.Generic.List<RuntimeMmdModelInfo>>(menu, "modelOptions");
+                options.Clear();
+                for (var index = 0; index < 18; index++)
+                {
+                    options.Add(new RuntimeMmdModelInfo($"模型 {index + 1:00}", $"D:/models/model-{index + 1:00}.pmx"));
+                }
+                SetMenuField(menu, "modelIndex", 1);
+                SetMenuField(menu, "modelListPage", 0);
+                InvokeMenuMethod(menu, "RefreshModelList");
+
+                var listLayer = GetMenuField<GameObject>(menu, "modelListLayer");
+                listLayer.SetActive(true);
+                var entries = GetMenuField<System.Collections.Generic.List<GameObject>>(menu, "modelListEntries");
+                Assert.That(entries.Count, Is.EqualTo(8));
+                Assert.That(entries[0].name, Is.EqualTo("模型 01"));
+                Assert.That(entries[1].name, Is.EqualTo("[已选] 模型 02"));
+
+                var thirdTarget = entries[2].GetComponent("CompanionMenuButtonTarget");
+                InvokeTargetMethod(thirdTarget, "Press");
+                Assert.That(listLayer.activeSelf, Is.True, "Selecting an item must not close the model list.");
+                Assert.That(GetMenuField<int>(menu, "modelIndex"), Is.EqualTo(2));
+                entries = GetMenuField<System.Collections.Generic.List<GameObject>>(menu, "modelListEntries");
+                Assert.That(entries[2].name, Is.EqualTo("[已选] 模型 03"));
+
+                InvokeMenuMethod(menu, "PageModelList", 1);
+                Assert.That(GetMenuField<int>(menu, "modelIndex"), Is.EqualTo(2), "Paging must not silently change the selected model.");
+                Assert.That(GetMenuField<int>(menu, "modelListPage"), Is.EqualTo(1));
+                entries = GetMenuField<System.Collections.Generic.List<GameObject>>(menu, "modelListEntries");
+                Assert.That(entries.Count, Is.EqualTo(8));
+                Assert.That(entries[0].name, Is.EqualTo("模型 09"));
+                Assert.That(entries[7].name, Is.EqualTo("模型 16"));
+                Assert.That(GetMenuField<Text>(menu, "modelListPageText").text, Is.EqualTo("第 2 / 3 页"));
             }
             finally
             {

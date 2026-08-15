@@ -269,8 +269,19 @@ namespace QuestMmdPlayer
                     message.Pcm16 = samples;
                     message.SampleRate = payload.sample_rate;
                     break;
+                case "reply.speech.timeline":
+                    if (!TryMapVisemeTimeline(payload.visemes, out var timeline, out error))
+                    {
+                        return false;
+                    }
+                    message = Basic(payload, ConversationEventType.SpeechTimeline);
+                    message.VisemeTimeline = timeline;
+                    break;
                 case "avatar.intent":
                     message = Basic(payload, ConversationEventType.AvatarIntent);
+                    message.ActionId = AvatarActionReceiptTracker.IsActionId(payload.action_id)
+                        ? payload.action_id
+                        : string.Empty;
                     message.InReplyToEventId = payload.in_reply_to_event_id;
                     message.Emotion = SanitizeEmotion(payload.emotion);
                     message.Gesture = SanitizeGesture(payload.gesture);
@@ -431,6 +442,55 @@ namespace QuestMmdPlayer
             return true;
         }
 
+        private static bool TryMapVisemeTimeline(
+            VisemeCuePayload[] payload,
+            out SpeechVisemeCue[] timeline,
+            out string error)
+        {
+            timeline = null;
+            error = string.Empty;
+            if (payload == null || payload.Length == 0 || payload.Length > 256)
+            {
+                error = "Speech timeline must contain 1 to 256 explicit cues";
+                return false;
+            }
+
+            var mapped = new SpeechVisemeCue[payload.Length];
+            var previousStart = -1;
+            for (var index = 0; index < payload.Length; index++)
+            {
+                var cue = payload[index];
+                if (cue == null || !IsVisemeSymbol(cue.symbol) || cue.start_ms < 0 ||
+                    cue.end_ms <= cue.start_ms || cue.end_ms > 600000 ||
+                    cue.start_ms < previousStart)
+                {
+                    error = "Speech timeline contains an invalid or unsorted cue";
+                    return false;
+                }
+                previousStart = cue.start_ms;
+                mapped[index] = new SpeechVisemeCue
+                {
+                    Symbol = cue.symbol.Trim(),
+                    StartMs = cue.start_ms,
+                    EndMs = cue.end_ms,
+                    Weight = Mathf.Clamp01(cue.weight <= 0f ? 1f : cue.weight)
+                };
+            }
+            timeline = mapped;
+            return true;
+        }
+
+        private static bool IsVisemeSymbol(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length > 16) return false;
+            for (var index = 0; index < value.Length; index++)
+            {
+                var character = value[index];
+                if (!char.IsLetterOrDigit(character) && character != '_' && character != '-') return false;
+            }
+            return true;
+        }
+
         private static bool IsIdentifier(string value)
         {
             if (string.IsNullOrEmpty(value) || value.Length > 64 || !char.IsLetterOrDigit(value[0]))
@@ -462,6 +522,7 @@ namespace QuestMmdPlayer
             public string session_id;
             public string turn_id;
             public string in_reply_to_event_id;
+            public string action_id;
             public string text;
             public string emotion;
             public string gesture;
@@ -478,6 +539,16 @@ namespace QuestMmdPlayer
             public bool text_sent;
             public bool audio_sent;
             public ServerTimingPayload server_timing;
+            public VisemeCuePayload[] visemes;
+        }
+
+        [Serializable]
+        private sealed class VisemeCuePayload
+        {
+            public string symbol;
+            public int start_ms;
+            public int end_ms;
+            public float weight = 1f;
         }
 
         [Serializable]
@@ -553,6 +624,21 @@ namespace QuestMmdPlayer
         public float strength;
         public int duration_ms;
         public string hand;
+    }
+
+    [Serializable]
+    public sealed class ActionResultRequest
+    {
+        public string type = "action.result";
+        public string protocol_version = AstrBotProtocol.Version;
+        public string session_id;
+        public string turn_id;
+        public string action_id;
+        public string receipt_id;
+        public string action;
+        public string status;
+        public string reason_code;
+        public int duration_ms;
     }
 
     [Serializable]

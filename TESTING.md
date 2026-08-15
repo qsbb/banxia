@@ -1,11 +1,11 @@
-# Quest MMD Player 测试说明
+# 伴夏测试说明
 
 当前阶段已接入 PMX/动作包格式：Motions/<动作名>/motion.vmd，可选 facial.vmd。
 VMD 运行时导入、XR Hands、三种触碰传感、Quest 麦克风、Meta Passthrough 和 AstrBot HTTP/SSE；仍需真机确认房间画面、追踪精度、配对和语音延迟。
 
 ## 1. 静态检查
 
-在 `quest_mmd_player` 项目根目录执行：
+在 `banxia` 项目根目录执行：
 
 ~~~powershell
 powershell -ExecutionPolicy Bypass -File .\test_frontend.ps1 -Strict
@@ -15,8 +15,8 @@ powershell -ExecutionPolicy Bypass -File .\test_frontend.ps1 -Strict
 
 ## 2. Unity 编辑器检查
 
-1. 用 Unity 2022.3.62f3c1 打开 quest_mmd_player。
-2. 执行 Quest MMD Player > Create Prototype Scene。
+1. 用 Unity 2022.3.62f3c1 打开 banxia。
+2. 执行 伴夏 > Create Prototype Scene。
 3. 打开 Assets/Scenes/Prototype.unity 并点击 Play。
 4. 首次运行会将 PMX 和贴图复制到 Unity 持久化目录，再显示模型和 HUD。
 5. Console 应看到 PMX avatar ready；如果导入失败，会显示回退人偶和明确错误。
@@ -25,11 +25,11 @@ powershell -ExecutionPolicy Bypass -File .\test_frontend.ps1 -Strict
 8. 输入文字并点击 Start mock conversation，确认 Listening -> Thinking -> Speaking -> Idle；播放中点击 Interrupt 应立即停声。
 9. 完整步骤见 CONVERSATION_TESTING_CN.md。
 
-在不进入 Play 的情况下，可执行 Quest MMD Player > Run Runtime PMX Smoke Test。通过文件选择器选择本地 PMX 后，该测试会验证网格、材质、纹理、骨骼和刚体数量；文件只用于本机编辑器测试，不进入生产 APK。
+在不进入 Play 的情况下，可执行 伴夏 > Run Runtime PMX Smoke Test。通过文件选择器选择本地 PMX 后，该测试会验证网格、材质、纹理、骨骼和刚体数量；文件只用于本机编辑器测试，不进入生产 APK。
 
-Quest MMD Player > Render Model Preview 会用同一条 PMX 运行时导入链生成本地预览图，用于桌面端查看画面。
+伴夏 > Render Model Preview 会用同一条 PMX 运行时导入链生成本地预览图，用于桌面端查看画面。
 
-Quest MMD Player > Render Human Interaction Previews 会生成三种交互的多角度 PNG，用于不戴头显检查骨骼和表情反馈。
+伴夏 > Render Human Interaction Previews 会生成三种交互的多角度 PNG，用于不戴头显检查骨骼和表情反馈。
 
 ## 3. Quest 3 设备检查
 
@@ -59,6 +59,8 @@ await loader.LoadFromFileAsync(pmxPath, textureDirectory);
 
 验收标准：模型根节点生成、网格和材质数量大于零、贴图无缺失、骨骼和 MMD 物理组件存在。头显中文菜单“动作 -> 导入文件”可选择 PMX 与贴图、单个 VMD 或 ZIP；本地 VMD 也可放入 `Application.persistentDataPath/Motions` 顶层目录，在中文动作页刷新、选择、播放和停止。AstrBot 不能传入任意本地路径。
 
+运行时 PMX 加载按纹理、材质和独立网格组让出帧预算；PNG/JPG 使用 Unity 异步纹理解码，TGA 文件读取与像素解码在后台执行。最近两个已解析 PMX 会保留 180 秒，低内存时释放非当前项；成功选择的设备内模型会保存，并在下次启动时自动恢复。PlayMode 可通过 `BANXIA_TEST_PMX` 指向仓库外的真实 PMX，输出 `totalMs`、`longFrames`、`maxFrameMs` 和缓存命中结果。
+
 ## VMD 动作与真机门禁
 
 .vmd 文件必须来自用户明确许可的来源；应用扫描 Motions 顶层 .vmd 或动作包目录，并对每个轨道执行 16 MiB、100000 关键帧、120 秒限制；动作包总关键帧数仍受同一上限保护。设备在线且电量足够前不安装 APK、不唤醒、不截图。
@@ -77,7 +79,7 @@ Android 构建后必须用 APK/Dex 分析确认 com.lingxi.banxia.filepicker.Ban
 |---|---|---|
 | Unity 项目和 UMT 包解析 | 已完成 | Packages/com.candidumgames.unitymmdtools/package.json |
 | 运行时 PMX 导入 | 已完成 | RuntimeMmdModelLoader.cs、PMX 冒烟测试 |
-| 桌面端预览 | 已完成 | Quest MMD Player > Render Model Preview |
+| 桌面端预览 | 已完成 | 伴夏 > Render Model Preview |
 | Quest APK 构建 | 已完成 | Builds/Banxia.apk |
 | XR Hands/控制器输入 | 已完成，待真机体验确认 | AvatarHumanInteraction.cs、AvatarTouchInteraction.cs |
 | 握手/摸头/捏脸传感 | 已完成；默认本地即时反应，语义上报显式开启 | HUD 模拟、Mock avatar.intent、编辑器测试 |

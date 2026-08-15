@@ -374,11 +374,18 @@ namespace QuestMmdPlayer
             }
             else if (detected != HumanInteractionKind.None && detected != current)
             {
-                var activationDelay = detected == HumanInteractionKind.Handshake
-                    ? handshakeHoldSeconds
-                    : detected == HumanInteractionKind.HeadPat
-                        ? .24f
-                        : .14f;
+                // A verified collider overlap already passed the spatial
+                // contact gate. Start its compliant response promptly, while
+                // the asymmetric fade below still prevents a snapped pose.
+                // Longer holds remain useful only for inferred/controller
+                // semantics that do not carry a penetration vector.
+                var activationDelay = detectedFromPhysicalContact
+                    ? .025f
+                    : detected == HumanInteractionKind.Handshake
+                        ? handshakeHoldSeconds
+                        : detected == HumanInteractionKind.HeadPat
+                            ? .24f
+                            : .14f;
                 if (stateTime >= activationDelay) SetState(detected, detectedFromPhysicalContact);
             }
             else if (sourceChanged)
@@ -407,11 +414,13 @@ namespace QuestMmdPlayer
                 reactionEnterSeconds,
                 reactionExitSeconds,
                 Time.unscaledDeltaTime);
+            var trackedContactActive = trackedContactUntil > Time.unscaledTime &&
+                trackedContactKind != HumanInteractionKind.None;
             smoothedContactPush = Vector3.SmoothDamp(
                 smoothedContactPush,
-                currentInteractionIsPhysical ? trackedContactPush : Vector3.zero,
+                trackedContactActive ? trackedContactPush : Vector3.zero,
                 ref contactPushVelocity,
-                currentInteractionIsPhysical ? .09f : .22f,
+                trackedContactActive ? .09f : .22f,
                 Mathf.Infinity,
                 Time.unscaledDeltaTime);
             if (fade <= .001f)
@@ -543,7 +552,10 @@ namespace QuestMmdPlayer
             trackedContactTarget = point;
             if (changed || avatarPush.sqrMagnitude > .0000001f || trackedContactUntil <= Time.unscaledTime)
                 trackedContactPush = Vector3.ClampMagnitude(avatarPush, maximumPhysicalYield);
-            trackedContactUntil = Time.unscaledTime + .14f;
+            // Contact facts are normally refreshed every 100 ms. Keep a
+            // bounded two-update grace period so one dropped XR frame cannot
+            // repeatedly cancel and restart the physical blend.
+            trackedContactUntil = Time.unscaledTime + .22f;
             if (kind == HumanInteractionKind.Handshake) AcquireHandshakeTarget(point);
             if (changed)
             {
@@ -647,8 +659,8 @@ namespace QuestMmdPlayer
                     ? physical ? PhysicalBodyOffset(.35f) : Quaternion.Euler(-1.2f, 0f, 1.4f + settle * .25f)
                     : kind == HumanInteractionKind.CheekPinch
                         ? Quaternion.Euler(0f, -1.8f, -1.2f)
-                        : kind == HumanInteractionKind.BodyTouch
-                            ? ContactBodyOffset(settle)
+                    : kind == HumanInteractionKind.BodyTouch
+                            ? physical ? PhysicalBodyOffset(.62f) : ContactBodyOffset(settle)
                         : Quaternion.identity;
                 bones.upperBody.localRotation = Quaternion.Slerp(
                     bones.upperBodyRotation,
@@ -662,8 +674,8 @@ namespace QuestMmdPlayer
                     ? physical ? PhysicalHeadOffset(settle) : Quaternion.Euler(-4.5f + settle * .65f, 0f, 3.5f)
                     : kind == HumanInteractionKind.CheekPinch
                         ? Quaternion.Euler(0f, -4.5f, -3.5f)
-                        : kind == HumanInteractionKind.BodyTouch
-                            ? ContactHeadOffset(settle)
+                    : kind == HumanInteractionKind.BodyTouch
+                            ? physical ? PhysicalBodyTouchHeadOffset(settle) : ContactHeadOffset(settle)
                         : Quaternion.identity;
                 bones.head.localRotation = Quaternion.Slerp(
                     bones.headRotation,
@@ -724,6 +736,20 @@ namespace QuestMmdPlayer
             var scale = Mathf.Clamp01(local.magnitude / Mathf.Max(.005f, maximumPhysicalYield)) * strength;
             var direction = local.normalized;
             return Quaternion.Euler(-direction.z * 2.5f * scale, direction.x * 1.5f * scale, -direction.x * 3f * scale);
+        }
+
+        private Quaternion PhysicalBodyTouchHeadOffset(float settle)
+        {
+            if (trackedContactRegion == AvatarContactRegion.Face)
+            {
+                return PhysicalHeadOffset(settle);
+            }
+            if (trackedContactRegion == AvatarContactRegion.Body)
+            {
+                var directed = PhysicalHeadOffset(settle);
+                return Quaternion.Slerp(Quaternion.identity, directed, .3f);
+            }
+            return Quaternion.identity;
         }
 
         private void ApplyPhysicalLimbYield(float amount)

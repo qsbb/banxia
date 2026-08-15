@@ -25,7 +25,7 @@ namespace QuestMmdPlayer
             }
 
             GUILayout.BeginArea(new Rect(20f, 20f, 470f, 500f), GUI.skin.box);
-            GUILayout.Label("Quest MMD Player Prototype");
+            GUILayout.Label("伴夏 Prototype");
             GUILayout.Label($"Passthrough: {bootstrap.Passthrough.Status}");
             GUILayout.Label($"Action: {bootstrap.Avatar.CurrentAction} / {(bootstrap.Avatar.IsPlaying ? "playing" : "paused")}");
             GUILayout.Label($"Emotion: {bootstrap.Avatar.CurrentEmotion}");

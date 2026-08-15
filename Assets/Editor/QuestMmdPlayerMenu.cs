@@ -21,12 +21,12 @@ namespace QuestMmdPlayer.Editor
     {
         private const string UrpAssetPath = "Assets/Settings/QuestMmdPlayerURP.asset";
         private const string UrpRendererPath = "Assets/Settings/QuestMmdPlayerURP_Renderer.asset";
-        [MenuItem("Quest MMD Player/Create Prototype Scene")]
+        [MenuItem("伴夏/Create Prototype Scene")]
         public static void CreatePrototypeScene()
         {
             EnsureRenderPipeline();
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-            var root = new GameObject("QuestMmdPlayerBootstrap");
+            var root = new GameObject("BanxiaBootstrap");
             root.AddComponent<QuestMmdPlayerBootstrap>();
             root.AddComponent<RuntimeMmdModelLoader>();
             root.AddComponent<ARSession>();
@@ -89,7 +89,7 @@ namespace QuestMmdPlayer.Editor
             return origin;
         }
 
-        [MenuItem("Quest MMD Player/Enable Quest Hand Tracking")]
+        [MenuItem("伴夏/Enable Quest Hand Tracking")]
         public static void EnableQuestHandTracking()
         {
             FeatureHelpers.RefreshFeatures(BuildTargetGroup.Android);
@@ -112,7 +112,7 @@ namespace QuestMmdPlayer.Editor
             AssetDatabase.SaveAssets();
             Debug.Log("Quest Hand Tracking Subsystem enabled for Android.");
         }
-        [MenuItem("Quest MMD Player/Ensure URP Rendering")]
+        [MenuItem("伴夏/Ensure URP Rendering")]
         public static void EnsureRenderPipeline()
         {
             Directory.CreateDirectory(Path.GetDirectoryName(UrpAssetPath));

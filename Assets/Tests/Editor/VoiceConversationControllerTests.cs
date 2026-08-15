@@ -430,6 +430,32 @@ namespace QuestMmdPlayer.Tests
 
             Assert.That(second, Is.GreaterThan(first));
         }
+
+        [Test]
+        public void PcmTimelineClockStartsAtAudibleBoundaryAndResetsWithStream()
+        {
+            owner = new GameObject("PCM audible timeline clock test");
+            var player = owner.AddComponent<Pcm16StreamAudioPlayer>();
+            var privateInstance = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(Pcm16StreamAudioPlayer).GetMethod("Awake", privateInstance)?.Invoke(player, null);
+            player.BeginStream();
+            player.Enqueue(new short[] { 1200, -1200, 600, -600 }, 24000);
+            typeof(Pcm16StreamAudioPlayer)
+                .GetMethod("ReadAudio", privateInstance)
+                ?.Invoke(player, new object[] { new float[1024] });
+            var startedAt = (double)typeof(Pcm16StreamAudioPlayer)
+                .GetField("audiblePlaybackStartedAtDspTime", privateInstance)
+                ?.GetValue(player);
+
+            Assert.That(startedAt, Is.GreaterThanOrEqualTo(0d));
+            Assert.That(player.AudiblePlaybackSeconds, Is.GreaterThanOrEqualTo(0f));
+            player.StopAndClear();
+            Assert.That((double)typeof(Pcm16StreamAudioPlayer)
+                .GetField("audiblePlaybackStartedAtDspTime", privateInstance)
+                ?.GetValue(player), Is.EqualTo(-1d));
+            Assert.That(player.AudiblePlaybackSeconds, Is.Zero);
+        }
         [Test]
         public void VoiceActivationRmsSeparatesSpeechFromSilence()
         {
@@ -503,6 +529,91 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void AcceptedBackendIntentCompletesAnActionOnlyVoiceTurnExactlyOnce()
+        {
+            owner = new GameObject("Accepted backend action-only test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+
+            var actionCount = 0;
+            avatar.ActionChanged += _ => actionCount++;
+            controller.StartConversation("请挥手");
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                Emotion = "happy",
+                Gesture = "wave",
+                LookAt = "user"
+            });
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyEnd,
+                TurnId = controller.TurnId,
+                TextSent = false,
+                AudioSent = false
+            });
+            typeof(ConversationController)
+                .GetMethod(
+                    "Update",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                ?.Invoke(controller, null);
+
+            Assert.That(controller.State, Is.EqualTo(ConversationState.Idle));
+            Assert.That(controller.LastErrorCode, Is.Empty);
+            Assert.That(avatar.CurrentAction, Is.EqualTo("wave"));
+            Assert.That(avatar.CurrentActionSource, Is.EqualTo(AvatarActionSource.Backend));
+            Assert.That(actionCount, Is.EqualTo(1));
+            Assert.That(transport.InterruptCount, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void RejectedBackendIntentFallsBackOnceInsteadOfFailingAnEmptyReply()
+        {
+            owner = new GameObject("Rejected backend action fallback test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+
+            var presenter = owner.GetComponent<AvatarConversationPresenter>();
+            Assert.That(presenter.ApplyIntent("happy", "wave", "user"), Is.True);
+
+            var fallbackActionCount = 0;
+            avatar.ActionChanged += _ => fallbackActionCount++;
+            controller.StartConversation("wave");
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                Emotion = "happy",
+                Gesture = "wave",
+                LookAt = "user"
+            });
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.ReplyEnd,
+                TurnId = controller.TurnId,
+                TextSent = false,
+                AudioSent = false
+            });
+
+            Assert.That(controller.State, Is.Not.EqualTo(ConversationState.Error));
+            Assert.That(controller.LastErrorCode, Is.Empty);
+            Assert.That(avatar.CurrentAction, Is.EqualTo("wave"));
+            Assert.That(avatar.CurrentActionSource, Is.EqualTo(AvatarActionSource.Manual));
+            Assert.That(fallbackActionCount, Is.EqualTo(1));
+            Assert.That(transport.InterruptCount, Is.EqualTo(0));
+        }
+
+        [Test]
         public void ExpressionMappingIsEmotionSpecificAndBounded()
         {
             Assert.That(
@@ -526,6 +637,238 @@ namespace QuestMmdPlayer.Tests
             Assert.That(AvatarConversationPresenter.NormalizeExpression("unknown"), Is.EqualTo("neutral"));
             Assert.That(AvatarConversationPresenter.NormalizeExpression(""), Is.EqualTo("neutral"));
         }
+
+        [Test]
+        public void ActionReceiptTrackerRequiresServerActionIdAndEmitsStrictLifecycle()
+        {
+            var tracker = new AvatarActionReceiptTracker();
+            tracker.Reset("turn-1");
+            Assert.That(tracker.TryPlan("turn-1", string.Empty, "wave", out _), Is.False);
+            Assert.That(tracker.TryPlan("turn-1", "action-1", "wave", out var context), Is.True);
+
+            Assert.That(tracker.TryAdvance(new AvatarActionExecutionUpdate
+            {
+                Context = context,
+                Phase = AvatarActionReceiptPhase.Accepted,
+                ReasonCode = "ignored"
+            }, out var accepted), Is.True);
+            Assert.That(accepted.Action, Is.EqualTo("wave"));
+            Assert.That(accepted.ReasonCode, Is.EqualTo("accepted"));
+            Assert.That(accepted.ReceiptId, Does.StartWith("receipt-"));
+
+            Assert.That(tracker.TryAdvance(new AvatarActionExecutionUpdate
+            {
+                Context = context,
+                Phase = AvatarActionReceiptPhase.Started,
+                ReasonCode = "ignored"
+            }, out var started), Is.True);
+            Assert.That(started.ReasonCode, Is.EqualTo("started"));
+            Assert.That(started.ReceiptId, Is.Not.EqualTo(accepted.ReceiptId));
+
+            Assert.That(tracker.TryAdvance(new AvatarActionExecutionUpdate
+            {
+                Context = context,
+                Phase = AvatarActionReceiptPhase.Completed,
+                ReasonCode = "ignored",
+                ElapsedMs = 700000
+            }, out var completed), Is.True);
+            Assert.That(completed.ReasonCode, Is.EqualTo("completed"));
+            Assert.That(completed.DurationMs, Is.EqualTo(600000));
+            Assert.That(tracker.TryAdvance(new AvatarActionExecutionUpdate
+            {
+                Context = context,
+                Phase = AvatarActionReceiptPhase.Completed
+            }, out _), Is.False);
+        }
+
+        [Test]
+        public void BackendActionReceiptsFollowActualAvatarActionLifecycle()
+        {
+            owner = new GameObject("Action receipt lifecycle test");
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+            controller.StartConversation("wave");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                ActionId = "action-wave-1",
+                Emotion = "happy",
+                Gesture = "wave",
+                LookAt = "user",
+                DurationMs = 2000
+            });
+
+            Assert.That(transport.ActionReceipts, Has.Count.EqualTo(2));
+            Assert.That(transport.ActionReceipts[0].Phase, Is.EqualTo(AvatarActionReceiptPhase.Accepted));
+            Assert.That(transport.ActionReceipts[1].Phase, Is.EqualTo(AvatarActionReceiptPhase.Started));
+            Assert.That(transport.ActionReceipts[0].Action, Is.EqualTo("wave"));
+            avatar.PlayActionFromSource("idle", AvatarActionSource.System);
+            Assert.That(transport.ActionReceipts, Has.Count.EqualTo(3));
+            Assert.That(transport.ActionReceipts[2].Phase, Is.EqualTo(AvatarActionReceiptPhase.Completed));
+        }
+
+        [Test]
+        public void LegacyAvatarIntentStillExecutesWithoutActionReceipt()
+        {
+            owner = new GameObject("Legacy avatar intent test");
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+            controller.StartConversation("wave");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                Emotion = "happy",
+                Gesture = "wave",
+                LookAt = "user"
+            });
+
+            Assert.That(avatar.CurrentAction, Is.EqualTo("wave"));
+            Assert.That(transport.ActionReceipts, Is.Empty);
+        }
+
+        [Test]
+        public void UnavailableAvatarRejectsTrackedActionWithoutFalseAcceptance()
+        {
+            owner = new GameObject("Unavailable avatar action test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.StartConversation("wave");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                ActionId = "action-wave-rejected",
+                Gesture = "wave",
+                LookAt = "user"
+            });
+
+            Assert.That(transport.ActionReceipts, Has.Count.EqualTo(1));
+            Assert.That(transport.ActionReceipts[0].Phase, Is.EqualTo(AvatarActionReceiptPhase.Rejected));
+            Assert.That(transport.ActionReceipts[0].ReasonCode, Is.EqualTo("invalid_state"));
+        }
+
+        [Test]
+        public void MotionArbiterRejectionDoesNotEmitFalseAcceptedOrStartedReceipts()
+        {
+            owner = new GameObject("Motion arbiter rejection receipt test");
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+            Assert.That(avatar.PlayActionFromSource("vmd", AvatarActionSource.Imported), Is.True);
+            controller.StartConversation("wave");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                ActionId = "action-wave-busy",
+                Gesture = "wave",
+                LookAt = "user"
+            });
+
+            Assert.That(transport.ActionReceipts, Has.Count.EqualTo(1));
+            Assert.That(transport.ActionReceipts[0].Phase, Is.EqualTo(AvatarActionReceiptPhase.Rejected));
+            Assert.That(transport.ActionReceipts[0].ReasonCode, Is.EqualTo("busy"));
+            Assert.That(avatar.CurrentAction, Is.EqualTo("vmd"));
+        }
+
+        [Test]
+        public void UserInterruptReportsTheStartedActionAsInterrupted()
+        {
+            owner = new GameObject("Action interruption receipt test");
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+            controller.StartConversation("wave");
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                ActionId = "action-wave-interrupted",
+                Gesture = "wave",
+                LookAt = "user"
+            });
+
+            controller.Interrupt();
+
+            Assert.That(transport.ActionReceipts, Has.Count.EqualTo(3));
+            Assert.That(transport.ActionReceipts[2].Phase, Is.EqualTo(AvatarActionReceiptPhase.Interrupted));
+            Assert.That(transport.ActionReceipts[2].ReasonCode, Is.EqualTo("user_interrupted"));
+            Assert.That(avatar.CurrentAction, Is.EqualTo("idle"));
+        }
+
+        [Test]
+        public void VmdPlaybackLifecycleDrivesStartedAndCompletedUpdates()
+        {
+            owner = new GameObject("VMD action receipt lifecycle test");
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            var vmd = owner.AddComponent<VmdActionLibrary>();
+            var presenter = owner.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(avatar, null, null);
+            var updates = new System.Collections.Generic.List<AvatarActionExecutionUpdate>();
+            presenter.ActionExecutionChanged += updates.Add;
+            var context = new AvatarActionExecutionContext("turn-1", "action-dance-1", "dance");
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(AvatarConversationPresenter)
+                .GetMethod("ActivateTrackedAction", flags)
+                ?.Invoke(presenter, new object[] { context });
+
+            typeof(VmdActionLibrary).GetProperty("PlaybackPhase")
+                ?.SetValue(vmd, VmdPlaybackPhase.Playing);
+            typeof(AvatarConversationPresenter)
+                .GetMethod("HandleVmdPlaybackChanged", flags)
+                ?.Invoke(presenter, null);
+            typeof(VmdActionLibrary).GetProperty("PlaybackPhase")
+                ?.SetValue(vmd, VmdPlaybackPhase.Idle);
+            typeof(AvatarConversationPresenter)
+                .GetMethod("HandleVmdPlaybackChanged", flags)
+                ?.Invoke(presenter, null);
+
+            Assert.That(updates.ConvertAll(update => update.Phase), Is.EqualTo(new[]
+            {
+                AvatarActionReceiptPhase.Accepted,
+                AvatarActionReceiptPhase.Started,
+                AvatarActionReceiptPhase.Completed
+            }));
+        }
+
+        [Test]
+        public void SpeechTimelineUsesNaturalVowelGroupsAndTransitionEnvelope()
+        {
+            Assert.That(AvatarConversationPresenter.GetVisemeGroup("A"), Is.EqualTo(0));
+            Assert.That(AvatarConversationPresenter.GetVisemeGroup("vrc.v_ih"), Is.EqualTo(1));
+            Assert.That(AvatarConversationPresenter.GetVisemeGroup("\u53e3\u304a"), Is.EqualTo(4));
+            Assert.That(AvatarConversationPresenter.GetVisemeGroup("sil"), Is.EqualTo(-1));
+            var cue = new SpeechVisemeCue { Symbol = "A", StartMs = 100, EndMs = 200, Weight = .8f };
+            Assert.That(AvatarConversationPresenter.SpeechCueEnvelope(cue, 35f), Is.Zero);
+            Assert.That(AvatarConversationPresenter.SpeechCueEnvelope(cue, 67.5f), Is.EqualTo(.4f).Within(.001f));
+            Assert.That(AvatarConversationPresenter.SpeechCueEnvelope(cue, 150f), Is.EqualTo(.8f).Within(.001f));
+            Assert.That(AvatarConversationPresenter.SpeechCueEnvelope(cue, 232.5f), Is.EqualTo(.4f).Within(.001f));
+            Assert.That(AvatarConversationPresenter.SpeechCueEnvelope(cue, 265f), Is.Zero);
+        }
+
         private sealed class RecordingVoiceTransport : MonoBehaviour, IConversationTransport
         {
             public event Action<ConversationEvent> EventReceived;
@@ -545,6 +888,8 @@ namespace QuestMmdPlayer.Tests
             public string LastText = string.Empty;
             public string InteractionEventId = string.Empty;
             public string LastInteractionName = string.Empty;
+            public readonly System.Collections.Generic.List<AvatarActionReceipt> ActionReceipts =
+                new System.Collections.Generic.List<AvatarActionReceipt>();
             public bool IsConnected => Connected;
             public string Status => Connected ? "connected" : "offline";
 
@@ -592,6 +937,13 @@ namespace QuestMmdPlayer.Tests
             {
                 LastInteractionName = interactionName;
                 return InteractionEventId;
+            }
+
+            public bool SendActionResult(AvatarActionReceipt receipt)
+            {
+                if (receipt == null) return false;
+                ActionReceipts.Add(receipt);
+                return true;
             }
 
             public void Raise(ConversationEvent message)

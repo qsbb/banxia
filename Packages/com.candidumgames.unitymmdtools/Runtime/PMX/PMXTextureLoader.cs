@@ -2,7 +2,9 @@ using B83.Image.BMP;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Networking;
 
 namespace UMT
 {
@@ -30,6 +32,148 @@ namespace UMT
             }
 
             return texturesByIndex;
+        }
+
+        /// <summary>
+        /// Runtime-friendly texture loading that yields between individual
+        /// source files. Image decoding remains on Unity's main thread, but a
+        /// model with several textures no longer decodes all of them in one
+        /// uninterrupted frame.
+        /// </summary>
+        public static async Task<Texture2D[]> LoadAsync(
+            UMTFrameBudget frameBudget,
+            PMXModel model,
+            PMXImportOptions options,
+            PMXImportResult result)
+        {
+            if (frameBudget == null)
+            {
+                throw new ArgumentNullException(nameof(frameBudget));
+            }
+            Texture2D[] texturesByIndex = new Texture2D[model.texturePaths.Length];
+            Dictionary<string, Texture2D> loadedTextures =
+                new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < model.texturePaths.Length; ++i)
+            {
+                texturesByIndex[i] = await LoadTextureAsync(
+                    i,
+                    model.texturePaths[i].ToString(),
+                    loadedTextures,
+                    options,
+                    result);
+                await frameBudget.YieldIfNeeded();
+            }
+
+            return texturesByIndex;
+        }
+
+        private static async Task<Texture2D> LoadTextureAsync(
+            int index,
+            string texturePath,
+            Dictionary<string, Texture2D> loadedTextures,
+            PMXImportOptions options,
+            PMXImportResult result)
+        {
+            if (string.IsNullOrWhiteSpace(texturePath))
+            {
+                return null;
+            }
+            string textureFullPath = ResolveTexturePath(texturePath, options);
+            if (string.IsNullOrEmpty(textureFullPath))
+            {
+                PMXUtilities.AddWarning(result, $"Texture was not found: {texturePath}");
+                return null;
+            }
+            if (loadedTextures.TryGetValue(textureFullPath, out Texture2D cachedTexture))
+            {
+                return cachedTexture;
+            }
+
+            Texture2D texture;
+            if (string.Equals(
+                Path.GetExtension(textureFullPath),
+                ".tga",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                DecodedTga decoded = await Task.Run(() => DecodeTga(textureFullPath));
+                texture = new Texture2D(decoded.width, decoded.height, TextureFormat.RGBA32, false);
+                texture.SetPixels32(decoded.pixels);
+                texture.Apply(false, false);
+            }
+            else if (IsUnityWebTexture(textureFullPath))
+            {
+                texture = await LoadUnityWebTextureAsync(textureFullPath);
+            }
+            else
+            {
+                byte[] textureBytes = await Task.Run(() => File.ReadAllBytes(textureFullPath));
+                texture = DecodeTexture(textureFullPath, textureBytes);
+            }
+            if (texture == null)
+            {
+                PMXUtilities.AddWarning(result, $"Texture could not be decoded: {textureFullPath}");
+                return null;
+            }
+            texture.name = PMXUtilities.SanitizeFileName(
+                Path.GetFileNameWithoutExtension(textureFullPath),
+                index);
+            result.textures.Add(texture);
+            loadedTextures[textureFullPath] = texture;
+            return texture;
+        }
+
+        private static bool IsUnityWebTexture(string textureFullPath)
+        {
+            string extension = Path.GetExtension(textureFullPath);
+            return string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static async Task<Texture2D> LoadUnityWebTextureAsync(string textureFullPath)
+        {
+            string uri = new Uri(textureFullPath).AbsoluteUri;
+            using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(uri, false))
+            {
+                UnityWebRequestAsyncOperation operation = request.SendWebRequest();
+                while (!operation.isDone)
+                {
+                    await Task.Yield();
+                }
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    return null;
+                }
+                return DownloadHandlerTexture.GetContent(request);
+            }
+        }
+
+        private readonly struct DecodedTga
+        {
+            public DecodedTga(Color32[] pixels, int width, int height)
+            {
+                this.pixels = pixels;
+                this.width = width;
+                this.height = height;
+            }
+
+            public readonly Color32[] pixels;
+            public readonly int width;
+            public readonly int height;
+        }
+
+        private static DecodedTga DecodeTga(string textureFullPath)
+        {
+            using (FileStream stream = File.OpenRead(textureFullPath))
+            {
+                Color32[] pixels = ThirdParty.TGALoader.LoadTGA(
+                    stream,
+                    out int width,
+                    out int height,
+                    out int _);
+                return new DecodedTga(pixels, width, height);
+            }
         }
 
         private static Texture2D LoadTexture(int index, string texturePath, Dictionary<string, Texture2D> loadedTextures, PMXImportOptions options, PMXImportResult result)

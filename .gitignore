@@ -20,7 +20,7 @@
 sysinfo.txt
 
 # Build outputs and local test captures
-quest_mmd_player_build/
+banxia_build/
 captures/
 
 # Local credentials and signing material

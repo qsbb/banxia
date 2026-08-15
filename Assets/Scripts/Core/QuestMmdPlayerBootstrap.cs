@@ -154,19 +154,19 @@ namespace QuestMmdPlayer
                             if (!androidTaskLabelLogged)
                             {
                                 androidTaskLabelLogged = true;
-                                Debug.Log("[QuestMmdPlayer] Android activity title and task label configured.");
+                                Debug.Log("[Banxia] Android activity title and task label configured.");
                             }
                         }
                         catch (System.Exception exception)
                         {
-                            Debug.LogWarning($"[QuestMmdPlayer] Android task label failed: {exception.Message}");
+                            Debug.LogWarning($"[Banxia] Android task label failed: {exception.Message}");
                         }
                     }));
                 }
             }
             catch (System.Exception exception)
             {
-                Debug.LogWarning($"[QuestMmdPlayer] Android task label scheduling failed: {exception.Message}");
+                Debug.LogWarning($"[Banxia] Android task label scheduling failed: {exception.Message}");
             }
 #endif
         }
@@ -228,7 +228,7 @@ namespace QuestMmdPlayer
             {
                 avatarObject.SetActive(true);
             }
-            Debug.Log($"[QuestMmdPlayer] PMX avatar ready: {avatar.name}");
+            Debug.Log($"[Banxia] PMX avatar ready: {avatar.name}");
         }
 
         private void HandleModelWillUnload()
@@ -238,7 +238,7 @@ namespace QuestMmdPlayer
 
         private void HandleMmdLoadFailed(string message)
         {
-            Debug.LogWarning($"[QuestMmdPlayer] PMX load failed: {message}");
+            Debug.LogWarning($"[Banxia] PMX load failed: {message}");
             if (Avatar == null && createFallbackAvatar)
             {
                 fallbackAvatar = FallbackAvatarFactory.Create(avatarStartPosition);
@@ -249,7 +249,7 @@ namespace QuestMmdPlayer
 
         private void HandleMmdProgress(string stage)
         {
-            Debug.Log($"[QuestMmdPlayer] PMX load: {stage}");
+            Debug.Log($"[Banxia] PMX load: {stage}");
         }
 
         private void BindInteractions()
@@ -382,7 +382,7 @@ namespace QuestMmdPlayer
                     HumanInteraction?.SimulateInteraction(HumanInteractionKind.CheekPinch);
                     break;
                 default:
-                    Debug.LogWarning($"[QuestMmdPlayer] unsupported command: {command.name}");
+                    Debug.LogWarning($"[Banxia] unsupported command: {command.name}");
                     break;
             }
         }

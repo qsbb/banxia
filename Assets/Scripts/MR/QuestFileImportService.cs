@@ -244,14 +244,13 @@ namespace QuestMmdPlayer
                     }
                 }
 
-                if (pmxFiles.Length > 1)
+                if (pmxFiles.Length > 0)
                 {
-                    throw new InvalidDataException("一次只能导入一个 PMX 模型。");
-                }
-
-                if (pmxFiles.Length == 1)
-                {
-                    await ImportPmxAsync(sourceRoot, sourceIsDirectory, pmxFiles[0]);
+                    await ImportPmxPackageAsync(
+                        sourceRoot,
+                        sourceIsDirectory,
+                        pmxFiles,
+                        originalArchivePath);
                 }
                 else if (vmdFiles.Length > 0)
                 {
@@ -299,43 +298,143 @@ namespace QuestMmdPlayer
             }
         }
 
-        private async Task ImportPmxAsync(string sourceRoot, bool sourceIsDirectory, string sourcePmx)
+        private async Task ImportPmxPackageAsync(
+            string sourceRoot,
+            bool sourceIsDirectory,
+            IReadOnlyList<string> sourcePmxFiles,
+            string originalArchivePath)
         {
             if (modelLoader == null)
             {
                 throw new InvalidOperationException("模型加载器尚未就绪。");
             }
 
-            var modelName = SanitizeImportedName(Path.GetFileNameWithoutExtension(sourcePmx), "ImportedModel");
+            if (sourcePmxFiles == null || sourcePmxFiles.Count == 0)
+            {
+                throw new InvalidDataException("模型包中没有 PMX 模型。");
+            }
+
+            var preferredName = string.IsNullOrWhiteSpace(originalArchivePath)
+                ? Path.GetFileNameWithoutExtension(sourcePmxFiles[0])
+                : Path.GetFileNameWithoutExtension(originalArchivePath);
+            var packageName = SanitizeImportedName(preferredName, "ImportedModel");
             var targetRoot = CreateUniqueDirectory(
                 Path.Combine(Application.persistentDataPath, "MmdModels", "Imported"),
-                modelName);
-            string targetPmx;
+                packageName);
+            var targetPmxFiles = new List<string>(sourcePmxFiles.Count);
             if (sourceIsDirectory)
             {
                 CopyDirectory(sourceRoot, targetRoot);
-                var relative = GetRelativePath(sourceRoot, sourcePmx);
-                targetPmx = Path.Combine(targetRoot, relative);
+                foreach (var sourcePmx in sourcePmxFiles)
+                {
+                    targetPmxFiles.Add(Path.Combine(targetRoot, GetRelativePath(sourceRoot, sourcePmx)));
+                }
             }
             else
             {
-                targetPmx = Path.Combine(targetRoot, Path.GetFileName(sourcePmx));
+                var sourcePmx = sourcePmxFiles[0];
+                var targetPmx = Path.Combine(targetRoot, Path.GetFileName(sourcePmx));
                 CopyFile(sourcePmx, targetPmx);
+                targetPmxFiles.Add(targetPmx);
             }
 
-            SetStatus("正在加载角色：" + modelName);
-            try
+            var selectedPmx = SelectPrimaryPmxCandidate(targetPmxFiles, preferredName);
+            var orderedCandidates = new[] { selectedPmx }
+                .Concat(targetPmxFiles.Where(path => !string.Equals(
+                    path,
+                    selectedPmx,
+                    StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            var selectedName = Path.GetFileNameWithoutExtension(selectedPmx);
+            SetStatus(
+                sourcePmxFiles.Count == 1
+                    ? "正在加载角色：" + selectedName
+                    : $"模型包已发现 {sourcePmxFiles.Count} 个角色，正在加载：{selectedName}");
+            Exception lastException = null;
+            var reachedBuildPhase = false;
+            foreach (var candidate in orderedCandidates)
             {
-                await modelLoader.LoadFromFileAsync(targetPmx, targetRoot);
+                try
+                {
+                    await modelLoader.LoadFromFileAsync(candidate, targetRoot);
+                    selectedPmx = candidate;
+                    selectedName = Path.GetFileNameWithoutExtension(candidate);
+                    lastException = null;
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    lastException = exception;
+                    reachedBuildPhase |= modelLoader.LastFailurePhase == RuntimeModelLoadPhase.Building;
+                    Debug.LogWarning(
+                        "[FileImport] PMX variant preview failed: " +
+                        Path.GetFileName(candidate) + ": " + exception.Message,
+                        this);
+                }
             }
-            catch
+
+            if (lastException != null)
             {
-                // The destination is unique to this import. Do not leave a
-                // broken model in the model picker when parsing/building fails.
-                TryDeleteDirectory(targetRoot);
-                throw;
+                // A package whose variants all fail parsing is not usable.
+                // Once any PMX reaches the build phase, keep the complete
+                // package because another device/runtime may build it and the
+                // shared texture tree must remain intact.
+                if (!reachedBuildPhase)
+                {
+                    TryDeleteDirectory(targetRoot);
+                    throw lastException;
+                }
+                SetStatus($"模型包已导入（{sourcePmxFiles.Count} 个模型），预览加载失败，请从模型列表切换");
+                return;
             }
-            SetStatus("角色导入完成：" + modelName);
+            SetStatus(
+                sourcePmxFiles.Count == 1
+                    ? "角色导入完成：" + selectedName
+                    : $"模型包导入完成：{sourcePmxFiles.Count} 个模型，当前为 {selectedName}");
+        }
+
+        internal static string SelectPrimaryPmxCandidate(
+            IEnumerable<string> candidates,
+            string preferredName)
+        {
+            var ordered = (candidates ?? Array.Empty<string>())
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (ordered.Length == 0)
+            {
+                throw new InvalidDataException("模型包中没有 PMX 模型。");
+            }
+
+            var preferredStem = Path.GetFileNameWithoutExtension(preferredName ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(preferredStem))
+            {
+                var exact = ordered.FirstOrDefault(path => string.Equals(
+                    Path.GetFileNameWithoutExtension(path),
+                    preferredStem,
+                    StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(exact))
+                {
+                    return exact;
+                }
+
+                var archivePrefixMatch = ordered
+                    .Select(path => new
+                    {
+                        Path = path,
+                        Stem = Path.GetFileNameWithoutExtension(path)
+                    })
+                    .Where(item => !string.IsNullOrWhiteSpace(item.Stem) &&
+                        preferredStem.StartsWith(item.Stem + "_", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(item => item.Stem.Length)
+                    .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+                if (archivePrefixMatch != null)
+                {
+                    return archivePrefixMatch.Path;
+                }
+            }
+            return ordered[0];
         }
 
         private async Task ImportVmdAsync(string sourceRoot, bool sourceIsDirectory, string[] vmdFiles)
@@ -486,7 +585,12 @@ namespace QuestMmdPlayer
         {
             long expandedBytes = 0;
             var entryCount = 0;
-            using (var archive = ZipFile.OpenRead(archivePath))
+            using (var stream = File.OpenRead(archivePath))
+            using (var archive = new ZipArchive(
+                stream,
+                ZipArchiveMode.Read,
+                false,
+                LegacyZipEntryEncoding.Instance))
             {
                 foreach (var entry in archive.Entries)
                 {

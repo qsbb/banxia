@@ -82,6 +82,9 @@ namespace QuestMmdPlayer
         private float nextSpatialContextUploadAt;
         private float lastSpatialContextUploadAt = float.NegativeInfinity;
         private long spatialRevision;
+        private readonly HashSet<string> actionReceiptKeys = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Queue<string> actionReceiptOrder = new Queue<string>();
+        private const int MaxActionReceiptKeys = 512;
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
@@ -490,6 +493,100 @@ namespace QuestMmdPlayer
             };
             StartCoroutine(PostJson("interaction", JsonUtility.ToJson(request), string.Empty, false));
             return request.event_id;
+        }
+
+        public bool SendActionResult(AvatarActionReceipt receipt)
+        {
+            if (receipt == null || string.IsNullOrWhiteSpace(receipt.TurnId) ||
+                string.IsNullOrWhiteSpace(receipt.ActionId) || string.IsNullOrWhiteSpace(receipt.ReceiptId) ||
+                string.IsNullOrWhiteSpace(receipt.Action) || receipt.Phase == AvatarActionReceiptPhase.Planned ||
+                !CanSend(string.Empty, false))
+            {
+                return false;
+            }
+
+            var key = receipt.ReceiptId;
+            if (actionReceiptKeys.Contains(key))
+            {
+                return true;
+            }
+
+            actionReceiptKeys.Add(key);
+            actionReceiptOrder.Enqueue(key);
+            while (actionReceiptOrder.Count > MaxActionReceiptKeys)
+            {
+                actionReceiptKeys.Remove(actionReceiptOrder.Dequeue());
+            }
+
+            // Receipts are observational. A failed or unavailable endpoint must
+            // never inject a conversation error or change the local animation.
+            StartCoroutine(PostActionResult(CreateActionResultJson(sessionId, receipt), receipt));
+            RecordStage("avatar_action", "completed", "action_receipt_queued", traceId: RuntimeDebugLog.TraceLabel(receipt.TurnId));
+            return true;
+        }
+
+        public static string CreateActionResultJson(string activeSessionId, AvatarActionReceipt receipt)
+        {
+            if (receipt == null) return string.Empty;
+            return JsonUtility.ToJson(new ActionResultRequest
+            {
+                session_id = activeSessionId ?? string.Empty,
+                turn_id = receipt.TurnId ?? string.Empty,
+                action_id = receipt.ActionId ?? string.Empty,
+                receipt_id = receipt.ReceiptId ?? string.Empty,
+                action = receipt.Action ?? string.Empty,
+                status = ActionPhaseName(receipt.Phase),
+                reason_code = receipt.ReasonCode ?? string.Empty,
+                duration_ms = Mathf.Clamp(receipt.DurationMs, 0, 600000)
+            });
+        }
+
+        private IEnumerator PostActionResult(string json, AvatarActionReceipt receipt)
+        {
+            const int maximumAttempts = 3;
+            for (var attempt = 1; attempt <= maximumAttempts; attempt++)
+            {
+                var startedAt = DiagnosticTimestamp();
+                using (var request = CreateJsonRequest("action/result", json))
+                {
+                    yield return request.SendWebRequest();
+                    if (Succeeded(request))
+                    {
+                        RecordStage(
+                            "avatar_action",
+                            "completed",
+                            "action_receipt_delivered",
+                            request.responseCode,
+                            ElapsedMs(startedAt),
+                            traceId: RuntimeDebugLog.TraceLabel(receipt.TurnId));
+                        yield break;
+                    }
+
+                    var retryable = request.result == UnityWebRequest.Result.ConnectionError ||
+                        request.responseCode == 408 || request.responseCode == 429 ||
+                        request.responseCode >= 500;
+                    if (!retryable || attempt >= maximumAttempts)
+                    {
+                        Debug.LogWarning(
+                            "[AstrBotBridge] Action receipt delivery failed: status=" +
+                            ActionPhaseName(receipt.Phase) + " attempt=" + attempt +
+                            " response=" + request.responseCode,
+                            this);
+                        RecordStage(
+                            "avatar_action",
+                            "failed",
+                            "action_receipt_delivery_failed",
+                            request.responseCode,
+                            ElapsedMs(startedAt),
+                            traceId: RuntimeDebugLog.TraceLabel(receipt.TurnId));
+                        yield break;
+                    }
+                }
+
+                // Json is intentionally built once before this loop so all
+                // retries reuse the exact same receipt_id and body.
+                yield return new WaitForSecondsRealtime(.2f * attempt);
+            }
         }
 
         public bool TryIngestCommandJson(string json)
@@ -1256,6 +1353,8 @@ namespace QuestMmdPlayer
             lastSpatialContextUploadAt = float.NegativeInfinity;
             sentSpatialSignature = string.Empty;
             sessionId = string.Empty;
+            actionReceiptKeys.Clear();
+            actionReceiptOrder.Clear();
             while (incomingFrames.TryDequeue(out _)) { }
         }
 
@@ -1529,6 +1628,19 @@ namespace QuestMmdPlayer
             if (code.Contains("pipeline") || code.Contains("owner") || code.Contains("identity") ||
                 code.Contains("platform")) return "eventbus";
             return "reply";
+        }
+
+        private static string ActionPhaseName(AvatarActionReceiptPhase phase)
+        {
+            switch (phase)
+            {
+                case AvatarActionReceiptPhase.Accepted: return "accepted";
+                case AvatarActionReceiptPhase.Started: return "started";
+                case AvatarActionReceiptPhase.Completed: return "completed";
+                case AvatarActionReceiptPhase.Rejected: return "rejected";
+                case AvatarActionReceiptPhase.Interrupted: return "interrupted";
+                default: return string.Empty;
+            }
         }
 
         private static string AuthorizationCode(string backendChainStatus)

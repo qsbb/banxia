@@ -137,6 +137,100 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PenetratingContactStartsCompliantResponseWithoutSemanticHoldDelay()
+        {
+            avatarObject = new GameObject("PromptPhysicalAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("Head", "\u982D");
+
+            serviceObject = new GameObject("PromptPhysicalInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            interaction.ReportTrackedHandContact(
+                AvatarContactRegion.Head,
+                false,
+                new Vector3(0f, 1f, 0f),
+                Vector3.right * .03f);
+            typeof(AvatarHumanInteraction)
+                .GetField("stateTime", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(interaction, .03f);
+
+            typeof(AvatarHumanInteraction)
+                .GetMethod("Update", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.Invoke(interaction, null);
+
+            Assert.AreEqual(HumanInteractionKind.HeadPat, interaction.CurrentInteraction);
+            var expiresAt = (float)(typeof(AvatarHumanInteraction)
+                .GetField("trackedContactUntil", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.GetValue(interaction) ?? 0f);
+            Assert.That(expiresAt - Time.unscaledTime, Is.GreaterThan(.18f));
+        }
+
+        [Test]
+        public void SweptPhysicalContactWithoutPenetrationStillStartsPromptResponse()
+        {
+            avatarObject = new GameObject("SweptPhysicalAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("Head", "\u982D");
+
+            serviceObject = new GameObject("SweptPhysicalInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            interaction.ReportTrackedHandContact(
+                AvatarContactRegion.Head,
+                false,
+                new Vector3(0f, 1f, 0f),
+                Vector3.zero);
+            typeof(AvatarHumanInteraction)
+                .GetField("stateTime", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(interaction, .03f);
+
+            typeof(AvatarHumanInteraction)
+                .GetMethod("Update", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                ?.Invoke(interaction, null);
+
+            Assert.AreEqual(HumanInteractionKind.HeadPat, interaction.CurrentInteraction);
+        }
+
+        [Test]
+        public void PhysicalFaceComplianceFollowsContactDirection()
+        {
+            avatarObject = new GameObject("DirectedFaceAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("Head", "\u982D");
+
+            serviceObject = new GameObject("DirectedFaceInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(AvatarHumanInteraction).GetField("trackedContactRegion", flags)
+                ?.SetValue(interaction, AvatarContactRegion.Face);
+            var pushField = typeof(AvatarHumanInteraction).GetField("smoothedContactPush", flags);
+            var offsetMethod = typeof(AvatarHumanInteraction)
+                .GetMethod("PhysicalBodyTouchHeadOffset", flags);
+            Assert.That(pushField, Is.Not.Null);
+            Assert.That(offsetMethod, Is.Not.Null);
+
+            pushField.SetValue(interaction, Vector3.right * .055f);
+            var rightPush = (Quaternion)offsetMethod.Invoke(interaction, new object[] { 0f });
+            pushField.SetValue(interaction, Vector3.left * .055f);
+            var leftPush = (Quaternion)offsetMethod.Invoke(interaction, new object[] { 0f });
+
+            Assert.That(Quaternion.Angle(Quaternion.identity, rightPush), Is.GreaterThan(4f));
+            Assert.That(Quaternion.Angle(Quaternion.identity, leftPush), Is.GreaterThan(4f));
+            Assert.That(Quaternion.Angle(rightPush, leftPush), Is.GreaterThan(8f));
+        }
+
+        [Test]
         public void ReactionTransitionUsesSmoothAsymmetricBlend()
         {
             var velocity = 0f;

@@ -36,11 +36,11 @@
 
 ## 快速开始
 
-1. 克隆本仓库，用 Unity Hub 打开项目目录。
+1. 克隆本仓库，用 Unity Hub 打开 `banxia` 项目目录。
 2. 等待 Package Manager 完成依赖解析。
-3. 执行 `Quest MMD Player > Create Prototype Scene`。
+3. 执行 `伴夏 > Create Prototype Scene`。
 4. 打开 `Assets/Scenes/Prototype.unity`，可在编辑器中直接运行。
-5. 执行 `Quest MMD Player > Build Android APK` 构建 Quest 安装包。
+5. 执行 `伴夏 > Build Android APK` 构建 Quest 安装包。
 
 APK 输出到 `Builds/Banxia.apk`，Android 包名为 `com.lingxi.banxia`，构建目标为 ARM64、IL2CPP、Vulkan，最低 Android API 29。
 
@@ -78,7 +78,7 @@ APK 输出到 `Builds/Banxia.apk`，Android 包名为 `com.lingxi.banxia`，构�
 - `.vmd` 动作
 - 包含 PMX、贴图或 VMD 的 ZIP
 
-导入完成后可刷新模型或外部动作列表，并在菜单中切换、播放或删除。PMX 贴图应保持原有相对目录；VMD 动作会经过格式、大小、关键帧和时长校验。第三方模型、贴图和动作仍适用各自作者的授权条款。
+导入完成后可刷新模型或外部动作列表，并在菜单中切换、播放或删除；最后一次成功加载的模型会在下次启动时自动恢复。PMX 贴图应保持原有相对目录；VMD 动作会经过格式、大小、关键帧和时长校验。第三方模型、贴图和动作仍适用各自作者的授权条款。
 
 ## 架构与 API
 

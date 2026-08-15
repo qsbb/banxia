@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace QuestMmdPlayer
@@ -42,6 +43,10 @@ namespace QuestMmdPlayer
         private bool backendTotalReported;
         private int activePlaybackGeneration = -1;
         private RuntimeDebugLog diagnostics;
+        private readonly Dictionary<string, AvatarActionReceiptTracker> actionReceiptTrackers =
+            new Dictionary<string, AvatarActionReceiptTracker>(StringComparer.Ordinal);
+        private readonly Queue<string> actionReceiptOrder = new Queue<string>();
+        private const int MaxTrackedActionReceipts = 64;
         [SerializeField] private bool allowAutomaticMockTransport;
         [SerializeField] private bool sendInteractionEvents = true;
         [SerializeField, Range(8f, 90f)] private float firstResponseTimeoutSeconds = 35f;
@@ -106,6 +111,7 @@ namespace QuestMmdPlayer
         {
             SubscribeTransport();
             SubscribeInteraction();
+            SubscribePresenter();
             if (audioPlayer != null)
             {
                 audioPlayer.PlaybackTelemetryReady += HandlePlaybackTelemetry;
@@ -114,6 +120,7 @@ namespace QuestMmdPlayer
 
         private void OnDisable()
         {
+            presenter?.InterruptTrackedAction(stateMachine.TurnId, "system_interrupted");
             if (sendInteractionEvents && lastInteraction != HumanInteractionKind.None)
             {
                 transport?.SendInteraction(InteractionName(lastInteraction), "cancel", 0f, InteractionDurationMs());
@@ -121,6 +128,7 @@ namespace QuestMmdPlayer
             }
             UnsubscribeTransport();
             UnsubscribeInteraction();
+            UnsubscribePresenter();
             if (audioPlayer != null)
             {
                 audioPlayer.PlaybackTelemetryReady -= HandlePlaybackTelemetry;
@@ -205,6 +213,7 @@ namespace QuestMmdPlayer
             {
                 presenter = GetComponent<AvatarConversationPresenter>() ?? gameObject.AddComponent<AvatarConversationPresenter>();
             }
+            SubscribePresenter();
             presenter.Bind(avatar, humanInteraction, audioPlayer);
             presenter.SetConversationState(stateMachine.State);
             RefreshLocalReactionMode();
@@ -324,6 +333,7 @@ namespace QuestMmdPlayer
 
             awaitingBackendResponse = false;
             pendingLocalAction = string.Empty;
+            presenter?.InterruptTrackedAction(stateMachine.TurnId, "user_interrupted");
             transport?.Interrupt(stateMachine.TurnId);
             StopAudioStream();
             interruptedUntil = Time.unscaledTime + .3f;
@@ -362,9 +372,8 @@ namespace QuestMmdPlayer
             }
             if (message.Type == ConversationEventType.AvatarIntent && string.IsNullOrEmpty(message.TurnId))
             {
-                backendActionReceived |= IsExecutableAvatarAction(message.Gesture);
-                presenter?.ApplyIntent(
-                    message.Emotion, message.Gesture, message.LookAt, message.Intensity, message.DurationMs);
+                var applied = ApplyAvatarIntent(message);
+                backendActionReceived |= applied && IsExecutableAvatarAction(message.Gesture);
                 return;
             }
             if (IsInteractionTurn(message))
@@ -382,9 +391,7 @@ namespace QuestMmdPlayer
                     {
                         if (message.Type == ConversationEventType.AvatarIntent)
                         {
-                            presenter?.ApplyIntent(
-                                message.Emotion, message.Gesture, message.LookAt,
-                                message.Intensity, message.DurationMs);
+                            ApplyAvatarIntent(message);
                         }
                         return;
                     }
@@ -425,12 +432,20 @@ namespace QuestMmdPlayer
                             bufferedMs: audioPlayer == null ? -1 : Mathf.RoundToInt(audioPlayer.BufferedSeconds * 1000f));
                     }
                     break;
+                case ConversationEventType.SpeechTimeline:
+                    presenter?.SetSpeechTimeline(message.VisemeTimeline);
+                    break;
                 case ConversationEventType.ReplyEnd:
                     var actionOnlyReply = AcceptActionOnlyReplyEnd(
                         backendActionReceived,
                         stateMachine.ReplyText,
                         replyAudioChunkCount);
-                    if (!actionOnlyReply && string.IsNullOrWhiteSpace(stateMachine.ReplyText) && replyAudioChunkCount == 0)
+                    var localFallbackOnlyReply = AcceptLocalActionFallbackReplyEnd(
+                        pendingLocalAction,
+                        stateMachine.ReplyText,
+                        replyAudioChunkCount);
+                    if (!actionOnlyReply && !localFallbackOnlyReply &&
+                        string.IsNullOrWhiteSpace(stateMachine.ReplyText) && replyAudioChunkCount == 0)
                     {
                         Debug.LogWarning(
                             $"[Conversation] Empty reply.end received; server text_sent={message.TextSent}, audio_sent={message.AudioSent}.",
@@ -445,6 +460,15 @@ namespace QuestMmdPlayer
                         Debug.Log("[Conversation] Action-only reply.end accepted; avatar intent was already applied.", this);
                         diagnostics?.Record("AvatarAction", "action-only reply.end accepted after avatar intent; audio_buffer closed");
                     }
+                    else if (localFallbackOnlyReply)
+                    {
+                        Debug.Log(
+                            "[Conversation] Empty reply.end accepted for an explicit action request; running local fallback.",
+                            this);
+                        diagnostics?.Record(
+                            "AvatarAction",
+                            "empty reply.end accepted for queued explicit action; local fallback will execute");
+                    }
                     audioPlayer?.MarkStreamCompleted();
                     RecordStage(
                         "audio_buffer",
@@ -456,9 +480,8 @@ namespace QuestMmdPlayer
                     TryRunLocalActionFallback();
                     break;
                 case ConversationEventType.AvatarIntent:
-                    backendActionReceived |= IsExecutableAvatarAction(message.Gesture);
-                    presenter?.ApplyIntent(
-                        message.Emotion, message.Gesture, message.LookAt, message.Intensity, message.DurationMs);
+                    var actionApplied = ApplyAvatarIntent(message);
+                    backendActionReceived |= actionApplied && IsExecutableAvatarAction(message.Gesture);
                     break;
                 case ConversationEventType.Error:
                     StopAudioStream();
@@ -476,6 +499,103 @@ namespace QuestMmdPlayer
             if (before != stateMachine.State)
             {
                 NotifyStateChanged();
+            }
+        }
+
+        private bool ApplyAvatarIntent(ConversationEvent message)
+        {
+            if (message == null) return false;
+
+            AvatarActionExecutionContext executionContext = null;
+            if (IsExecutableAvatarAction(message.Gesture) &&
+                AvatarActionReceiptTracker.IsActionId(message.ActionId))
+            {
+                if (actionReceiptTrackers.ContainsKey(message.ActionId))
+                {
+                    // SSE reconnects may replay the final frame. A server action
+                    // id is single-use, so do not execute the same motion twice.
+                    return false;
+                }
+
+                var tracker = new AvatarActionReceiptTracker();
+                tracker.Reset(message.TurnId);
+                if (tracker.TryPlan(
+                        message.TurnId,
+                        message.ActionId,
+                        message.Gesture,
+                        out executionContext))
+                {
+                    actionReceiptTrackers.Add(message.ActionId, tracker);
+                    actionReceiptOrder.Enqueue(message.ActionId);
+                    while (actionReceiptOrder.Count > MaxTrackedActionReceipts)
+                    {
+                        actionReceiptTrackers.Remove(actionReceiptOrder.Dequeue());
+                    }
+                }
+            }
+
+            if (presenter != null)
+            {
+                return presenter.ApplyIntent(
+                    message.Emotion,
+                    message.Gesture,
+                    message.LookAt,
+                    message.Intensity,
+                    message.DurationMs,
+                    executionContext);
+            }
+
+            if (executionContext != null)
+            {
+                HandleActionExecutionChanged(new AvatarActionExecutionUpdate
+                {
+                    Context = executionContext,
+                    Phase = AvatarActionReceiptPhase.Rejected,
+                    Source = "runtime",
+                    ReasonCode = "invalid_state"
+                });
+            }
+            return false;
+        }
+
+        private void HandleActionExecutionChanged(AvatarActionExecutionUpdate update)
+        {
+            if (update == null || update.Context == null ||
+                !actionReceiptTrackers.TryGetValue(update.Context.ActionId, out var tracker) ||
+                !tracker.TryAdvance(update, out var receipt))
+            {
+                return;
+            }
+
+            if (transport == null || !transport.SendActionResult(receipt))
+            {
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "failed",
+                    "action_receipt_not_queued",
+                    traceId: RuntimeDebugLog.TraceLabel(update.Context.TurnId));
+                return;
+            }
+            diagnostics?.RecordStage(
+                "avatar_action",
+                "completed",
+                "action_receipt_queued",
+                elapsedMs: receipt.DurationMs,
+                traceId: RuntimeDebugLog.TraceLabel(receipt.TurnId));
+        }
+
+        private void SubscribePresenter()
+        {
+            if (presenter == null) return;
+            presenter.ActionExecutionChanged -= HandleActionExecutionChanged;
+            presenter.ActionExecutionChanged += HandleActionExecutionChanged;
+        }
+
+        private void UnsubscribePresenter()
+        {
+            if (presenter != null)
+            {
+                presenter.ActionExecutionChanged -= HandleActionExecutionChanged;
             }
         }
 
@@ -735,6 +855,15 @@ namespace QuestMmdPlayer
                 audioChunkCount == 0;
         }
 
+        private static bool AcceptLocalActionFallbackReplyEnd(
+            string pendingLocalAction,
+            string replyText,
+            int audioChunkCount)
+        {
+            return !string.IsNullOrWhiteSpace(pendingLocalAction) &&
+                string.IsNullOrWhiteSpace(replyText) && audioChunkCount == 0;
+        }
+
         private void BeginResponseWait(float now)
         {
             responseWaitStartedAt = now;
@@ -799,12 +928,14 @@ namespace QuestMmdPlayer
 
         private void BeginAudioStream()
         {
+            presenter?.ClearSpeechTimeline();
             activePlaybackGeneration = audioPlayer == null ? -1 : audioPlayer.BeginStream();
         }
 
         private void StopAudioStream()
         {
             audioPlayer?.StopAndClear();
+            presenter?.ClearSpeechTimeline();
             activePlaybackGeneration = -1;
         }
 

@@ -11,7 +11,7 @@
 
 ## 不戴头显的测试
 
-1. 用 Unity Hub 打开 `quest_mmd_player`。
+1. 用 Unity Hub 打开 `banxia`。
 2. 打开 `Assets/Scenes/Prototype.unity`，点击 Play。
 3. 等待模型出现。
 4. 在左上角依次点 `Handshake`、`Head pat`、`Cheek pinch`。

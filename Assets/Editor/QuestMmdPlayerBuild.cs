@@ -34,10 +34,13 @@ namespace QuestMmdPlayer.Editor
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
         private const string OutputPath = "Builds/Banxia.apk";
         private const string AndroidApplicationIdentifier = "com.lingxi.banxia";
-        private const string AndroidVersionName = "0.2.2";
-        private const int AndroidVersionCode = 13;
+        private const string AndroidVersionName = "0.2.3";
+        private const int AndroidVersionCode = 14;
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
+        private const string EditorSimulationSettingsPath = "Assets/XR/Settings/XRSimulationSettings.asset";
+        internal const string EditorSimulationSettingsConfigKey =
+            "com.unity.xr.arfoundation.simulation_settings";
         private static readonly string[] RuntimeShaderNames =
         {
             "Universal Render Pipeline/Unlit",
@@ -48,10 +51,13 @@ namespace QuestMmdPlayer.Editor
             ".pmx", ".pmd", ".vrm", ".glb", ".gltf"
         };
 
-        [MenuItem("Quest MMD Player/Build Android APK")]
+        [MenuItem("伴夏/Build Android APK")]
         public static void BuildAndroidApk()
         {
-            QuestMmdPlayerMenu.CreatePrototypeScene();
+            if (!File.Exists(ScenePath))
+            {
+                QuestMmdPlayerMenu.CreatePrototypeScene();
+            }
             ValidateNoBundledAvatarModels();
 
             if (!EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android))
@@ -60,37 +66,45 @@ namespace QuestMmdPlayer.Editor
             }
 
             RestoreSimulationSettingsFromTemp();
-            ConfigureOpenXr();
-            ConfigureRuntimeShaders();
-            EditorUserBuildSettings.buildAppBundle = false;
-            PlayerSettings.companyName = "Quest MMD Player";
-            PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel;
-            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, AndroidApplicationIdentifier);
-            PlayerSettings.bundleVersion = AndroidVersionName;
-            PlayerSettings.Android.bundleVersionCode = AndroidVersionCode;
-            PlayerSettings.colorSpace = ColorSpace.Linear;
-            PlayerSettings.insecureHttpOption = InsecureHttpOption.AlwaysAllowed;
-            PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { GraphicsDeviceType.Vulkan });
-            PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
-            PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
-            PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel29;
-            PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
-
-            Directory.CreateDirectory(Path.GetDirectoryName(OutputPath));
-            var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+            using (new PreloadedAssetsScope())
             {
-                scenes = new[] { ScenePath },
-                locationPathName = OutputPath,
-                target = BuildTarget.Android,
-                options = BuildOptions.None
-            });
+                ConfigureOpenXr();
+                RemoveEditorOnlyPreloadedAssets();
+                ConfigureRuntimeShaders();
+                EditorUserBuildSettings.buildAppBundle = false;
+                PlayerSettings.companyName = "Banxia";
+                PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel;
+                PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, AndroidApplicationIdentifier);
+                PlayerSettings.bundleVersion = AndroidVersionName;
+                PlayerSettings.Android.bundleVersionCode = AndroidVersionCode;
+                PlayerSettings.colorSpace = ColorSpace.Linear;
+                PlayerSettings.insecureHttpOption = InsecureHttpOption.AlwaysAllowed;
+                PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { GraphicsDeviceType.Vulkan });
+                PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
+                PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
+                PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel29;
+                PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
 
-            if (report.summary.result != BuildResult.Succeeded)
-            {
-                throw new BuildFailedException($"Android build failed: {report.summary.result}");
+                Directory.CreateDirectory(Path.GetDirectoryName(OutputPath));
+                BuildReport report;
+                using (new EditorBuildSettingsConfigScope(EditorSimulationSettingsConfigKey))
+                {
+                    report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+                    {
+                        scenes = new[] { ScenePath },
+                        locationPathName = OutputPath,
+                        target = BuildTarget.Android,
+                        options = BuildOptions.None
+                    });
+                }
+
+                if (report.summary.result != BuildResult.Succeeded)
+                {
+                    throw new BuildFailedException($"Android build failed: {report.summary.result}");
+                }
+
+                Debug.Log($"Android APK created: {report.summary.outputPath} ({report.summary.totalSize} bytes)");
             }
-
-            Debug.Log($"Android APK created: {report.summary.outputPath} ({report.summary.totalSize} bytes)");
         }
 
         internal static void ValidateNoBundledAvatarModels(string assetsRootOverride = null)
@@ -158,6 +172,111 @@ namespace QuestMmdPlayer.Editor
             graphicsSettings.ApplyModifiedPropertiesWithoutUndo();
             AssetDatabase.SaveAssets();
         }
+
+        private static void RemoveEditorOnlyPreloadedAssets()
+        {
+            var preloadedAssets = PlayerSettings.GetPreloadedAssets();
+            var filtered = preloadedAssets
+                .Where(asset => asset == null || !string.Equals(
+                    AssetDatabase.GetAssetPath(asset),
+                    EditorSimulationSettingsPath,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (filtered.Length == preloadedAssets.Length)
+            {
+                return;
+            }
+
+            PlayerSettings.SetPreloadedAssets(filtered);
+            Debug.Log("Removed editor-only XR simulation settings from Android preloaded assets.");
+        }
+
+        internal sealed class EditorBuildSettingsConfigScope : IDisposable
+        {
+            private readonly string configKey;
+            private readonly UnityEngine.Object originalValue;
+            private readonly string originalAssetPath;
+            private readonly bool restoreOriginal;
+            private bool disposed;
+
+            internal EditorBuildSettingsConfigScope(string configKey)
+            {
+                if (string.IsNullOrWhiteSpace(configKey))
+                {
+                    throw new ArgumentException("A config key is required.", nameof(configKey));
+                }
+
+                this.configKey = configKey;
+                restoreOriginal = EditorBuildSettings.TryGetConfigObject(configKey, out originalValue);
+                originalAssetPath = originalValue == null
+                    ? string.Empty
+                    : AssetDatabase.GetAssetPath(originalValue);
+                if (restoreOriginal)
+                {
+                    EditorBuildSettings.RemoveConfigObject(configKey);
+                    Debug.Log($"Temporarily removed editor-only build config: {configKey}");
+                }
+            }
+
+            public void Dispose()
+            {
+                if (disposed)
+                {
+                    return;
+                }
+
+                disposed = true;
+                if (!restoreOriginal)
+                {
+                    return;
+                }
+
+                var valueToRestore = ResolveOriginalConfigObject(originalValue, originalAssetPath);
+                if (valueToRestore == null)
+                {
+                    throw new InvalidOperationException(
+                        $"Could not restore editor-only build config: {configKey}");
+                }
+
+                EditorBuildSettings.AddConfigObject(configKey, valueToRestore, true);
+                AssetDatabase.SaveAssets();
+                Debug.Log($"Restored editor-only build config: {configKey}");
+            }
+
+            internal static UnityEngine.Object ResolveOriginalConfigObject(
+                UnityEngine.Object originalValue,
+                string originalAssetPath)
+            {
+                if (originalValue != null)
+                {
+                    return originalValue;
+                }
+
+                return string.IsNullOrWhiteSpace(originalAssetPath)
+                    ? null
+                    : AssetDatabase.LoadMainAssetAtPath(originalAssetPath);
+            }
+        }
+
+        internal sealed class PreloadedAssetsScope : IDisposable
+        {
+            private readonly UnityEngine.Object[] originalAssets = PlayerSettings.GetPreloadedAssets();
+            private bool disposed;
+
+            public void Dispose()
+            {
+                if (disposed)
+                {
+                    return;
+                }
+
+                disposed = true;
+                PlayerSettings.SetPreloadedAssets(originalAssets);
+                AssetDatabase.SaveAssets();
+                Debug.Log("Restored preloaded assets after Android build.");
+            }
+        }
+
         private static void ConfigureOpenXr()
         {
             var guids = AssetDatabase.FindAssets("t:XRGeneralSettingsPerBuildTarget");

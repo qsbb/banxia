@@ -18,7 +18,7 @@ namespace QuestMmdPlayer
         private string rootCauseCode = string.Empty;
         private static readonly string[] AllowedPrefixes =
         {
-            "[QuestMmdPlayer]",
+            "[Banxia]",
             "[Conversation]",
             "[VoiceInput]",
             "[AstrBotBridge]",

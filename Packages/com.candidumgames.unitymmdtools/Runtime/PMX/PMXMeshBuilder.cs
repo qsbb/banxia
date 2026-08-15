@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -41,6 +42,57 @@ namespace UMT
             }
 
             sourceVertices.Dispose();
+            return meshes;
+        }
+
+        /// <summary>
+        /// Runtime mesh construction that yields between independent
+        /// morph-linked material groups. A large PMX no longer builds every
+        /// mesh in one uninterrupted main-thread frame.
+        /// </summary>
+        public static async Task<List<PMXImportedMesh>> BuildAsync(
+            UMTFrameBudget frameBudget,
+            PMXModel model,
+            string modelName,
+            IReadOnlyList<PMXMorphLinkedMaterialGroup> materialGroups,
+            Matrix4x4[] bindposes)
+        {
+            if (frameBudget == null)
+            {
+                throw new ArgumentNullException(nameof(frameBudget));
+            }
+            List<PMXImportedMesh> meshes = new List<PMXImportedMesh>();
+            int[] materialIndexOffsets = BuildMaterialIndexOffsets(model);
+            NativeArray<PMXVertex> sourceVertices =
+                new NativeArray<PMXVertex>(model.vertices, Allocator.Persistent);
+            try
+            {
+                foreach (PMXMorphLinkedMaterialGroup materialGroup in materialGroups)
+                {
+                    string meshName = GetMeshName(
+                        model,
+                        modelName,
+                        materialGroup.materialIndices);
+                    PMXImportedMesh importedMesh = BuildMesh(
+                        model,
+                        sourceVertices,
+                        materialGroup.materialIndices,
+                        materialIndexOffsets,
+                        bindposes);
+                    importedMesh.mesh.name = meshName;
+                    importedMesh.materialIndices = materialGroup.materialIndices.ToArray();
+                    importedMesh.name = meshName;
+                    meshes.Add(importedMesh);
+                    await frameBudget.YieldIfNeeded();
+                }
+            }
+            finally
+            {
+                if (sourceVertices.IsCreated)
+                {
+                    sourceVertices.Dispose();
+                }
+            }
             return meshes;
         }
 

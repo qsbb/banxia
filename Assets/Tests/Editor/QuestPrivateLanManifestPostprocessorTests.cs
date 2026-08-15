@@ -42,6 +42,28 @@ namespace QuestMmdPlayer.Tests
             var activity = (XmlElement)application.SelectSingleNode("activity");
             Assert.That(activity.GetAttribute("label", AndroidNamespace), Is.EqualTo("伴夏"));
         }
+
+        [Test]
+        public void RequiredPermissionIsRestoredWithoutDuplicatingIt()
+        {
+            var document = new XmlDocument();
+            document.LoadXml(
+                "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">" +
+                "<application /></manifest>");
+
+            QuestPrivateLanManifestPostprocessor.EnsurePermission(
+                document,
+                "android.permission.INTERNET");
+            QuestPrivateLanManifestPostprocessor.EnsurePermission(
+                document,
+                "android.permission.INTERNET");
+
+            var permissions = document.DocumentElement.SelectNodes("uses-permission");
+            Assert.That(permissions.Count, Is.EqualTo(1));
+            Assert.That(
+                ((XmlElement)permissions[0]).GetAttribute("name", AndroidNamespace),
+                Is.EqualTo("android.permission.INTERNET"));
+        }
     }
 }
 #endif

@@ -81,6 +81,8 @@ namespace QuestMmdPlayer
                 case ConversationEventType.AudioChunk:
                     State = ConversationState.Speaking;
                     break;
+                case ConversationEventType.SpeechTimeline:
+                    break;
                 case ConversationEventType.ReplyEnd:
                     replyEnded = true;
                     break;

@@ -60,7 +60,10 @@ namespace QuestMmdPlayer
             {
                 return false;
             }
-            if (semanticContact || importedMotionBusy || now < gestureLockUntil)
+            var canSwitchImportedDance = importedMotionBusy &&
+                (normalized == "dance" || normalized == "dance_next");
+            if (semanticContact || (importedMotionBusy && !canSwitchImportedDance) ||
+                (now < gestureLockUntil && !canSwitchImportedDance))
             {
                 return false;
             }

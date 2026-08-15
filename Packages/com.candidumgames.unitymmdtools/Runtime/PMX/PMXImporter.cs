@@ -279,7 +279,13 @@ namespace UMT
 
             using (UMTTiming.Measure(options.timingCallback, "Load Textures"))
             {
-                result.texturesByIndex = LoadTextures(model, options, result);
+                result.texturesByIndex = options.loadTextures != null
+                    ? LoadTextures(model, options, result)
+                    : await PMXTextureLoader.LoadAsync(
+                        frameBudget,
+                        model,
+                        options,
+                        result);
                 foreach (Texture2D texture in result.texturesByIndex)
                 {
                     if (texture != null && !result.textures.Contains(texture))
@@ -292,7 +298,12 @@ namespace UMT
 
             using (UMTTiming.Measure(options.timingCallback, "Build Materials"))
             {
-                result.materials.AddRange(PMXMaterialBuilder.Build(model, options, modelName, result.texturesByIndex));
+                result.materials.AddRange(await PMXMaterialBuilder.BuildAsync(
+                    frameBudget,
+                    model,
+                    options,
+                    modelName,
+                    result.texturesByIndex));
             }
             await frameBudget.YieldIfNeeded();
 
@@ -313,9 +324,19 @@ namespace UMT
                 await frameBudget.YieldIfNeeded();
             }
 
-            using (UMTTiming.Measure(options.timingCallback, "Build Meshes and Renderers"))
+            using (UMTTiming.Measure(options.timingCallback, "Build Meshes"))
             {
-                result.meshes.AddRange(PMXMeshBuilder.Build(model, modelName, materialGroups, bindposes));
+                result.meshes.AddRange(await PMXMeshBuilder.BuildAsync(
+                    frameBudget,
+                    model,
+                    modelName,
+                    materialGroups,
+                    bindposes));
+            }
+            await frameBudget.YieldIfNeeded();
+
+            using (UMTTiming.Measure(options.timingCallback, "Build Renderers"))
+            {
                 PMXRendererBuilder.Build(model, result.root, result.meshes, result.materials, result.bones);
             }
             await frameBudget.YieldIfNeeded();

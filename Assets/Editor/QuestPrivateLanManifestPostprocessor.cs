@@ -33,6 +33,7 @@ namespace QuestMmdPlayer.Editor
             application.SetAttribute("usesCleartextTraffic", AndroidNamespace, "true");
             EnsureUnityPlayerActivityLabel(application);
             EnsureAppLabelResource(path);
+            EnsurePermission(document, "android.permission.INTERNET");
             EnsurePermission(document, "horizonos.permission.HAND_TRACKING");
             document.Save(manifestPath);
             ConfigureFilePickerModule(path);
@@ -136,7 +137,7 @@ namespace QuestMmdPlayer.Editor
                 new UTF8Encoding(false));
         }
 
-        private static void EnsurePermission(XmlDocument document, string permissionName)
+        internal static void EnsurePermission(XmlDocument document, string permissionName)
         {
             var manifest = document.DocumentElement;
             if (manifest == null)

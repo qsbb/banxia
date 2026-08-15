@@ -14,6 +14,7 @@ namespace QuestMmdPlayer
         PairingKeyboard,
         Appearance,
         Models,
+        ModelList,
         Quality,
         Voice,
         TextInput,
@@ -555,6 +556,10 @@ namespace QuestMmdPlayer
             if (IsActive(menuRoot, "Action Presets Layer/Added Actions List"))
             {
                 return RuntimeMenuLayer.ActionList;
+            }
+            if (IsActive(menuRoot, "Model Library Layer/Installed Model List"))
+            {
+                return RuntimeMenuLayer.ModelList;
             }
             if (IsActive(menuRoot, "Quality Layer")) return RuntimeMenuLayer.Quality;
             if (IsActive(menuRoot, "Voice Layer")) return RuntimeMenuLayer.Voice;

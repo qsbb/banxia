@@ -97,6 +97,77 @@ namespace QuestMmdPlayer.Tests
             Assert.That(message.DurationMs, Is.EqualTo(30000));
         }
 
+        [Test]
+        public void AvatarIntentMapsOptionalServerActionIdWithoutInventingLegacyIds()
+        {
+            const string current = "{\"type\":\"avatar.intent\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"action_id\":\"action-wave-1\",\"emotion\":\"happy\",\"gesture\":\"wave\",\"look_at\":\"user\",\"intensity\":0.5,\"duration_ms\":2000}";
+            const string legacy = "{\"type\":\"avatar.intent\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"emotion\":\"happy\",\"gesture\":\"wave\",\"look_at\":\"user\",\"intensity\":0.5,\"duration_ms\":2000}";
+
+            Assert.That(AstrBotProtocol.TryMapSseEvent(
+                "s1", "avatar.intent", current, out var currentMessage, out var currentError),
+                Is.True,
+                currentError);
+            Assert.That(currentMessage.ActionId, Is.EqualTo("action-wave-1"));
+            Assert.That(AstrBotProtocol.TryMapSseEvent(
+                "s1", "avatar.intent", legacy, out var legacyMessage, out var legacyError),
+                Is.True,
+                legacyError);
+            Assert.That(legacyMessage.ActionId, Is.Empty);
+        }
+
+        [Test]
+        public void SpeechTimelineMapsBoundedSortedVisemeCues()
+        {
+            const string json = "{\"type\":\"reply.speech.timeline\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"visemes\":[{\"symbol\":\"A\",\"start_ms\":0,\"end_ms\":120,\"weight\":0.75},{\"symbol\":\"I\",\"start_ms\":100,\"end_ms\":220,\"weight\":1.0}]}";
+
+            Assert.That(AstrBotProtocol.TryMapSseEvent(
+                "s1", "reply.speech.timeline", json, out var message, out var error),
+                Is.True,
+                error);
+            Assert.That(message.Type, Is.EqualTo(ConversationEventType.SpeechTimeline));
+            Assert.That(message.VisemeTimeline, Has.Length.EqualTo(2));
+            Assert.That(message.VisemeTimeline[0].Symbol, Is.EqualTo("A"));
+            Assert.That(message.VisemeTimeline[0].Weight, Is.EqualTo(.75f).Within(.001f));
+            Assert.That(message.VisemeTimeline[1].StartMs, Is.EqualTo(100));
+        }
+
+        [Test]
+        public void SpeechTimelineRejectsUnsortedOrUnboundedCues()
+        {
+            const string json = "{\"type\":\"reply.speech.timeline\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"visemes\":[{\"symbol\":\"A\",\"start_ms\":100,\"end_ms\":200},{\"symbol\":\"I\",\"start_ms\":50,\"end_ms\":250}]}";
+
+            Assert.That(AstrBotProtocol.TryMapSseEvent(
+                "s1", "reply.speech.timeline", json, out _, out var error),
+                Is.False);
+            Assert.That(error, Does.Contain("invalid or unsorted"));
+        }
+
+        [Test]
+        public void ActionResultJsonMatchesStrictBackendContract()
+        {
+            var receipt = new AvatarActionReceipt
+            {
+                TurnId = "turn-1",
+                ActionId = "action-1",
+                ReceiptId = "receipt-1",
+                Action = "wave",
+                Phase = AvatarActionReceiptPhase.Accepted,
+                ReasonCode = "accepted",
+                DurationMs = 0
+            };
+
+            var json = AstrBotBridge.CreateActionResultJson("session-1", receipt);
+            var retryJson = AstrBotBridge.CreateActionResultJson("session-1", receipt);
+
+            Assert.That(json, Is.EqualTo(
+                "{\"type\":\"action.result\",\"protocol_version\":\"1.0\",\"session_id\":\"session-1\",\"turn_id\":\"turn-1\",\"action_id\":\"action-1\",\"receipt_id\":\"receipt-1\",\"action\":\"wave\",\"status\":\"accepted\",\"reason_code\":\"accepted\",\"duration_ms\":0}"));
+            Assert.That(json, Does.Not.Contain("gesture"));
+            Assert.That(json, Does.Not.Contain("phase"));
+            Assert.That(json, Does.Not.Contain("source"));
+            Assert.That(json, Does.Not.Contain("elapsed_ms"));
+            Assert.That(retryJson, Is.EqualTo(json), "Retries must preserve the exact receipt_id and body.");
+        }
+
         [TestCase("dance_next")]
         [TestCase("raise_hand")]
         [TestCase("turn_half")]

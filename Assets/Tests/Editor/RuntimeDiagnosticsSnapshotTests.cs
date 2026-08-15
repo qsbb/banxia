@@ -57,6 +57,25 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void MenuLayerDetectionRecognizesInstalledModelModal()
+        {
+            var rootObject = new GameObject("Diagnostics Model Menu Root");
+            try
+            {
+                var models = CreateLayer(rootObject.transform, "Model Library Layer", true);
+                CreateLayer(models.transform, "Installed Model List", true);
+
+                Assert.That(
+                    RuntimeDiagnosticsBuilder.DetectMenuLayer(rootObject.transform, true),
+                    Is.EqualTo(RuntimeMenuLayer.ModelList));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(rootObject);
+            }
+        }
+
+        [Test]
         public void TimingParserProjectsOnlyWhitelistedNumericMetrics()
         {
             var timing = RuntimeDiagnosticsBuilder.ParseConversationTiming(

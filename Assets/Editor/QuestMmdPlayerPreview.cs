@@ -11,15 +11,31 @@ namespace QuestMmdPlayer.Editor
     public static class QuestMmdPlayerPreview
     {
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
-        private const string OutputPath = "Builds/ModelPreview.png";
+        private const string DefaultOutputPath = "Builds/ModelPreview.png";
+        private const string InputEnvironmentVariable = "BANXIA_PREVIEW_PMX";
+        private const string OutputEnvironmentVariable = "BANXIA_PREVIEW_OUTPUT";
 
-        [MenuItem("Quest MMD Player/Render Model Preview")]
+        [MenuItem("伴夏/Render Model Preview")]
         public static void RenderModelPreview()
         {
             QuestMmdPlayerMenu.EnsureRenderPipeline();
             EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
-            string pmxPath = EditorUtility.OpenFilePanel("Select a local PMX model", string.Empty, "pmx");
+            string pmxPath = Environment.GetEnvironmentVariable(InputEnvironmentVariable);
+            if (string.IsNullOrWhiteSpace(pmxPath))
+            {
+                pmxPath = EditorUtility.OpenFilePanel("Select a local PMX model", string.Empty, "pmx");
+            }
             if (string.IsNullOrWhiteSpace(pmxPath)) return;
+            if (!File.Exists(pmxPath))
+            {
+                throw new FileNotFoundException("Selected PMX model was not found.", pmxPath);
+            }
+
+            string outputPath = Environment.GetEnvironmentVariable(OutputEnvironmentVariable);
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                outputPath = DefaultOutputPath;
+            }
             string textureDirectory = Path.GetDirectoryName(pmxPath);
             PMXImportResult result = null;
 
@@ -33,8 +49,14 @@ namespace QuestMmdPlayer.Editor
                     createAvatar = false,
                     strictVersion = true
                 };
-                result = PMXImporter.Import(pmxPath, options);
-                result.root.transform.position = new Vector3(0f, 0f, 2.2f);
+                PMXModel model;
+                using (var stream = File.OpenRead(pmxPath))
+                {
+                    model = PMXReader.Read(stream, true);
+                }
+                PreserveOriginalNames(model);
+                result = PMXImporter.BuildUnityObjects(model, options);
+                result.root.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
 
                 var renderers = result.root.GetComponentsInChildren<Renderer>(true);
                 if (renderers.Length == 0)
@@ -42,35 +64,26 @@ namespace QuestMmdPlayer.Editor
                     throw new MissingComponentException("The imported PMX model has no renderers.");
                 }
 
-                var bounds = renderers[0].bounds;
-                for (var i = 1; i < renderers.Length; i++)
-                {
-                    bounds.Encapsulate(renderers[i].bounds);
-                }
+                var bounds = AvatarQaCapture.CalculateBounds(result.root);
 
                 var cameraObject = new GameObject("Model Preview Camera");
                 var camera = cameraObject.AddComponent<Camera>();
                 camera.clearFlags = CameraClearFlags.SolidColor;
                 camera.backgroundColor = new Color(0.08f, 0.09f, 0.11f, 1f);
-                camera.fieldOfView = 35f;
+                camera.fieldOfView = 24f;
                 camera.nearClipPlane = 0.01f;
                 camera.farClipPlane = 100f;
-
-                const float aspect = 0.75f;
-                var verticalDistance = bounds.size.y * 0.5f / Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad);
-                var horizontalFov = 2f * Mathf.Atan(Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad) * aspect);
-                var horizontalDistance = bounds.size.x * 0.5f / Mathf.Tan(horizontalFov * 0.5f);
-                var distance = Mathf.Max(verticalDistance, horizontalDistance) * 1.18f;
-                cameraObject.transform.position = bounds.center + Vector3.back * distance;
-                cameraObject.transform.rotation = Quaternion.LookRotation(bounds.center - cameraObject.transform.position, Vector3.up);
+                cameraObject.transform.position = bounds.center + result.root.transform.forward * 3f;
+                var pose = AvatarQaCapture.CalculateCameraPose(result.root, bounds, camera);
+                cameraObject.transform.SetPositionAndRotation(pose.position, pose.rotation);
 
                 var lightObject = new GameObject("Model Preview Light");
-                lightObject.transform.rotation = Quaternion.Euler(35f, -25f, 0f);
+                lightObject.transform.rotation = cameraObject.transform.rotation * Quaternion.Euler(35f, -28f, 0f);
                 var light = lightObject.AddComponent<Light>();
                 light.type = LightType.Directional;
                 light.intensity = 1.4f;
 
-                const int width = 768;
+                const int width = 1024;
                 const int height = 1024;
                 var target = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
                 var previous = RenderTexture.active;
@@ -83,10 +96,14 @@ namespace QuestMmdPlayer.Editor
                     image.ReadPixels(new Rect(0f, 0f, width, height), 0, 0);
                     image.Apply();
 
-                    Directory.CreateDirectory(Path.GetDirectoryName(OutputPath));
-                    File.WriteAllBytes(OutputPath, image.EncodeToPNG());
+                    var outputDirectory = Path.GetDirectoryName(outputPath);
+                    if (!string.IsNullOrWhiteSpace(outputDirectory))
+                    {
+                        Directory.CreateDirectory(outputDirectory);
+                    }
+                    File.WriteAllBytes(outputPath, image.EncodeToPNG());
                     UnityEngine.Object.DestroyImmediate(image);
-                    Debug.Log($"Runtime PMX preview rendered: {OutputPath}; renderers={renderers.Length}; bounds={bounds.size}");
+                    Debug.Log($"Runtime PMX preview rendered: {outputPath}; renderers={renderers.Length}; bounds={bounds.size}");
                 }
                 finally
                 {
@@ -124,6 +141,30 @@ namespace QuestMmdPlayer.Editor
                         UnityEngine.Object.DestroyImmediate(result.model);
                     }
                 }
+            }
+        }
+
+        private static void PreserveOriginalNames(PMXModel model)
+        {
+            for (var index = 0; index < model.bones.Length; index++)
+            {
+                var bone = model.bones[index];
+                bone.renamedName = bone.originalName;
+                model.bones[index] = bone;
+            }
+
+            for (var index = 0; index < model.morphs.Length; index++)
+            {
+                var morph = model.morphs[index];
+                morph.renamedName = morph.originalName;
+                model.morphs[index] = morph;
+            }
+
+            for (var index = 0; index < model.materials.Length; index++)
+            {
+                var material = model.materials[index];
+                material.renamedName = material.originalName;
+                model.materials[index] = material;
             }
         }
     }

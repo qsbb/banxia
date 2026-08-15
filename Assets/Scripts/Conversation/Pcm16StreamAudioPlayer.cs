@@ -31,6 +31,19 @@ namespace QuestMmdPlayer
     {
         private readonly object gate = new object();
         private readonly Queue<float[]> buffers = new Queue<float[]>();
+        private readonly Queue<ScheduledRms> scheduledRms = new Queue<ScheduledRms>();
+
+        private readonly struct ScheduledRms
+        {
+            public ScheduledRms(double audibleAtDspTime, float value)
+            {
+                AudibleAtDspTime = audibleAtDspTime;
+                Value = value;
+            }
+
+            public double AudibleAtDspTime { get; }
+            public float Value { get; }
+        }
 
         private AudioSource audioSource;
         private AudioClip streamClip;
@@ -39,9 +52,11 @@ namespace QuestMmdPlayer
         private int queuedSamples;
         private int sampleRate = 24000;
         private float latestRms;
+        private float audibleRms;
         private int dspBufferLength = 1024;
         private int dspBufferCount = 4;
         private double audibleUntilDspTime;
+        private double audiblePlaybackStartedAtDspTime = -1d;
         private int streamCompletedFlag = 1;
         private int playbackStartedFlag;
         private int underflowCount;
@@ -96,6 +111,39 @@ namespace QuestMmdPlayer
             }
         }
 
+        /// <summary>
+        /// RMS aligned to the estimated hardware output time. Procedural clip
+        /// callbacks run ahead of what the user hears, so lip motion uses this
+        /// value instead of the raw callback RMS.
+        /// </summary>
+        public float AudibleRms
+        {
+            get
+            {
+                lock (gate) return audibleRms;
+            }
+        }
+
+        /// <summary>
+        /// Position of the stream at the hardware output boundary. This clock
+        /// starts when the first non-empty PCM callback is expected to become
+        /// audible, so optional viseme timelines do not lead the voice.
+        /// </summary>
+        public float AudiblePlaybackSeconds
+        {
+            get
+            {
+                lock (gate)
+                {
+                    if (audiblePlaybackStartedAtDspTime < 0d)
+                    {
+                        return 0f;
+                    }
+                    return Mathf.Max(0f, (float)(AudioSettings.dspTime - audiblePlaybackStartedAtDspTime));
+                }
+            }
+        }
+
         private void Awake()
         {
             audioSource = GetComponent<AudioSource>();
@@ -110,11 +158,17 @@ namespace QuestMmdPlayer
         private void Update()
         {
             TryStartPlayback();
+            UpdateAudibleRms();
             ReportPlaybackTelemetry();
             if (audioSource != null && audioSource.isPlaying && StreamCompleted && IsDrained)
             {
                 audioSource.Stop();
-                lock (gate) latestRms = 0f;
+                lock (gate)
+                {
+                    latestRms = 0f;
+                    audibleRms = 0f;
+                    scheduledRms.Clear();
+                }
             }
         }
 
@@ -172,7 +226,10 @@ namespace QuestMmdPlayer
                 currentOffset = 0;
                 queuedSamples = 0;
                 latestRms = 0f;
+                audibleRms = 0f;
+                scheduledRms.Clear();
                 audibleUntilDspTime = 0d;
+                audiblePlaybackStartedAtDspTime = -1d;
                 Volatile.Write(ref streamCompletedFlag, 1);
                 Volatile.Write(ref playbackStartedFlag, 0);
                 Volatile.Write(ref playbackGeneration, 0);
@@ -254,15 +311,49 @@ namespace QuestMmdPlayer
                     Interlocked.Increment(ref underflowCount);
                 }
                 latestRms = data.Length == 0 ? 0f : Mathf.Sqrt(sumSquares / data.Length);
+                var outputLatencySeconds = CalculateOutputLatencySeconds(
+                    dspBufferLength,
+                    dspBufferCount,
+                    AudioSettings.outputSampleRate);
+                scheduledRms.Enqueue(new ScheduledRms(
+                    AudioSettings.dspTime + outputLatencySeconds,
+                    latestRms));
                 if (write > 0 && sampleRate > 0)
                 {
+                    if (audiblePlaybackStartedAtDspTime < 0d)
+                    {
+                        audiblePlaybackStartedAtDspTime = AudioSettings.dspTime + outputLatencySeconds;
+                    }
                     var callbackSeconds = (double)data.Length / sampleRate;
-                    var outputLatencySeconds = (double)dspBufferLength * dspBufferCount / sampleRate;
                     audibleUntilDspTime = Math.Max(
                         audibleUntilDspTime,
                         AudioSettings.dspTime + callbackSeconds + outputLatencySeconds + outputTailSafetySeconds);
                 }
             }
+        }
+
+        private void UpdateAudibleRms()
+        {
+            var now = AudioSettings.dspTime;
+            lock (gate)
+            {
+                while (scheduledRms.Count > 0 && scheduledRms.Peek().AudibleAtDspTime <= now)
+                {
+                    audibleRms = scheduledRms.Dequeue().Value;
+                }
+            }
+        }
+
+        public static double CalculateOutputLatencySeconds(
+            int bufferLength,
+            int bufferCount,
+            int outputSampleRate)
+        {
+            if (bufferLength <= 0 || bufferCount <= 0 || outputSampleRate <= 0)
+            {
+                return 0d;
+            }
+            return (double)bufferLength * bufferCount / outputSampleRate;
         }
 
         public static bool ShouldStartPlayback(

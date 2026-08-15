@@ -16,6 +16,202 @@ namespace QuestMmdPlayer.PlayModeTests
     public sealed class RuntimeLifecycleSmokeTests
     {
         [UnityTest]
+        public IEnumerator OptionalRealPmxUsesTheRuntimeBudgetedPipeline()
+        {
+            var pmxPath = Environment.GetEnvironmentVariable("BANXIA_TEST_PMX");
+            if (string.IsNullOrWhiteSpace(pmxPath) || !File.Exists(pmxPath))
+            {
+                Assert.Ignore("BANXIA_TEST_PMX is not configured for this run.");
+            }
+
+            var root = new GameObject("Real PMX runtime pipeline test");
+            try
+            {
+                var loader = root.AddComponent(RuntimeType(
+                    "QuestMmdPlayer.RuntimeMmdModelLoader"));
+                // The test owns model selection; suppress the component's
+                // next-frame PlayerPrefs restore so both loads cannot race.
+                SetField(loader, "restoreStarted", true);
+                var task = (Task)Invoke(
+                    loader,
+                    "LoadFromFileAsync",
+                    pmxPath,
+                    Path.GetDirectoryName(pmxPath));
+                while (!task.IsCompleted)
+                {
+                    yield return null;
+                }
+                if (task.IsFaulted)
+                {
+                    throw task.Exception?.GetBaseException() ??
+                        new InvalidOperationException("Real PMX load failed.");
+                }
+
+                var loadedModel = Read<GameObject>(loader, "CurrentModel");
+                Assert.That(loadedModel, Is.Not.Null);
+                Assert.That(Read<int>(loader, "LastLoadFrameCount"), Is.GreaterThan(0));
+                Assert.That(
+                    Read<float>(loader, "LastLoadMaximumFrameMilliseconds"),
+                    Is.LessThan(100f),
+                    "A real PMX first load must not regress to a multi-hundred-millisecond main-thread stall.");
+                var auditedMaterials = 0;
+                foreach (var material in loadedModel
+                    .GetComponentsInChildren<Renderer>(true)
+                    .SelectMany(renderer => renderer.sharedMaterials)
+                    .Where(material => material != null)
+                    .Distinct())
+                {
+                    if (!material.HasProperty("_Color") || !material.HasProperty("_BaseColor"))
+                    {
+                        continue;
+                    }
+                    auditedMaterials++;
+                    var legacyColor = material.GetColor("_Color");
+                    var urpColor = material.GetColor("_BaseColor");
+                    Assert.That(urpColor.r, Is.EqualTo(legacyColor.r).Within(.002f), material.name);
+                    Assert.That(urpColor.g, Is.EqualTo(legacyColor.g).Within(.002f), material.name);
+                    Assert.That(urpColor.b, Is.EqualTo(legacyColor.b).Within(.002f), material.name);
+                    Assert.That(urpColor.a, Is.EqualTo(legacyColor.a).Within(.002f), material.name);
+                }
+                Assert.That(auditedMaterials, Is.GreaterThan(0));
+                Debug.Log(
+                    "[Real PMX Runtime Test] totalMs=" + Read<int>(loader, "LastLoadMilliseconds") +
+                    " frames=" + Read<int>(loader, "LastLoadFrameCount") +
+                    " longFrames=" + Read<int>(loader, "LastLoadLongFrameCount") +
+                    " maxFrameMs=" + Read<float>(loader, "LastLoadMaximumFrameMilliseconds").ToString("F1") +
+                    " parsedCache=" + Read<bool>(loader, "LastLoadUsedParsedCache") +
+                    " urpMaterials=" + auditedMaterials);
+
+                var cachedTask = (Task)Invoke(
+                    loader,
+                    "LoadFromFileAsync",
+                    pmxPath,
+                    Path.GetDirectoryName(pmxPath));
+                while (!cachedTask.IsCompleted)
+                {
+                    yield return null;
+                }
+                if (cachedTask.IsFaulted)
+                {
+                    throw cachedTask.Exception?.GetBaseException() ??
+                        new InvalidOperationException("Cached PMX load failed.");
+                }
+                Assert.That(Read<bool>(loader, "LastLoadUsedParsedCache"), Is.True);
+                Assert.That(Read<int>(loader, "LastReadMilliseconds"), Is.Zero);
+                Debug.Log(
+                    "[Real PMX Runtime Cache Test] totalMs=" + Read<int>(loader, "LastLoadMilliseconds") +
+                    " frames=" + Read<int>(loader, "LastLoadFrameCount") +
+                    " longFrames=" + Read<int>(loader, "LastLoadLongFrameCount") +
+                    " maxFrameMs=" + Read<float>(loader, "LastLoadMaximumFrameMilliseconds").ToString("F1"));
+            }
+            finally
+            {
+                UnityEngine.Object.Destroy(root);
+            }
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator OptionalRealPmxSelectionRestoresAfterLoaderRecreation()
+        {
+            const string preferenceKey = "Banxia.RuntimeMmdModel.SelectedPath";
+            var sourcePmxPath = Environment.GetEnvironmentVariable("BANXIA_TEST_PMX");
+            if (string.IsNullOrWhiteSpace(sourcePmxPath) || !File.Exists(sourcePmxPath))
+            {
+                Assert.Ignore("BANXIA_TEST_PMX is not configured for this run.");
+            }
+
+            var previousSelection = PlayerPrefs.GetString(preferenceKey, string.Empty);
+            var packageRoot = Path.Combine(
+                Application.persistentDataPath,
+                "MmdModels",
+                "Imported",
+                "banxia-real-restore-" + Guid.NewGuid().ToString("N"));
+            var copiedPmxPath = Path.Combine(packageRoot, Path.GetFileName(sourcePmxPath));
+            GameObject firstRoot = null;
+            GameObject restoredRoot = null;
+            try
+            {
+                Directory.CreateDirectory(packageRoot);
+                foreach (var sourcePath in Directory.GetFiles(Path.GetDirectoryName(sourcePmxPath)))
+                {
+                    File.Copy(
+                        sourcePath,
+                        Path.Combine(packageRoot, Path.GetFileName(sourcePath)),
+                        true);
+                }
+
+                firstRoot = new GameObject("Real PMX persistence writer");
+                var firstLoader = firstRoot.AddComponent(RuntimeType(
+                    "QuestMmdPlayer.RuntimeMmdModelLoader"));
+                SetField(firstLoader, "restoreStarted", true);
+                var firstLoad = (Task)Invoke(
+                    firstLoader,
+                    "LoadFromFileAsync",
+                    copiedPmxPath,
+                    packageRoot);
+                while (!firstLoad.IsCompleted)
+                {
+                    yield return null;
+                }
+                if (firstLoad.IsFaulted)
+                {
+                    throw firstLoad.Exception?.GetBaseException() ??
+                        new InvalidOperationException("Real PMX persistence setup failed.");
+                }
+                Assert.That(
+                    PlayerPrefs.GetString(preferenceKey, string.Empty),
+                    Is.EqualTo(Path.GetFullPath(copiedPmxPath)));
+
+                UnityEngine.Object.Destroy(firstRoot);
+                firstRoot = null;
+                yield return null;
+
+                restoredRoot = new GameObject("Real PMX persistence reader");
+                var restoredLoader = restoredRoot.AddComponent(RuntimeType(
+                    "QuestMmdPlayer.RuntimeMmdModelLoader"));
+                SetField(restoredLoader, "restoreStarted", true);
+                var restoreTask = (Task<bool>)Invoke(restoredLoader, "RestoreLastModelAsync");
+                while (!restoreTask.IsCompleted)
+                {
+                    yield return null;
+                }
+                if (restoreTask.IsFaulted)
+                {
+                    throw restoreTask.Exception?.GetBaseException() ??
+                        new InvalidOperationException("Real PMX startup restore failed.");
+                }
+
+                Assert.That(restoreTask.Result, Is.True);
+                Assert.That(Read<object>(restoredLoader, "CurrentModel"), Is.Not.Null);
+                Assert.That(
+                    Read<string>(restoredLoader, "CurrentModelPath"),
+                    Is.EqualTo(Path.GetFullPath(copiedPmxPath)).IgnoreCase);
+                Debug.Log(
+                    "[Real PMX Restore Test] restored=true totalMs=" +
+                    Read<int>(restoredLoader, "LastLoadMilliseconds") +
+                    " model=" + Path.GetFileNameWithoutExtension(copiedPmxPath));
+            }
+            finally
+            {
+                if (firstRoot != null) UnityEngine.Object.Destroy(firstRoot);
+                if (restoredRoot != null) UnityEngine.Object.Destroy(restoredRoot);
+                if (string.IsNullOrEmpty(previousSelection))
+                {
+                    PlayerPrefs.DeleteKey(preferenceKey);
+                }
+                else
+                {
+                    PlayerPrefs.SetString(preferenceKey, previousSelection);
+                }
+                PlayerPrefs.Save();
+                if (Directory.Exists(packageRoot)) Directory.Delete(packageRoot, true);
+            }
+
+            yield return null;
+        }
+
+        [UnityTest]
         public IEnumerator PcmStreamCanChangeFormatClearAndDestroyWithoutRetainingAudio()
         {
             var root = new GameObject("PCM runtime lifecycle test");
@@ -151,6 +347,48 @@ namespace QuestMmdPlayer.PlayModeTests
 
                 LogAssert.Expect(LogType.Exception, new Regex("EndOfStreamException"));
                 var task = (Task)Invoke(importer, "ImportPathAsync", invalidPmx);
+                while (!task.IsCompleted) yield return null;
+                Assert.That(task.IsFaulted, Is.False);
+                Assert.That(Read<bool>(loader, "IsLoading"), Is.False);
+                Assert.That(ExistingDirectories(installedRoot), Is.EquivalentTo(before));
+            }
+            finally
+            {
+                UnityEngine.Object.Destroy(root);
+                Directory.Delete(sourceRoot, true);
+            }
+            yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator InvalidMultiPmxPackageDoesNotEnterInstalledCatalog()
+        {
+            var sourceRoot = Path.Combine(
+                Path.GetTempPath(),
+                "banxia-invalid-multi-pmx-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(sourceRoot);
+            File.WriteAllBytes(
+                Path.Combine(sourceRoot, "BrokenA.pmx"),
+                Encoding.ASCII.GetBytes("not a PMX file"));
+            File.WriteAllBytes(
+                Path.Combine(sourceRoot, "BrokenB.PMX"),
+                Encoding.ASCII.GetBytes("also not a PMX file"));
+            var installedRoot = Path.Combine(
+                Application.persistentDataPath,
+                "MmdModels",
+                "Imported");
+            var before = ExistingDirectories(installedRoot);
+            var root = new GameObject("Invalid multi PMX package transaction test");
+            try
+            {
+                var loader = root.AddComponent(RuntimeType("QuestMmdPlayer.RuntimeMmdModelLoader"));
+                var actions = root.AddComponent(RuntimeType("QuestMmdPlayer.VmdActionLibrary"));
+                var importer = root.AddComponent(RuntimeType("QuestMmdPlayer.QuestFileImportService"));
+                Invoke(importer, "Initialize", loader, actions);
+
+                LogAssert.Expect(LogType.Exception, new Regex("EndOfStreamException"));
+                LogAssert.Expect(LogType.Exception, new Regex("InvalidDataException: Invalid PMX signature"));
+                var task = (Task)Invoke(importer, "ImportPathAsync", sourceRoot);
                 while (!task.IsCompleted) yield return null;
                 Assert.That(task.IsFaulted, Is.False);
                 Assert.That(Read<bool>(loader, "IsLoading"), Is.False);

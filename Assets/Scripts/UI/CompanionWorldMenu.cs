@@ -34,6 +34,9 @@ namespace QuestMmdPlayer
         private GameObject pairingLayer;
         private GameObject appearanceLayer;
         private GameObject modelLayer;
+        private GameObject modelListLayer;
+        private readonly List<GameObject> modelListEntries = new List<GameObject>();
+        private Text modelListPageText;
         private GameObject qualityLayer;
         private GameObject voiceLayer;
         private GameObject textInputLayer;
@@ -54,6 +57,8 @@ namespace QuestMmdPlayer
         private Text modelStatusText;
         private readonly List<RuntimeMmdModelInfo> modelOptions = new List<RuntimeMmdModelInfo>();
         private int modelIndex;
+        private int modelListPage;
+        private const int ModelsPerPage = 8;
         private TouchScreenKeyboard pairingKeyboard;
         private TouchScreenKeyboard conversationKeyboard;
         private GameObject pairingKeyboardLayer;
@@ -64,7 +69,6 @@ namespace QuestMmdPlayer
         private int expressionIndex;
         private static readonly string[] ExpressionPresets = { "neutral", "happy", "shy", "surprised", "sad" };
         private int externalActionIndex;
-        private Coroutine pendingAvatarAction;
         private string transientStatus = string.Empty;
         private float transientStatusUntil;
         private bool previousMenuButton;
@@ -199,6 +203,21 @@ namespace QuestMmdPlayer
                         Debug.Log("[CompanionMenu] Consumed Android QA menu command.", this);
                         return true;
                     }
+                    if (string.Equals(command, "open_model_list", StringComparison.Ordinal))
+                    {
+                        StartCoroutine(OpenQaModelListWhenReady());
+                        return false;
+                    }
+                    if (string.Equals(command, "load_first_model", StringComparison.Ordinal))
+                    {
+                        StartCoroutine(LoadFirstQaModelWhenReady());
+                        return false;
+                    }
+                    if (string.Equals(command, "capture_first_model", StringComparison.Ordinal))
+                    {
+                        StartCoroutine(CaptureFirstQaModelWhenReady());
+                        return false;
+                    }
                     if (string.Equals(command, "open_import", StringComparison.Ordinal))
                     {
                         ImportFile();
@@ -232,6 +251,89 @@ namespace QuestMmdPlayer
             }
 
             return false;
+        }
+
+        private IEnumerator OpenQaModelListWhenReady()
+        {
+            var remaining = 5f;
+            while (remaining > 0f && (owner == null || owner.ModelLoader == null || Camera.main == null))
+            {
+                remaining -= Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            if (owner == null || owner.ModelLoader == null || Camera.main == null)
+            {
+                Debug.LogWarning("[CompanionMenu] Android QA model list command timed out.", this);
+                yield break;
+            }
+
+            ShowInFront();
+            ShowModelPanel();
+            ShowModelList();
+            Debug.Log("[CompanionMenu] Android QA model list opened.", this);
+        }
+
+        private IEnumerator LoadFirstQaModelWhenReady()
+        {
+            var remaining = 10f;
+            while (remaining > 0f && (owner == null || owner.ModelLoader == null))
+            {
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
+                yield return null;
+            }
+
+            var loader = owner?.ModelLoader;
+            if (loader == null)
+            {
+                Debug.LogWarning("[CompanionMenu] Android QA model load command timed out.", this);
+                yield break;
+            }
+
+            remaining = 20f;
+            while (remaining > 0f && loader.IsLoading)
+            {
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
+                yield return null;
+            }
+            if (loader.IsLoading)
+            {
+                Debug.LogWarning("[CompanionMenu] Android QA waited for an existing model load but timed out.", this);
+                yield break;
+            }
+
+            RefreshInstalledModels();
+            if (modelOptions.Count == 0)
+            {
+                Debug.LogWarning("[CompanionMenu] Android QA model load found no installed models.", this);
+                yield break;
+            }
+
+            modelIndex = 0;
+            Debug.Log("[CompanionMenu] Android QA loading first model name=" + modelOptions[0].DisplayName, this);
+            LoadSelectedModel();
+        }
+
+        private IEnumerator CaptureFirstQaModelWhenReady()
+        {
+            yield return LoadFirstQaModelWhenReady();
+            var remaining = 20f;
+            while (remaining > 0f &&
+                   (owner?.ModelLoader == null || owner.ModelLoader.IsLoading || owner.ModelLoader.CurrentModel == null))
+            {
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
+                yield return null;
+            }
+
+            var model = owner?.ModelLoader?.CurrentModel;
+            if (model == null)
+            {
+                Debug.LogWarning("[CompanionMenu] Android QA avatar capture timed out.", this);
+                yield break;
+            }
+
+            yield return AvatarQaCapture.Capture(model, _ =>
+                Debug.Log("[CompanionMenu] Android QA avatar capture completed.", this));
         }
 
         private IEnumerator SimulateQaContactWhenAvatarReady(string source)
@@ -337,6 +439,7 @@ namespace QuestMmdPlayer
             if (pairingLayer != null) pairingLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
             if (modelLayer != null) modelLayer.SetActive(false);
+            if (modelListLayer != null) modelListLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
@@ -391,18 +494,14 @@ namespace QuestMmdPlayer
             var buttonHeight = 62f;
             var x = new[] { -224f, 0f, 224f };
             var y = new[] { 158f, 80f, 2f, -76f };
-            CreateButton("挥手", x[0], y[0], buttonWidth, buttonHeight, () => RequestAvatarAction("wave", false), mainLayer.transform);
-            CreateButton("语音", x[1], y[0], buttonWidth, buttonHeight, ShowVoicePanel, mainLayer.transform);
-            CreateButton("打断回复", x[2], y[0], buttonWidth, buttonHeight, () => owner?.Conversation?.Interrupt(), mainLayer.transform);
-            CreateButton("摸摸头", x[0], y[1], buttonWidth, buttonHeight, () => owner?.HumanInteraction?.SimulateInteraction(HumanInteractionKind.HeadPat), mainLayer.transform);
-            CreateButton("握手", x[1], y[1], buttonWidth, buttonHeight, () => owner?.HumanInteraction?.SimulateInteraction(HumanInteractionKind.Handshake), mainLayer.transform);
-            CreateButton("捏脸", x[2], y[1], buttonWidth, buttonHeight, () => owner?.HumanInteraction?.SimulateInteraction(HumanInteractionKind.CheekPinch), mainLayer.transform);
-            CreateButton("重新放置", x[0], y[2], buttonWidth, buttonHeight, () => owner?.Placement?.RequestPlacement(), mainLayer.transform);
-            CreateButton("站立校准", x[1], y[2], buttonWidth, buttonHeight, () => owner?.Placement?.CalibrateHeightAndPlace(), mainLayer.transform);
-            CreateButton("彩色透视", x[2], y[2], buttonWidth, buttonHeight, () => owner?.Passthrough?.Toggle(), mainLayer.transform);
-            CreateButton("绑定后端", x[0], y[3], buttonWidth, buttonHeight, ShowPairingPanel, mainLayer.transform);
-            CreateButton("动作", x[1], y[3], buttonWidth, buttonHeight, ShowActionPanel, mainLayer.transform);
-            CreateButton("外观", x[2], y[3], buttonWidth, buttonHeight, ShowAppearancePanel, mainLayer.transform);
+            CreateButton("语音", x[0], y[0], buttonWidth, buttonHeight, ShowVoicePanel, mainLayer.transform);
+            CreateButton("打断回复", x[1], y[0], buttonWidth, buttonHeight, () => owner?.Conversation?.Interrupt(), mainLayer.transform);
+            CreateButton("重新放置", x[2], y[0], buttonWidth, buttonHeight, () => owner?.Placement?.RequestPlacement(), mainLayer.transform);
+            CreateButton("站立校准", x[0], y[1], buttonWidth, buttonHeight, () => owner?.Placement?.CalibrateHeightAndPlace(), mainLayer.transform);
+            CreateButton("彩色透视", x[1], y[1], buttonWidth, buttonHeight, () => owner?.Passthrough?.Toggle(), mainLayer.transform);
+            CreateButton("绑定后端", x[2], y[1], buttonWidth, buttonHeight, ShowPairingPanel, mainLayer.transform);
+            CreateButton("动作", x[0], y[2], buttonWidth, buttonHeight, ShowActionPanel, mainLayer.transform);
+            CreateButton("外观", x[1], y[2], buttonWidth, buttonHeight, ShowAppearancePanel, mainLayer.transform);
 
             statusText = CreateText("", mainLayer.transform, new Vector2(0f, -177f), new Vector2(660f, 60f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
             CreateButton("诊断", 286f, -278f, 108f, 44f, ShowDebugPanel, mainLayer.transform);
@@ -486,20 +585,16 @@ namespace QuestMmdPlayer
             actionLayer = CreateUiObject("Action Presets Layer", menuRoot.transform, Vector2.zero, new Vector2(720f, 680f));
             CreateImage("Accent", actionLayer.transform, new Vector2(0f, 335f), new Vector2(720f, 10f), new Color(.25f, .86f, .66f, 1f));
             CreateText("动作预设", actionLayer.transform, new Vector2(0f, 288f), new Vector2(640f, 50f), 29, FontStyle.Bold, Color.white);
-            CreateText("内置动作与本地 VMD", actionLayer.transform, new Vector2(0f, 250f), new Vector2(640f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
+            CreateText("本地 VMD 动作与待机姿势", actionLayer.transform, new Vector2(0f, 250f), new Vector2(640f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
             idlePresetText = CreateText("\u9ed8\u8ba4\u5f85\u673a\uff1a" + (owner?.IdlePose == null ? "\u672a\u7ed1\u5b9a" : owner.IdlePose.PresetDisplayName), actionLayer.transform, new Vector2(0f, 210f), new Vector2(640f, 28f), 14, FontStyle.Normal, new Color(.78f, .88f, .82f, 1f));
 
 
-            CreateButton("切换待机", -224f, 150f, 204f, 62f, CycleIdlePreset, actionLayer.transform);
-            CreateButton("挥手", 0f, 150f, 204f, 62f, () => PlayPresetAction("wave"), actionLayer.transform);
-            CreateButton("鞠躬", 224f, 150f, 204f, 62f, () => PlayPresetAction("bow"), actionLayer.transform);
-            CreateButton("点头", -224f, 72f, 204f, 62f, () => PlayPresetAction("nod"), actionLayer.transform);
-            CreateButton("轻摆", 0f, 72f, 204f, 62f, () => PlayPresetAction("sway"), actionLayer.transform);
-            CreateButton("停止动作", 224f, 72f, 204f, 62f, StopCurrentAction, actionLayer.transform);
-            CreateButton("刷新外部动作", -224f, -6f, 204f, 62f, RefreshExternalActions, actionLayer.transform);
-            CreateButton("上一个", 0f, -6f, 204f, 62f, () => SelectExternalAction(-1), actionLayer.transform);
-            CreateButton("下一个", 224f, -6f, 204f, 62f, () => SelectExternalAction(1), actionLayer.transform);
-            externalActionText = CreateText("外部动作 0 个", actionLayer.transform, new Vector2(0f, -67f), new Vector2(650f, 38f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
+            CreateButton("切换待机", -112f, 150f, 204f, 62f, CycleIdlePreset, actionLayer.transform);
+            CreateButton("停止动作", 112f, 150f, 204f, 62f, StopCurrentAction, actionLayer.transform);
+            CreateButton("刷新外部动作", -224f, 72f, 204f, 62f, RefreshExternalActions, actionLayer.transform);
+            CreateButton("上一个", 0f, 72f, 204f, 62f, () => SelectExternalAction(-1), actionLayer.transform);
+            CreateButton("下一个", 224f, 72f, 204f, 62f, () => SelectExternalAction(1), actionLayer.transform);
+            externalActionText = CreateText("外部动作 0 个", actionLayer.transform, new Vector2(0f, 8f), new Vector2(650f, 38f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
             CreateButton("导入文件", -224f, -132f, 204f, 62f, ImportFile, actionLayer.transform);
             CreateButton("选择动作", 0f, -132f, 204f, 62f, ShowActionList, actionLayer.transform);
             CreateButton("播放选中", 224f, -132f, 204f, 62f, PlaySelectedExternalAction, actionLayer.transform);
@@ -566,15 +661,17 @@ namespace QuestMmdPlayer
             CreateText("角色模型", modelLayer.transform, new Vector2(0f, 288f), new Vector2(640f, 50f), 29, FontStyle.Bold, Color.white);
             CreateText("本机 PMX 模型导入与切换", modelLayer.transform, new Vector2(0f, 250f), new Vector2(640f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
 
-            CreateButton("上一个模型", -224f, 150f, 204f, 62f, () => SelectInstalledModel(-1), modelLayer.transform);
-            CreateButton("加载选中", 0f, 150f, 204f, 62f, LoadSelectedModel, modelLayer.transform);
-            CreateButton("下一个模型", 224f, 150f, 204f, 62f, () => SelectInstalledModel(1), modelLayer.transform);
-            CreateButton("导入模型", -112f, 72f, 204f, 62f, ImportFile, modelLayer.transform);
-            CreateButton("刷新列表", 112f, 72f, 204f, 62f, RefreshInstalledModels, modelLayer.transform);
-            modelStatusText = CreateText("", modelLayer.transform, new Vector2(0f, -48f), new Vector2(650f, 170f), 15, FontStyle.Normal, new Color(.74f, .86f, .82f, 1f));
+            CreateButton("上一个", -224f, 150f, 204f, 62f, () => SelectInstalledModel(-1), modelLayer.transform);
+            CreateButton("选择模型", 0f, 150f, 204f, 62f, ShowModelList, modelLayer.transform);
+            CreateButton("下一个", 224f, 150f, 204f, 62f, () => SelectInstalledModel(1), modelLayer.transform);
+            CreateButton("导入模型包", -224f, 72f, 204f, 62f, ImportFile, modelLayer.transform);
+            CreateButton("加载选中", 0f, 72f, 204f, 62f, LoadSelectedModel, modelLayer.transform);
+            CreateButton("刷新列表", 224f, 72f, 204f, 62f, RefreshInstalledModels, modelLayer.transform);
+            modelStatusText = CreateText("", modelLayer.transform, new Vector2(0f, -52f), new Vector2(650f, 170f), 15, FontStyle.Normal, new Color(.74f, .86f, .82f, 1f));
             modelStatusText.alignment = TextAnchor.UpperLeft;
             CreateButton("返回外观", -112f, -214f, 204f, 62f, ShowAppearancePanel, modelLayer.transform);
             CreateButton("关闭", 112f, -214f, 204f, 62f, Hide, modelLayer.transform);
+            BuildModelListLayer();
             modelLayer.SetActive(false);
         }
 
@@ -593,6 +690,8 @@ namespace QuestMmdPlayer
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
             modelLayer.SetActive(true);
+            if (modelListLayer != null) modelListLayer.SetActive(false);
+            SetDirectButtonColliders(modelLayer, true);
             FocusInputLayer(modelLayer);
             Physics.SyncTransforms();
             RefreshInstalledModels();
@@ -696,6 +795,160 @@ namespace QuestMmdPlayer
                 (loader.IsLoading ? "模型正在加载" : "选择后点击“加载选中”进行切换");
         }
 
+        private void BuildModelListLayer()
+        {
+            modelListLayer = CreateUiObject("Installed Model List", modelLayer.transform, Vector2.zero, new Vector2(680f, 590f));
+            var background = CreateImage("List Background", modelListLayer.transform, Vector2.zero, new Vector2(680f, 590f), new Color(.035f, .06f, .065f, .98f));
+            AddModalBlocker(background.gameObject, new Vector2(680f, 590f));
+            CreateText("已导入模型", modelListLayer.transform, new Vector2(0f, 250f), new Vector2(620f, 42f), 24, FontStyle.Bold, Color.white);
+            CreateButton("上一页", -224f, -205f, 170f, 42f, () => PageModelList(-1), modelListLayer.transform);
+            CreateButton("下一页", 224f, -205f, 170f, 42f, () => PageModelList(1), modelListLayer.transform);
+            modelListPageText = CreateText("第 1 / 1 页", modelListLayer.transform, new Vector2(0f, -205f), new Vector2(190f, 32f), 13, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
+            CreateButton("删除模型包", -216f, -252f, 188f, 52f, DeleteSelectedModelPackage, modelListLayer.transform);
+            CreateButton("加载所选", 0f, -252f, 188f, 52f, LoadSelectedModelFromList, modelListLayer.transform);
+            CreateButton("关闭列表", 216f, -252f, 188f, 52f, HideModelList, modelListLayer.transform);
+            modelListLayer.SetActive(false);
+        }
+
+        private void ShowModelList()
+        {
+            if (modelListLayer == null)
+            {
+                BuildModelListLayer();
+            }
+            RefreshInstalledModels();
+            modelListPage = modelOptions.Count == 0 ? 0 : modelIndex / ModelsPerPage;
+            RefreshModelList();
+            modelListLayer.SetActive(true);
+            SetDirectButtonColliders(modelLayer, false);
+            FocusInputLayer(modelListLayer);
+            Physics.SyncTransforms();
+            Status = "已导入模型列表";
+        }
+
+        private void HideModelList()
+        {
+            if (modelListLayer != null)
+            {
+                modelListLayer.SetActive(false);
+            }
+            SetDirectButtonColliders(modelLayer, true);
+            FocusInputLayer(modelLayer);
+            Physics.SyncTransforms();
+        }
+
+        private void RefreshModelList()
+        {
+            if (modelListLayer == null)
+            {
+                return;
+            }
+            for (var index = 0; index < modelListEntries.Count; index++)
+            {
+                if (modelListEntries[index] != null)
+                {
+                    modelListEntries[index].SetActive(false);
+                    DestroyDynamicUiEntry(modelListEntries[index]);
+                }
+            }
+            modelListEntries.Clear();
+
+            if (modelOptions.Count == 0)
+            {
+                modelListPage = 0;
+                if (modelListPageText != null) modelListPageText.text = "第 0 / 0 页";
+                modelListEntries.Add(CreateText(
+                    "还没有导入模型包",
+                    modelListLayer.transform,
+                    new Vector2(0f, 100f),
+                    new Vector2(620f, 48f),
+                    18,
+                    FontStyle.Normal,
+                    new Color(.74f, .82f, .84f, 1f)).gameObject);
+                return;
+            }
+
+            var pageCount = Mathf.CeilToInt(modelOptions.Count / (float)ModelsPerPage);
+            modelListPage = Mathf.Clamp(modelListPage, 0, pageCount - 1);
+            if (modelListPageText != null) modelListPageText.text = $"第 {modelListPage + 1} / {pageCount} 页";
+            var firstVisible = modelListPage * ModelsPerPage;
+            var visibleCount = Math.Min(ModelsPerPage, modelOptions.Count - firstVisible);
+            for (var index = 0; index < visibleCount; index++)
+            {
+                var optionIndex = firstVisible + index;
+                var item = modelOptions[optionIndex];
+                var selected = optionIndex == modelIndex;
+                var current = string.Equals(item.Path, owner?.ModelLoader?.CurrentModelPath, StringComparison.OrdinalIgnoreCase);
+                var marker = selected && current ? "[已选/使用中] " :
+                    selected ? "[已选] " :
+                    current ? "[使用中] " : string.Empty;
+                var entry = CreateButton(
+                    marker + item.DisplayName,
+                    0f,
+                    190f - index * 48f,
+                    610f,
+                    42f,
+                    () =>
+                    {
+                        modelIndex = optionIndex;
+                        RefreshModelStatusText();
+                        RefreshModelList();
+                        Status = "已选择模型：" + item.DisplayName;
+                    },
+                    modelListLayer.transform);
+                SetButtonPalette(
+                    entry,
+                    selected ? new Color(.12f, .42f, .32f, 1f) :
+                    current ? new Color(.13f, .25f, .34f, 1f) : new Color(.105f, .14f, .15f, 1f),
+                    selected ? new Color(.18f, .58f, .44f, 1f) : new Color(.18f, .48f, .39f, 1f));
+                modelListEntries.Add(entry);
+            }
+            Debug.Log(
+                "[ModelCatalog] UI page=" + (modelListPage + 1) + "/" + pageCount +
+                " entries=" + string.Join(",", modelOptions
+                    .GetRange(firstVisible, visibleCount)
+                    .ConvertAll(option => option.DisplayName)),
+                this);
+        }
+
+        private void PageModelList(int direction)
+        {
+            if (modelOptions.Count == 0)
+            {
+                return;
+            }
+            var pageCount = Mathf.CeilToInt(modelOptions.Count / (float)ModelsPerPage);
+            modelListPage = (modelListPage + direction + pageCount) % pageCount;
+            RefreshModelList();
+        }
+
+        private void LoadSelectedModelFromList()
+        {
+            HideModelList();
+            LoadSelectedModel();
+        }
+
+        private void DeleteSelectedModelPackage()
+        {
+            var loader = owner?.ModelLoader;
+            if (loader == null || modelOptions.Count == 0)
+            {
+                HideModelList();
+                return;
+            }
+            modelIndex = Mathf.Clamp(modelIndex, 0, modelOptions.Count - 1);
+            var selected = modelOptions[modelIndex];
+            if (!loader.DeleteInstalledPackage(selected))
+            {
+                SetTransientStatus("当前模型包正在使用或无法删除", 3f);
+                HideModelList();
+                return;
+            }
+            SetTransientStatus("模型包已删除", 2f);
+            RefreshInstalledModels();
+            RefreshModelList();
+        }
+
         private void ToggleOutline()
         {
             owner?.Outline?.Toggle();
@@ -767,69 +1020,6 @@ namespace QuestMmdPlayer
             var value = owner?.IdlePose == null ? "\u672a\u7ed1\u5b9a" : owner.IdlePose.PresetDisplayName;
             idlePresetText.text = "\u9ed8\u8ba4\u5f85\u673a\uff1a" + value;
         }
-        private void PlayPresetAction(string action)
-        {
-            RequestAvatarAction(action, true);
-        }
-
-        private void RequestAvatarAction(string action, bool returnToMain)
-        {
-            if (pendingAvatarAction != null)
-            {
-                StopCoroutine(pendingAvatarAction);
-                pendingAvatarAction = null;
-            }
-
-            if (owner == null)
-            {
-                SetTransientStatus("角色控制器不可用", 3f);
-                return;
-            }
-
-            if (owner.Avatar != null)
-            {
-                ExecuteAvatarAction(action, returnToMain);
-                return;
-            }
-
-            SetTransientStatus("角色仍在加载，挥手会在就绪后播放", 3f);
-            pendingAvatarAction = StartCoroutine(PlayActionWhenAvatarReady(action, returnToMain));
-        }
-
-        private IEnumerator PlayActionWhenAvatarReady(string action, bool returnToMain)
-        {
-            var remaining = 8f;
-            while (remaining > 0f && (owner == null || owner.Avatar == null))
-            {
-                remaining -= Time.unscaledDeltaTime;
-                yield return null;
-            }
-
-            pendingAvatarAction = null;
-            if (owner == null || owner.Avatar == null)
-            {
-                SetTransientStatus("角色尚未就绪，动作未播放", 3f);
-                yield break;
-            }
-
-            ExecuteAvatarAction(action, returnToMain);
-        }
-
-        private void ExecuteAvatarAction(string action, bool returnToMain)
-        {
-            var normalized = string.IsNullOrWhiteSpace(action) ? "idle" : action.ToLowerInvariant();
-            owner.VmdActions?.StopAndReturnToIdle();
-            owner.Avatar.PlayActionFromSource(normalized, AvatarActionSource.Manual);
-            if (returnToMain)
-            {
-                ShowMainPanel();
-            }
-
-            SetTransientStatus(ActionDisplayName(normalized) + "已触发", 2.8f);
-            owner.DebugLog?.Record("AvatarAction", "手动选择内置动作：" + normalized);
-            Debug.Log("[CompanionMenu] Action requested: " + normalized, this);
-        }
-
         private void SetTransientStatus(string message, float seconds)
         {
             Status = message;
@@ -1060,6 +1250,7 @@ namespace QuestMmdPlayer
             if (pairingLayer != null) pairingLayer.SetActive(false);
             if (appearanceLayer != null) appearanceLayer.SetActive(false);
             if (modelLayer != null) modelLayer.SetActive(false);
+            if (modelListLayer != null) modelListLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
@@ -2101,6 +2292,7 @@ namespace QuestMmdPlayer
                 case "Debug Layer": return RuntimeMenuLayer.Debug;
                 case "Appearance Layer": return RuntimeMenuLayer.Appearance;
                 case "Model Library Layer": return RuntimeMenuLayer.Models;
+                case "Installed Model List": return RuntimeMenuLayer.ModelList;
                 case "Backend Pairing Layer": return RuntimeMenuLayer.Pairing;
                 case "Action Presets Layer": return RuntimeMenuLayer.Actions;
                 case "Main Menu Layer": return RuntimeMenuLayer.Main;
@@ -2222,6 +2414,30 @@ namespace QuestMmdPlayer
             return buttonObject;
         }
 
+        private static void SetButtonPalette(GameObject buttonObject, Color normal, Color hover)
+        {
+            if (buttonObject == null) return;
+            var image = buttonObject.GetComponent<Image>();
+            var button = buttonObject.GetComponent<Button>();
+            var target = buttonObject.GetComponent<CompanionMenuButtonTarget>();
+            if (image == null || button == null || target == null) return;
+            image.color = normal;
+            target.Configure(button, image, normal, hover);
+        }
+
+        private static void DestroyDynamicUiEntry(GameObject entry)
+        {
+            if (entry == null) return;
+            if (Application.isPlaying)
+            {
+                Destroy(entry);
+            }
+            else
+            {
+                DestroyImmediate(entry);
+            }
+        }
+
         private GameObject CreateUiObject(string objectName, Transform parent, Vector2 position, Vector2 size)
         {
             var result = new GameObject(objectName, typeof(RectTransform), typeof(CanvasRenderer));
@@ -2340,11 +2556,6 @@ namespace QuestMmdPlayer
             if (owner?.FileImport != null)
             {
                 owner.FileImport.StatusChanged -= HandleFileImportStatusChanged;
-            }
-            if (pendingAvatarAction != null)
-            {
-                StopCoroutine(pendingAvatarAction);
-                pendingAvatarAction = null;
             }
             HidePairingKeyboard();
             if (pointerMaterial != null)

@@ -422,6 +422,68 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void TrackedPalmPenetrationPublishesFactAndDrivesPhysicalHeadResponse()
+        {
+            avatarObject = new GameObject("TrackedContactAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var head = new GameObject("Head");
+            head.transform.SetParent(avatarObject.transform, false);
+            head.transform.localPosition = new Vector3(0f, .30f, 0f);
+            var bone = head.AddComponent<MMDBoneTransform>();
+            bone.boneName = "head";
+            var body = head.AddComponent<MMDRigidBody>();
+            body.relatedBone = bone;
+            body.shape = PMXRigidBody.Shape.Sphere;
+            body.size = new Unity.Mathematics.float3(.10f, 0f, 0f);
+
+            serviceObject = new GameObject("TrackedContactServices");
+            var touch = serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            var hands = serviceObject.AddComponent<QuestTrackedHandVisualizer>();
+            touch.Bind(controller);
+            interaction.Bind(controller);
+            hands.Bind(interaction);
+
+            var probeObject = new GameObject("SyntheticTrackedPalm");
+            probeObject.transform.SetParent(serviceObject.transform, false);
+            probeObject.transform.position = new Vector3(.08f, .30f, 0f);
+            var probeCollider = probeObject.AddComponent<SphereCollider>();
+            probeCollider.radius = .04f;
+            var tracker = hands.CreateContactTracker(
+                UnityEngine.XR.XRNode.LeftHand,
+                XRHandJointID.Palm,
+                TrackedHandContactProbe.Palm);
+            Physics.SyncTransforms();
+
+            Assert.That(hands.EvaluatePhysicalProbe(
+                probeCollider,
+                tracker,
+                TrackedHandContactProbe.Palm,
+                false,
+                true,
+                probeObject.transform.position,
+                probeObject.transform.position,
+                probeCollider.radius,
+                out var region), Is.True);
+            Assert.That(region, Is.EqualTo(AvatarContactRegion.Head));
+            Assert.That(hands.LatestContactFact.Phase, Is.EqualTo(TrackedHandContactPhase.Began));
+            Assert.That(hands.LatestContactFact.UsesAuthoritativeTrackedPose, Is.True);
+            Assert.That(hands.LatestContactFact.PenetrationDepth, Is.GreaterThan(0f));
+
+            typeof(AvatarHumanInteraction)
+                .GetField("stateTime", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                ?.SetValue(interaction, .03f);
+            typeof(AvatarHumanInteraction)
+                .GetMethod("Update", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                ?.Invoke(interaction, null);
+
+            Assert.That(interaction.CurrentInteraction, Is.EqualTo(HumanInteractionKind.HeadPat));
+        }
+
+        [Test]
         public void ContactSurfaceReportsOutwardNormalWithoutMovingProbe()
         {
             avatarObject = new GameObject("SurfaceAvatar");

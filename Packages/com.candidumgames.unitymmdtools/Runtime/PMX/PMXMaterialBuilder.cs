@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
@@ -26,6 +27,7 @@ namespace UMT
         private const string k_BuiltInUnlitTransparentShaderName = "Unlit/Transparent";
 
         private static readonly int s_BaseColorProperty = Shader.PropertyToID("_Color");
+        private static readonly int s_URPBaseColorProperty = Shader.PropertyToID("_BaseColor");
         private static readonly int s_BaseMapProperty = Shader.PropertyToID("_BaseMap");
         private static readonly int s_MainTextureProperty = Shader.PropertyToID("_MainTex");
         private static readonly int s_ShadowColorProperty = Shader.PropertyToID("_ShadowColor");
@@ -87,43 +89,110 @@ namespace UMT
         {
             List<Material> materials = new List<Material>(model.materials.Length);
             // The imported texture assets in texturesByIndex may be compressed and/or non-readable (editor import settings), which corrupts CPU alpha sampling. Decode the original source files into raw Color32 pixels instead, cached per resolved path for the duration of this build.
-            SourcePixelCache sourcePixels = new SourcePixelCache(model, options);
+            SourcePixelCache sourcePixels = new SourcePixelCache(model, options, texturesByIndex);
             int indicesOffset = 0;
             for (int i = 0; i < model.materials.Length; ++i)
             {
-                PMXMaterial pmxMaterial = model.materials[i];
                 int faceIndexStart = indicesOffset;
-                int faceIndexCount = pmxMaterial.faceIndexCount;
-                indicesOffset += faceIndexCount;
-
-                Texture2D mainTexture = GetTexture(texturesByIndex, pmxMaterial.textureIndex);
-                Texture2D sphereTexture = GetTexture(texturesByIndex, pmxMaterial.sphereTextureIndex);
-                string renamedName = pmxMaterial.renamedName.ToString();
-                string materialName = PMXUtilities.SanitizeFileName(renamedName, i);
-
-                if (options.materialOverrides != null && options.materialOverrides.TryGetValue(materialName, out Material overrideMaterial) && overrideMaterial != null)
-                {
-                    materials.Add(overrideMaterial);
-                    continue;
-                }
-
-                SourcePixels mainPixels = sourcePixels.Get(pmxMaterial.textureIndex);
-                (bool isBelowAlphaCoverageThreshold, float alphaCoverage, bool anyPixelOpaque, bool anyPixelFullyTransparent) alphaDetection = DetectAlphaCoverage(mainPixels, model, faceIndexStart, faceIndexCount, options.alphaDetectionThreshold);
-                // Any fully-transparent texel (alpha == 0) in the footprint forces the transparent path, even when the average coverage stays above the threshold: a small transparent region is drowned out by the coverage average but must still render see-through.
-                bool shouldBeTransparent = alphaDetection.isBelowAlphaCoverageThreshold || alphaDetection.anyPixelFullyTransparent || pmxMaterial.diffuse.a < 1.0f;
-                float alphaCoverage = Mathf.Min(alphaDetection.alphaCoverage, pmxMaterial.diffuse.a);
-                bool anyPixelOpaque = alphaDetection.anyPixelOpaque && !(pmxMaterial.diffuse.a < 1.0f);
-                bool transparentWithZWrite = anyPixelOpaque || alphaCoverage >= options.alphaCoverageZWriteThreshold;
-                // A material that only turned transparent because of sparse fully-transparent texels is still mostly opaque (coverage above the transparent threshold), so its MMD edge should be kept rather than dropped as it is for genuinely see-through materials.
-                bool keepEdge = !alphaDetection.isBelowAlphaCoverageThreshold && !(pmxMaterial.diffuse.a < 1.0f);
-                Debug.Log(materialName + " alpha coverage: " + alphaCoverage.ToString("F3") + ", any opaque: " + anyPixelOpaque + ", transparent with ZWrite: " + transparentWithZWrite);
-                Material material = BuildMaterial(pmxMaterial, mainTexture, sphereTexture, materialName, shouldBeTransparent, transparentWithZWrite, keepEdge);
-
-                material.renderQueue = shouldBeTransparent ? 3000 + i : 2500 + i;
-
-                materials.Add(material);
+                indicesOffset += model.materials[i].faceIndexCount;
+                materials.Add(BuildMaterialEntry(
+                    model,
+                    options,
+                    texturesByIndex,
+                    sourcePixels,
+                    i,
+                    faceIndexStart));
             }
             return materials;
+        }
+
+        /// <summary>
+        /// Runtime-friendly material construction that yields between PMX
+        /// materials. Alpha-footprint analysis can be relatively expensive;
+        /// spreading independent materials across frames avoids one long
+        /// blocking burst while preserving the synchronous import result.
+        /// </summary>
+        public static async Task<List<Material>> BuildAsync(
+            UMTFrameBudget frameBudget,
+            PMXModel model,
+            PMXImportOptions options,
+            string modelName,
+            Texture2D[] texturesByIndex)
+        {
+            if (frameBudget == null)
+            {
+                throw new ArgumentNullException(nameof(frameBudget));
+            }
+            List<Material> materials = new List<Material>(model.materials.Length);
+            SourcePixelCache sourcePixels = new SourcePixelCache(model, options, texturesByIndex);
+            int indicesOffset = 0;
+            for (int i = 0; i < model.materials.Length; ++i)
+            {
+                int faceIndexStart = indicesOffset;
+                indicesOffset += model.materials[i].faceIndexCount;
+                materials.Add(BuildMaterialEntry(
+                    model,
+                    options,
+                    texturesByIndex,
+                    sourcePixels,
+                    i,
+                    faceIndexStart));
+                await frameBudget.YieldIfNeeded();
+            }
+            return materials;
+        }
+
+        private static Material BuildMaterialEntry(
+            PMXModel model,
+            PMXImportOptions options,
+            Texture2D[] texturesByIndex,
+            SourcePixelCache sourcePixels,
+            int materialIndex,
+            int faceIndexStart)
+        {
+            PMXMaterial pmxMaterial = model.materials[materialIndex];
+            int faceIndexCount = pmxMaterial.faceIndexCount;
+            Texture2D mainTexture = GetTexture(texturesByIndex, pmxMaterial.textureIndex);
+            Texture2D sphereTexture = GetTexture(texturesByIndex, pmxMaterial.sphereTextureIndex);
+            string renamedName = pmxMaterial.renamedName.ToString();
+            string materialName = PMXUtilities.SanitizeFileName(renamedName, materialIndex);
+
+            if (options.materialOverrides != null &&
+                options.materialOverrides.TryGetValue(materialName, out Material overrideMaterial) &&
+                overrideMaterial != null)
+            {
+                return overrideMaterial;
+            }
+
+            SourcePixels mainPixels = sourcePixels.Get(pmxMaterial.textureIndex);
+            (bool isBelowAlphaCoverageThreshold, float alphaCoverage, bool anyPixelOpaque, bool anyPixelFullyTransparent) alphaDetection =
+                DetectAlphaCoverage(
+                    mainPixels,
+                    model,
+                    faceIndexStart,
+                    faceIndexCount,
+                    options.alphaDetectionThreshold);
+            bool shouldBeTransparent = alphaDetection.isBelowAlphaCoverageThreshold ||
+                alphaDetection.anyPixelFullyTransparent || pmxMaterial.diffuse.a < 1.0f;
+            float alphaCoverage = Mathf.Min(alphaDetection.alphaCoverage, pmxMaterial.diffuse.a);
+            bool anyPixelOpaque = alphaDetection.anyPixelOpaque && !(pmxMaterial.diffuse.a < 1.0f);
+            bool transparentWithZWrite = anyPixelOpaque ||
+                alphaCoverage >= options.alphaCoverageZWriteThreshold;
+            bool keepEdge = !alphaDetection.isBelowAlphaCoverageThreshold &&
+                !(pmxMaterial.diffuse.a < 1.0f);
+            Debug.Log(materialName + " alpha coverage: " + alphaCoverage.ToString("F3") +
+                ", any opaque: " + anyPixelOpaque +
+                ", transparent with ZWrite: " + transparentWithZWrite);
+            Material material = BuildMaterial(
+                pmxMaterial,
+                mainTexture,
+                sphereTexture,
+                materialName,
+                shouldBeTransparent,
+                transparentWithZWrite,
+                keepEdge);
+            material.renderQueue = shouldBeTransparent ? 3000 + materialIndex : 2500 + materialIndex;
+            return material;
         }
 
         private static bool IsFaceMaterial(PMXMaterial pmxMaterial)
@@ -139,8 +208,12 @@ namespace UMT
                 "hifu",
                 "hada",
                 "lian",
+                "顔",
+                "脸",
+                "面部",
+                "肌",
             };
-            return HeuristicDetect(pmxMaterial.renamedName.ToString(), faceHeuristicName);
+            return HeuristicDetect(pmxMaterial, faceHeuristicName);
         }
 
         private static bool IsEyeMaterial(PMXMaterial pmxMaterial)
@@ -151,8 +224,19 @@ namespace UMT
                 "iris",
                 "hitomi",
                 "yan",
+                "眼",
+                "目",
+                "瞳",
+                "虹彩",
             };
-            return HeuristicDetect(pmxMaterial.renamedName.ToString(), faceHeuristicName);
+            return HeuristicDetect(pmxMaterial, faceHeuristicName);
+        }
+
+        private static bool HeuristicDetect(PMXMaterial material, string[] heuristics)
+        {
+            return HeuristicDetect(material.renamedName.ToString(), heuristics) ||
+                HeuristicDetect(material.originalName.ToString(), heuristics) ||
+                HeuristicDetect(material.originalNameEN.ToString(), heuristics);
         }
 
         private static bool HeuristicDetect(string name, string[] heuristics)
@@ -246,14 +330,14 @@ namespace UMT
 
         private static void ConfigureURPTransparent(Material material, bool transparentWithZWrite)
         {
-            if (transparentWithZWrite)
-            {
-                return;
-            }
             SetFloatIfPresent(material, s_URPSurfaceProperty, 1.0f);
             SetFloatIfPresent(material, s_URPBlendProperty, 0.0f);
             SetFloatIfPresent(material, s_URPSrcBlendProperty, (float)BlendMode.SrcAlpha);
             SetFloatIfPresent(material, s_URPDstBlendProperty, (float)BlendMode.OneMinusSrcAlpha);
+            SetFloatIfPresent(material, s_URPSrcBlendAlphaProperty, (float)BlendMode.One);
+            SetFloatIfPresent(material, s_URPDstBlendAlphaProperty, (float)BlendMode.OneMinusSrcAlpha);
+            SetFloatIfPresent(material, s_URPZWriteProperty, transparentWithZWrite ? 1.0f : 0.0f);
+            SetFloatIfPresent(material, s_AlphaToMaskProperty, 0.0f);
             material.SetOverrideTag("RenderType", "Transparent");
             SetKeywordIfPresent(material, k_URPSurfaceTypeTransparentKeyword, true);
         }
@@ -291,6 +375,7 @@ namespace UMT
 
             // Properties shared by every supported shader family.
             SetColorIfPresent(material, s_BaseColorProperty, pmxMaterial.diffuse);
+            SetColorIfPresent(material, s_URPBaseColorProperty, pmxMaterial.diffuse);
             if (mainTexture != null)
             {
                 SetTextureIfPresent(material, s_MainTextureProperty, mainTexture);
@@ -500,12 +585,17 @@ namespace UMT
         private sealed class SourcePixelCache
         {
             private readonly PMXModel m_Model;
+            private readonly Texture2D[] m_TexturesByIndex;
             private readonly string m_BaseDirectory;
             private readonly Dictionary<int, SourcePixels> m_ByTextureIndex = new Dictionary<int, SourcePixels>();
 
-            public SourcePixelCache(PMXModel model, PMXImportOptions options)
+            public SourcePixelCache(
+                PMXModel model,
+                PMXImportOptions options,
+                Texture2D[] texturesByIndex)
             {
                 m_Model = model;
+                m_TexturesByIndex = texturesByIndex ?? Array.Empty<Texture2D>();
                 m_BaseDirectory = !string.IsNullOrEmpty(options.textureBaseDirectory) ? options.textureBaseDirectory : Path.GetDirectoryName(options.sourcePath);
             }
 
@@ -523,7 +613,12 @@ namespace UMT
                     return cached;
                 }
 
-                SourcePixels decoded = Decode(m_Model.texturePaths[textureIndex].ToString());
+                Texture2D loaded = textureIndex < m_TexturesByIndex.Length
+                    ? m_TexturesByIndex[textureIndex]
+                    : null;
+                SourcePixels decoded = loaded != null && loaded.isReadable
+                    ? new SourcePixels(loaded.GetPixels32(), loaded.width, loaded.height)
+                    : Decode(m_Model.texturePaths[textureIndex].ToString());
                 m_ByTextureIndex[textureIndex] = decoded;
                 return decoded;
             }

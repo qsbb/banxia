@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UMT;
 using UnityEngine;
 
@@ -13,6 +14,7 @@ namespace QuestMmdPlayer
             public SkinnedMeshRenderer Renderer;
             public int Index;
             public float BaseWeight;
+            public int Group;
         }
 
         private struct ExpressionMorph
@@ -33,7 +35,7 @@ namespace QuestMmdPlayer
         private VmdActionLibrary vmdActions;
         private AvatarPlacementService placement;
         private RuntimeDebugLog diagnostics;
-        private System.Threading.Tasks.Task activeDanceTask;
+        private readonly SemaphoreSlim danceRequestGate = new SemaphoreSlim(1, 1);
         private Transform head;
         private Transform jaw;
         private Quaternion headBaseRotation;
@@ -49,6 +51,13 @@ namespace QuestMmdPlayer
         private float targetEmotionIntensity;
         private string manualExpression = "neutral";
         private string lastLoggedAction = "idle";
+        private AvatarActionExecutionContext activeTrackedAction;
+        private bool activeTrackedActionAccepted;
+        private bool activeTrackedActionStarted;
+        private float activeTrackedActionAcceptedAt;
+        private Coroutine timedActionCompletion;
+        private SpeechVisemeCue[] speechTimeline = Array.Empty<SpeechVisemeCue>();
+        private bool speechTimelineMatchesAvatar;
         [SerializeField, Range(1f, 12f)] private float expressionBlendSpeed = 6f;
         [SerializeField, Range(1f, 24f)] private float mouthAttackSpeed = 11f;
         [SerializeField, Range(1f, 24f)] private float mouthReleaseSpeed = 7f;
@@ -59,13 +68,23 @@ namespace QuestMmdPlayer
         public string Status => avatar == null
             ? "Waiting for avatar"
             : $"{state} | gesture:{behavior.LastGesture} visemes:{visemes.Count} jaw:{(jaw == null ? "no" : "yes")}";
+        public event Action<AvatarActionExecutionUpdate> ActionExecutionChanged;
 
         public void Bind(AvatarController target, AvatarHumanInteraction human, Pcm16StreamAudioPlayer streamPlayer)
         {
+            if (activeTrackedAction != null)
+            {
+                EmitActionUpdate(
+                    activeTrackedAction,
+                    AvatarActionReceiptPhase.Interrupted,
+                    "runtime",
+                    "system_interrupted");
+            }
             if (avatar != null)
             {
                 avatar.ActionChanged -= HandleAvatarActionChanged;
             }
+            UnsubscribeVmdLifecycle();
             RestoreMouth();
             RestoreExpressions();
             RestoreJaw();
@@ -74,6 +93,7 @@ namespace QuestMmdPlayer
             humanInteraction = human;
             audioPlayer = streamPlayer;
             vmdActions = GetComponent<VmdActionLibrary>();
+            SubscribeVmdLifecycle();
             placement = GetComponent<AvatarPlacementService>();
             diagnostics = GetComponent<RuntimeDebugLog>();
             head = null;
@@ -87,6 +107,7 @@ namespace QuestMmdPlayer
             lookAtMode = "none";
             mouthWasActive = false;
             smoothedMouthAmount = 0f;
+            ClearSpeechTimeline();
             behavior.Reset(Time.unscaledTime, UnityEngine.Random.value);
 
             if (avatar == null)
@@ -121,11 +142,18 @@ namespace QuestMmdPlayer
             state = next;
         }
 
-        public void ApplyIntent(string emotion, string gesture, string lookAt, float intensity = 1f, int durationMs = 2000)
+        public bool ApplyIntent(
+            string emotion,
+            string gesture,
+            string lookAt,
+            float intensity = 1f,
+            int durationMs = 2000,
+            AvatarActionExecutionContext executionContext = null)
         {
             if (avatar == null)
             {
-                return;
+                ReportRejected(executionContext, "avatar_unavailable");
+                return false;
             }
 
             emotion = AstrBotProtocol.SanitizeEmotion(emotion);
@@ -151,7 +179,8 @@ namespace QuestMmdPlayer
             {
                 diagnostics?.Record("AvatarAction", "后端动作意图被本地仲裁阻止：" + gesture);
                 diagnostics?.RecordStage("avatar_action", "blocked", "action_arbitration_blocked");
-                return;
+                ReportRejected(executionContext, "blocked");
+                return false;
             }
 
             diagnostics?.Record("AvatarAction", "后端动作意图已接受：" + acceptedGesture);
@@ -162,23 +191,55 @@ namespace QuestMmdPlayer
                 if (placement == null || !placement.TryExecuteRestingAction(acceptedGesture))
                 {
                     diagnostics?.RecordStage("avatar_action", "limited", "rest_target_unavailable");
+                    ReportRejected(executionContext, "asset_missing");
+                    return false;
                 }
+                ActivateTrackedAction(executionContext);
+                return true;
             }
             else if (placement != null && placement.IsRestingOrAligning && acceptedGesture != "talk")
             {
-                placement.TryReturnToStanding(acceptedGesture);
+                PrepareTrackedAction(executionContext);
+                var returning = placement.TryReturnToStanding(acceptedGesture);
+                if (returning) ReportAccepted(executionContext);
+                else ReportRejected(executionContext, "invalid_state");
+                return returning;
             }
             else if (acceptedGesture == "handshake")
             {
-                humanInteraction?.PlayReaction(HumanInteractionKind.Handshake, reactionSeconds);
+                if (humanInteraction == null)
+                {
+                    ReportRejected(executionContext, "invalid_state");
+                    return false;
+                }
+                humanInteraction.PlayReaction(HumanInteractionKind.Handshake, reactionSeconds);
+                ActivateTrackedAction(executionContext);
+                StartTimedTrackedAction(executionContext, reactionSeconds, "interaction");
+                return true;
             }
             else if (acceptedGesture == "head_pat")
             {
-                humanInteraction?.PlayReaction(HumanInteractionKind.HeadPat, reactionSeconds);
+                if (humanInteraction == null)
+                {
+                    ReportRejected(executionContext, "invalid_state");
+                    return false;
+                }
+                humanInteraction.PlayReaction(HumanInteractionKind.HeadPat, reactionSeconds);
+                ActivateTrackedAction(executionContext);
+                StartTimedTrackedAction(executionContext, reactionSeconds, "interaction");
+                return true;
             }
             else if (acceptedGesture == "cheek_pinch")
             {
-                humanInteraction?.PlayReaction(HumanInteractionKind.CheekPinch, reactionSeconds);
+                if (humanInteraction == null)
+                {
+                    ReportRejected(executionContext, "invalid_state");
+                    return false;
+                }
+                humanInteraction.PlayReaction(HumanInteractionKind.CheekPinch, reactionSeconds);
+                ActivateTrackedAction(executionContext);
+                StartTimedTrackedAction(executionContext, reactionSeconds, "interaction");
+                return true;
             }
             else if (acceptedGesture == "wave" || acceptedGesture == "bow" ||
                 acceptedGesture == "dance" || acceptedGesture == "dance_next" ||
@@ -189,13 +250,28 @@ namespace QuestMmdPlayer
             {
                 if (acceptedGesture == "dance" || acceptedGesture == "dance_next")
                 {
-                    _ = PlayRecommendedDance(acceptedGesture == "dance_next");
+                    ActivateTrackedAction(executionContext);
+                    _ = PlayRecommendedDance(acceptedGesture == "dance_next", executionContext);
+                    return true;
                 }
                 else
                 {
-                    avatar.PlayActionFromSource(acceptedGesture, AvatarActionSource.Backend);
+                    PrepareTrackedAction(executionContext);
+                    var played = avatar.PlayActionFromSource(acceptedGesture, AvatarActionSource.Backend);
+                    if (played)
+                    {
+                        ReportAccepted(executionContext);
+                        ReportStarted(executionContext, "avatar_controller");
+                    }
+                    else
+                    {
+                        ReportRejected(executionContext, "busy");
+                    }
+                    return played;
                 }
             }
+            ReportRejected(executionContext, "unsupported");
+            return false;
         }
 
         public void SetManualExpression(string expression)
@@ -204,6 +280,39 @@ namespace QuestMmdPlayer
             targetEmotion = manualExpression;
             targetEmotionIntensity = manualExpression == "neutral" ? 0f : .42f;
             avatar?.SetEmotion(manualExpression);
+        }
+
+        public void SetSpeechTimeline(SpeechVisemeCue[] timeline)
+        {
+            if (timeline == null || timeline.Length == 0)
+            {
+                ClearSpeechTimeline();
+                return;
+            }
+
+            speechTimeline = new SpeechVisemeCue[timeline.Length];
+            var cueGroups = new HashSet<int>();
+            for (var index = 0; index < timeline.Length; index++)
+            {
+                var cue = timeline[index];
+                speechTimeline[index] = new SpeechVisemeCue
+                {
+                    Symbol = cue == null ? string.Empty : cue.Symbol,
+                    StartMs = cue == null ? 0 : cue.StartMs,
+                    EndMs = cue == null ? 0 : cue.EndMs,
+                    Weight = cue == null ? 0f : Mathf.Clamp01(cue.Weight)
+                };
+                var group = GetVisemeGroup(speechTimeline[index].Symbol);
+                if (group >= 0) cueGroups.Add(group);
+            }
+            speechTimelineMatchesAvatar = visemes.Exists(viseme =>
+                viseme.Group >= 0 && cueGroups.Contains(viseme.Group));
+        }
+
+        public void ClearSpeechTimeline()
+        {
+            speechTimeline = Array.Empty<SpeechVisemeCue>();
+            speechTimelineMatchesAvatar = false;
         }
 
         public void PlayLocalAction(string action)
@@ -238,27 +347,46 @@ namespace QuestMmdPlayer
             }
         }
 
-        private async System.Threading.Tasks.Task PlayRecommendedDance(bool selectNext = false)
+        private async System.Threading.Tasks.Task PlayRecommendedDance(
+            bool selectNext = false,
+            AvatarActionExecutionContext executionContext = null)
         {
-            if (activeDanceTask != null && !activeDanceTask.IsCompleted)
+            var queued = danceRequestGate.CurrentCount == 0;
+            if (queued)
             {
-                diagnostics?.Record("AvatarAction", "舞蹈请求合并到正在加载的动作");
-                await activeDanceTask;
-                return;
+                diagnostics?.Record(
+                    "AvatarAction",
+                    selectNext
+                        ? "下一支舞蹈请求已排队，等待当前动作加载完成"
+                        : "舞蹈请求已排队，等待当前动作加载完成");
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "queued",
+                    selectNext ? "dance_next_queued" : "dance_queued");
             }
 
-            activeDanceTask = PlayRecommendedDanceCore(selectNext);
+            await danceRequestGate.WaitAsync();
             try
             {
-                await activeDanceTask;
+                if (executionContext != null && !IsTrackedActionCurrent(executionContext))
+                {
+                    return;
+                }
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "processing",
+                    selectNext ? "dance_next_started" : "dance_started");
+                await PlayRecommendedDanceCore(selectNext, executionContext);
             }
             finally
             {
-                activeDanceTask = null;
+                danceRequestGate.Release();
             }
         }
 
-        private async System.Threading.Tasks.Task PlayRecommendedDanceCore(bool selectNext)
+        private async System.Threading.Tasks.Task PlayRecommendedDanceCore(
+            bool selectNext,
+            AvatarActionExecutionContext executionContext)
         {
             diagnostics?.Record("AvatarAction", selectNext
                 ? "开始查找下一支可播放的自定义舞蹈动作"
@@ -281,6 +409,12 @@ namespace QuestMmdPlayer
                         played ? "custom_dance_started" : "custom_dance_unavailable");
                     if (played)
                     {
+                        if (executionContext != null && !IsTrackedActionCurrent(executionContext))
+                        {
+                            vmdActions.StopAndReturnToIdle();
+                            return;
+                        }
+                        ReportStarted(executionContext, "imported_vmd");
                         return;
                     }
                 }
@@ -302,7 +436,197 @@ namespace QuestMmdPlayer
             // A built-in fallback keeps the explicit request visible even when
             // no imported dance is installed or the VMD is not compatible.
             diagnostics?.Record("AvatarAction", "播放内置舞蹈回退动作");
-            avatar?.PlayActionFromSource("dance", AvatarActionSource.Backend);
+            var fallbackPlayed = avatar != null &&
+                avatar.PlayActionFromSource("dance", AvatarActionSource.Backend);
+            if (!fallbackPlayed) ReportRejected(executionContext, "asset_missing");
+        }
+
+        public void InterruptTrackedAction(string turnId, string reasonCode = "user_interrupted")
+        {
+            if (activeTrackedAction == null ||
+                !string.Equals(activeTrackedAction.TurnId, turnId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var context = activeTrackedAction;
+            EmitActionUpdate(context, AvatarActionReceiptPhase.Interrupted, "runtime", reasonCode);
+            if (timedActionCompletion != null)
+            {
+                StopCoroutine(timedActionCompletion);
+                timedActionCompletion = null;
+            }
+            if (vmdActions != null &&
+                (vmdActions.IsLoading || vmdActions.IsPlaying || vmdActions.IsHoldingEndPose || vmdActions.IsBlendingOut))
+            {
+                vmdActions.StopAndReturnToIdle();
+            }
+            else if (avatar != null && avatar.CurrentAction != "idle")
+            {
+                avatar.PlayActionFromSource("idle", AvatarActionSource.System);
+            }
+        }
+
+        private void ActivateTrackedAction(AvatarActionExecutionContext context)
+        {
+            PrepareTrackedAction(context);
+            ReportAccepted(context);
+        }
+
+        private void PrepareTrackedAction(AvatarActionExecutionContext context)
+        {
+            if (context == null) return;
+            if (activeTrackedAction != null && !IsTrackedActionCurrent(context))
+            {
+                EmitActionUpdate(
+                    activeTrackedAction,
+                    AvatarActionReceiptPhase.Interrupted,
+                    "runtime",
+                    "superseded");
+                if (timedActionCompletion != null)
+                {
+                    StopCoroutine(timedActionCompletion);
+                    timedActionCompletion = null;
+                }
+            }
+            activeTrackedAction = context;
+            activeTrackedActionAccepted = false;
+            activeTrackedActionStarted = false;
+            activeTrackedActionAcceptedAt = Time.unscaledTime;
+        }
+
+        private void ReportAccepted(AvatarActionExecutionContext context)
+        {
+            if (!IsTrackedActionCurrent(context) || activeTrackedActionAccepted) return;
+            activeTrackedActionAccepted = true;
+            EmitActionUpdate(context, AvatarActionReceiptPhase.Accepted, "backend", string.Empty);
+        }
+
+        private void StartTimedTrackedAction(
+            AvatarActionExecutionContext context,
+            float durationSeconds,
+            string source)
+        {
+            if (context == null) return;
+            ReportStarted(context, source);
+            if (timedActionCompletion != null) StopCoroutine(timedActionCompletion);
+            timedActionCompletion = StartCoroutine(CompleteTrackedActionAfter(
+                context,
+                Mathf.Max(.01f, durationSeconds),
+                source));
+        }
+
+        private System.Collections.IEnumerator CompleteTrackedActionAfter(
+            AvatarActionExecutionContext context,
+            float durationSeconds,
+            string source)
+        {
+            yield return new WaitForSecondsRealtime(durationSeconds);
+            timedActionCompletion = null;
+            ReportCompleted(context, source);
+        }
+
+        private bool IsTrackedActionCurrent(AvatarActionExecutionContext context)
+        {
+            return context != null && activeTrackedAction != null &&
+                string.Equals(context.TurnId, activeTrackedAction.TurnId, StringComparison.Ordinal) &&
+                string.Equals(context.ActionId, activeTrackedAction.ActionId, StringComparison.Ordinal);
+        }
+
+        private void ReportStarted(AvatarActionExecutionContext context, string source)
+        {
+            if (!IsTrackedActionCurrent(context) || !activeTrackedActionAccepted || activeTrackedActionStarted) return;
+            activeTrackedActionStarted = true;
+            EmitActionUpdate(context, AvatarActionReceiptPhase.Started, source, string.Empty);
+        }
+
+        private void ReportCompleted(AvatarActionExecutionContext context, string source)
+        {
+            if (!IsTrackedActionCurrent(context) || !activeTrackedActionStarted) return;
+            EmitActionUpdate(context, AvatarActionReceiptPhase.Completed, source, string.Empty);
+        }
+
+        private void ReportRejected(AvatarActionExecutionContext context, string reasonCode)
+        {
+            if (context == null) return;
+            if (activeTrackedAction != null && !IsTrackedActionCurrent(context))
+            {
+                ActionExecutionChanged?.Invoke(new AvatarActionExecutionUpdate
+                {
+                    Context = context,
+                    Phase = AvatarActionReceiptPhase.Rejected,
+                    Source = "runtime",
+                    ReasonCode = reasonCode,
+                    ElapsedMs = 0
+                });
+                return;
+            }
+            if (activeTrackedAction == null)
+            {
+                activeTrackedAction = context;
+                activeTrackedActionAccepted = false;
+                activeTrackedActionAcceptedAt = Time.unscaledTime;
+            }
+            if (!IsTrackedActionCurrent(context)) return;
+            EmitActionUpdate(context, AvatarActionReceiptPhase.Rejected, "runtime", reasonCode);
+        }
+
+        private void SubscribeVmdLifecycle()
+        {
+            if (vmdActions == null) return;
+            vmdActions.PlaybackChanged -= HandleVmdPlaybackChanged;
+            vmdActions.PlaybackChanged += HandleVmdPlaybackChanged;
+        }
+
+        private void UnsubscribeVmdLifecycle()
+        {
+            if (vmdActions == null) return;
+            vmdActions.PlaybackChanged -= HandleVmdPlaybackChanged;
+        }
+
+        private void HandleVmdPlaybackChanged()
+        {
+            if (activeTrackedAction == null ||
+                (activeTrackedAction.Gesture != "dance" && activeTrackedAction.Gesture != "dance_next"))
+            {
+                return;
+            }
+
+            if (vmdActions.PlaybackPhase == VmdPlaybackPhase.Playing)
+            {
+                ReportStarted(activeTrackedAction, "imported_vmd");
+            }
+            else if (vmdActions.PlaybackPhase == VmdPlaybackPhase.Idle && activeTrackedActionStarted)
+            {
+                ReportCompleted(activeTrackedAction, "imported_vmd");
+            }
+        }
+
+        private void EmitActionUpdate(
+            AvatarActionExecutionContext context,
+            AvatarActionReceiptPhase phase,
+            string source,
+            string reasonCode)
+        {
+            if (context == null) return;
+            var terminal = phase == AvatarActionReceiptPhase.Completed ||
+                phase == AvatarActionReceiptPhase.Rejected ||
+                phase == AvatarActionReceiptPhase.Interrupted;
+            ActionExecutionChanged?.Invoke(new AvatarActionExecutionUpdate
+            {
+                Context = context,
+                Phase = phase,
+                Source = source,
+                ReasonCode = reasonCode,
+                ElapsedMs = Mathf.Max(0, Mathf.RoundToInt(
+                    (Time.unscaledTime - activeTrackedActionAcceptedAt) * 1000f))
+            });
+            if (terminal && IsTrackedActionCurrent(context))
+            {
+                activeTrackedAction = null;
+                activeTrackedActionAccepted = false;
+                activeTrackedActionStarted = false;
+            }
         }
 
         public static string NormalizeExpression(string expression)
@@ -324,10 +648,10 @@ namespace QuestMmdPlayer
             var idleAttention = ShouldUseIdleUserGaze(state, semanticContact, gazeAtUserWhileIdle);
             var wantsAttention = !semanticContact && (lookAtMode != "none" || idleAttention);
             gazeBlend = Mathf.MoveTowards(gazeBlend, wantsAttention ? 1f : 0f, Time.unscaledDeltaTime * (idleAttention ? idleGazeBlendSpeed : 3.5f));
-            var gazeMode = idleAttention && lookAtMode == "none" ? "user" : lookAtMode;
+            var gazeMode = ResolveGazeMode(state, idleAttention, lookAtMode);
             ApplyGaze(gazeBlend, gazeMode);
 
-            var speechLevel = state == ConversationState.Speaking && audioPlayer != null ? audioPlayer.LatestRms : 0f;
+            var speechLevel = state == ConversationState.Speaking && audioPlayer != null ? audioPlayer.AudibleRms : 0f;
             ApplyMouth(speechLevel);
             ApplyExpressions();
             UpdateIdleBehavior(semanticContact);
@@ -365,10 +689,50 @@ namespace QuestMmdPlayer
                 " source=" + (avatar == null ? AvatarActionSource.Unknown : avatar.CurrentActionSource));
             diagnostics?.RecordStage("avatar_action", "completed", "action_state_changed");
             lastLoggedAction = normalized;
+
+            if (activeTrackedAction == null)
+            {
+                return;
+            }
+
+            var requested = activeTrackedAction.Gesture;
+            var isDance = requested == "dance" || requested == "dance_next";
+            var isRequestedState = string.Equals(normalized, requested, StringComparison.Ordinal) ||
+                (requested == "lie" && normalized == "lie_down") ||
+                (isDance && (normalized == "vmd" || normalized == "dance"));
+            if (isRequestedState)
+            {
+                var context = activeTrackedAction;
+                ReportStarted(context, normalized == "vmd" ? "imported_vmd" : "avatar_controller");
+                // A resting pose becomes an accomplished world action once its
+                // alignment service commits the matching avatar state. The pose
+                // may remain active indefinitely, but the transition is complete.
+                if (requested == "sit" || requested == "lie" || requested == "lie_down")
+                {
+                    ReportCompleted(context, "placement");
+                }
+                return;
+            }
+
+            if (normalized == "idle")
+            {
+                if (activeTrackedActionStarted)
+                {
+                    ReportCompleted(activeTrackedAction, "avatar_controller");
+                }
+                return;
+            }
+
+            EmitActionUpdate(
+                activeTrackedAction,
+                AvatarActionReceiptPhase.Interrupted,
+                "runtime",
+                "superseded");
         }
 
         private void OnDestroy()
         {
+            UnsubscribeVmdLifecycle();
             if (avatar != null)
             {
                 avatar.ActionChanged -= HandleAvatarActionChanged;
@@ -377,7 +741,24 @@ namespace QuestMmdPlayer
 
         public static bool ShouldUseIdleUserGaze(ConversationState conversationState, bool semanticContact, bool enabled)
         {
-            return enabled && !semanticContact && conversationState == ConversationState.Idle;
+            return enabled && !semanticContact &&
+                (conversationState == ConversationState.Idle ||
+                    conversationState == ConversationState.Thinking);
+        }
+
+        public static string ResolveGazeMode(
+            ConversationState conversationState,
+            bool idleAttention,
+            string requestedMode)
+        {
+            var normalized = string.IsNullOrWhiteSpace(requestedMode)
+                ? "none"
+                : requestedMode.Trim().ToLowerInvariant();
+            if (idleAttention && conversationState == ConversationState.Thinking)
+            {
+                return "user";
+            }
+            return idleAttention && normalized == "none" ? "user" : normalized;
         }
 
         private void ApplyGaze(float amount, string mode)
@@ -422,11 +803,19 @@ namespace QuestMmdPlayer
                 mouthAttackSpeed,
                 mouthReleaseSpeed);
             smoothedMouthAmount = amount;
-            if (amount <= .001f)
+            var useTimeline = speechTimelineMatchesAvatar && audioPlayer != null &&
+                audioPlayer.PlaybackStarted;
+            var timelinePositionMs = useTimeline
+                ? audioPlayer.AudiblePlaybackSeconds * 1000f
+                : 0f;
+            var timelinePeak = useTimeline ? TimelinePeak(timelinePositionMs) : 1f;
+            var visibleAmount = amount * timelinePeak;
+            if (visibleAmount <= .001f)
             {
                 if (mouthWasActive)
                 {
                     RestoreMouth();
+                    RestoreJaw();
                     mouthWasActive = false;
                 }
                 return;
@@ -440,18 +829,68 @@ namespace QuestMmdPlayer
             for (var i = 0; i < visemes.Count; i++)
             {
                 var viseme = visemes[i];
-                var influence = i == active
-                    ? 1f - crossfade
-                    : i == next
-                        ? crossfade
-                        : 0f;
+                var influence = useTimeline
+                    ? TimelineInfluence(viseme.Group, timelinePositionMs)
+                    : i == active
+                        ? 1f - crossfade
+                        : i == next
+                            ? crossfade
+                            : 0f;
                 var add = amount * influence * 68f;
                 viseme.Renderer.SetBlendShapeWeight(viseme.Index, Mathf.Clamp(viseme.BaseWeight + add, 0f, 100f));
             }
             if (jaw != null)
             {
-                jaw.localRotation = Quaternion.Slerp(jawBaseRotation, jawBaseRotation * Quaternion.Euler(amount * 13f, 0f, 0f), amount);
+                jaw.localRotation = Quaternion.Slerp(
+                    jawBaseRotation,
+                    jawBaseRotation * Quaternion.Euler(visibleAmount * 13f, 0f, 0f),
+                    visibleAmount);
             }
+        }
+
+        private float TimelinePeak(float positionMs)
+        {
+            var peak = 0f;
+            for (var index = 0; index < speechTimeline.Length; index++)
+            {
+                var cue = speechTimeline[index];
+                if (cue != null && GetVisemeGroup(cue.Symbol) >= 0)
+                {
+                    peak = Mathf.Max(peak, SpeechCueEnvelope(cue, positionMs));
+                }
+            }
+            return peak;
+        }
+
+        private float TimelineInfluence(int group, float positionMs)
+        {
+            if (group < 0) return 0f;
+            var peak = 0f;
+            for (var index = 0; index < speechTimeline.Length; index++)
+            {
+                var cue = speechTimeline[index];
+                if (cue != null && GetVisemeGroup(cue.Symbol) == group)
+                {
+                    peak = Mathf.Max(peak, SpeechCueEnvelope(cue, positionMs));
+                }
+            }
+            return peak;
+        }
+
+        public static float SpeechCueEnvelope(
+            SpeechVisemeCue cue,
+            float positionMs,
+            float transitionMs = 65f)
+        {
+            if (cue == null || cue.EndMs <= cue.StartMs) return 0f;
+            var ramp = Mathf.Max(1f, transitionMs);
+            var weight = Mathf.Clamp01(cue.Weight);
+            if (positionMs < cue.StartMs - ramp || positionMs > cue.EndMs + ramp) return 0f;
+            if (positionMs < cue.StartMs)
+                return weight * Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(cue.StartMs - ramp, cue.StartMs, positionMs));
+            if (positionMs > cue.EndMs)
+                return weight * (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(cue.EndMs, cue.EndMs + ramp, positionMs)));
+            return weight;
         }
 
         public static float SmoothMouthAmount(
@@ -489,7 +928,8 @@ namespace QuestMmdPlayer
                     {
                         Renderer = renderers[r],
                         Index = i,
-                        BaseWeight = renderers[r].GetBlendShapeWeight(i)
+                        BaseWeight = renderers[r].GetBlendShapeWeight(i),
+                        Group = GetVisemeGroup(mesh.GetBlendShapeName(i))
                     });
                 }
             }
@@ -695,6 +1135,22 @@ namespace QuestMmdPlayer
                 || name == "vrcvaa" || name == "vrcvih" || name == "vrcvou" || name == "vrcvee" || name == "vrcvoh";
         }
 
+        public static int GetVisemeGroup(string value)
+        {
+            var name = Normalize(value);
+            if (name == "a" || name == "aa" || name == "vrcvaa" || name == "moutha" ||
+                name == "\u3042" || name == "\u53e3\u3042") return 0;
+            if (name == "i" || name == "ih" || name == "vrcvih" || name == "mouthi" ||
+                name == "\u3044" || name == "\u53e3\u3044") return 1;
+            if (name == "u" || name == "ou" || name == "vrcvou" || name == "mouthu" ||
+                name == "\u3046" || name == "\u53e3\u3046") return 2;
+            if (name == "e" || name == "ee" || name == "vrcvee" || name == "mouthe" ||
+                name == "\u3048" || name == "\u53e3\u3048") return 3;
+            if (name == "o" || name == "oh" || name == "vrcvoh" || name == "moutho" ||
+                name == "\u304a" || name == "\u53e3\u304a") return 4;
+            return -1;
+        }
+
         private static string Normalize(string value)
         {
             return string.IsNullOrWhiteSpace(value)
@@ -704,6 +1160,14 @@ namespace QuestMmdPlayer
 
         private void OnDisable()
         {
+            if (activeTrackedAction != null)
+            {
+                EmitActionUpdate(
+                    activeTrackedAction,
+                    AvatarActionReceiptPhase.Interrupted,
+                    "runtime",
+                    "system_interrupted");
+            }
             RestoreMouth();
             RestoreExpressions();
             RestoreJaw();

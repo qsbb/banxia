@@ -22,7 +22,7 @@ namespace QuestMmdPlayer.Editor
             public View(string viewName, Vector3 viewDirection) { name = viewName; direction = viewDirection.normalized; }
         }
 
-        [MenuItem("Quest MMD Player/Render Human Interaction Previews")]
+        [MenuItem("伴夏/Render Human Interaction Previews")]
         public static void RenderAll()
         {
             QuestMmdPlayerMenu.EnsureRenderPipeline();

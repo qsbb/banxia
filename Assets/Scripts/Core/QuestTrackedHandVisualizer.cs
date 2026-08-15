@@ -50,6 +50,7 @@ namespace QuestMmdPlayer
         private readonly PokeInteractionLifecycle pokeLifecycle = new PokeInteractionLifecycle();
         private RuntimeDebugLog diagnostics;
         private float lastContactDiagnosticHoverAt = float.NegativeInfinity;
+        private bool contactEventsSubscribed;
 
         public string Status { get; private set; } = "代理手等待 XR 输入";
         public int TrackedHandCount { get; private set; }
@@ -171,6 +172,7 @@ namespace QuestMmdPlayer
 
         public void Bind(AvatarHumanInteraction nextInteraction)
         {
+            EnsureContactEventSubscriptions();
             interaction = nextInteraction;
             left.SetInteraction(interaction);
             right.SetInteraction(interaction);
@@ -179,10 +181,20 @@ namespace QuestMmdPlayer
         private void Awake()
         {
             diagnostics = GetComponent<RuntimeDebugLog>();
-            contactAggregator.RawFactChanged += HandleRawContactFact;
-            contactAggregator.FactChanged += HandleContactFact;
+            EnsureContactEventSubscriptions();
             BuildHand(left);
             BuildHand(right);
+        }
+
+        private void EnsureContactEventSubscriptions()
+        {
+            if (contactEventsSubscribed)
+            {
+                return;
+            }
+            contactAggregator.RawFactChanged += HandleRawContactFact;
+            contactAggregator.FactChanged += HandleContactFact;
+            contactEventsSubscribed = true;
         }
 
         private void Update()
@@ -236,55 +248,17 @@ namespace QuestMmdPlayer
                 var from = visual.previousJointTracked[index]
                     ? visual.previousJointPositions[index]
                     : center;
-                var hasPenetration = interaction.TryGetPenetrationCorrection(
-                    sphere,
-                    out var penetrationCorrection,
-                    out var penetrationRegion);
-
-                var swept = interaction.TryGetContactRegionSwept(
-                    from,
-                    center,
-                    Mathf.Max(.005f, radius),
-                    out var sweptRegion,
-                    out var contactPoint);
-                var region = swept ? sweptRegion : penetrationRegion;
-                var reportsContact = (swept || hasPenetration) &&
-                    ShouldReportContact(probe, region, visual.pinching);
-                if (reportsContact)
-                {
-                    // XR pose is authoritative: never displace the rendered hand.
-                    // ComputePenetration returns the vector that would move the
-                    // hand out of the avatar, so its inverse is the compliant
-                    // push applied to the avatar pose/UMT physics response.
-                    var observationPoint = swept ? contactPoint : center;
-                    var normal = hasPenetration && penetrationRegion == region &&
-                                 penetrationCorrection.sqrMagnitude > .0000001f
-                        ? penetrationCorrection.normalized
-                        : Vector3.zero;
-                    if (interaction.TryGetContactSurface(
-                            observationPoint,
-                            Mathf.Max(.005f, radius),
-                            region,
-                            out var surfacePoint,
-                            out var sampledNormal))
-                    {
-                        observationPoint = surfacePoint;
-                        if (normal.sqrMagnitude <= .0000001f)
-                        {
-                            normal = sampledNormal;
-                        }
-                    }
-                    tracker?.Observe(
-                        region,
-                        observationPoint,
-                        normal,
-                        hasPenetration && penetrationRegion == region
-                            ? penetrationCorrection.magnitude
-                            : 0f,
+                if (EvaluatePhysicalProbe(
+                        sphere,
+                        tracker,
+                        probe,
                         visual.pinching,
                         string.Equals(visual.inputSource, "hand_tracking", StringComparison.Ordinal),
-                        Time.unscaledTime,
-                        contactFactUpdateInterval);
+                        from,
+                        center,
+                        radius,
+                        out var region))
+                {
                     if (lastPhysicalContact != region ||
                         Time.unscaledTime - lastPhysicalContactLogAt >= .75f)
                     {
@@ -293,13 +267,102 @@ namespace QuestMmdPlayer
                         Debug.Log("[HandTracking] Physical contact: " + region + " (continuous sweep).", this);
                     }
                 }
-                else
-                {
-                    tracker?.Clear(Time.unscaledTime);
-                }
                 visual.previousJointPositions[index] = center;
                 visual.previousJointTracked[index] = true;
             }
+        }
+
+        /// <summary>
+        /// Evaluates one authoritative tracked-hand collider against the bound
+        /// avatar without changing the hand pose. Optional XR adapters can use
+        /// the same contact path as the built-in hand provider.
+        /// </summary>
+        public bool EvaluatePhysicalProbe(
+            SphereCollider sphere,
+            TrackedHandContactTracker tracker,
+            TrackedHandContactProbe probe,
+            bool pinching,
+            bool authoritativeTrackedPose,
+            Vector3 from,
+            Vector3 center,
+            float radius,
+            out AvatarContactRegion region)
+        {
+            region = AvatarContactRegion.None;
+            if (interaction == null || sphere == null || tracker == null ||
+                probe == TrackedHandContactProbe.None)
+            {
+                tracker?.Clear(Time.unscaledTime);
+                return false;
+            }
+
+            var hasPenetration = interaction.TryGetPenetrationCorrection(
+                sphere,
+                out var penetrationCorrection,
+                out var penetrationRegion);
+            var swept = interaction.TryGetContactRegionSwept(
+                from,
+                center,
+                Mathf.Max(.005f, radius),
+                out var sweptRegion,
+                out var contactPoint);
+            region = swept ? sweptRegion : penetrationRegion;
+            if ((!swept && !hasPenetration) || !ShouldReportContact(probe, region, pinching))
+            {
+                tracker.Clear(Time.unscaledTime);
+                region = AvatarContactRegion.None;
+                return false;
+            }
+
+            // XR pose is authoritative: never displace the rendered hand.
+            // ComputePenetration returns the vector that would move the hand
+            // out of the avatar, so its inverse becomes the avatar response.
+            var observationPoint = swept ? contactPoint : center;
+            var normal = hasPenetration && penetrationRegion == region &&
+                         penetrationCorrection.sqrMagnitude > .0000001f
+                ? penetrationCorrection.normalized
+                : Vector3.zero;
+            if (interaction.TryGetContactSurface(
+                    observationPoint,
+                    Mathf.Max(.005f, radius),
+                    region,
+                    out var surfacePoint,
+                    out var sampledNormal))
+            {
+                observationPoint = surfacePoint;
+                if (normal.sqrMagnitude <= .0000001f)
+                {
+                    normal = sampledNormal;
+                }
+            }
+            tracker.Observe(
+                region,
+                observationPoint,
+                normal,
+                hasPenetration && penetrationRegion == region
+                    ? penetrationCorrection.magnitude
+                    : 0f,
+                pinching,
+                authoritativeTrackedPose,
+                Time.unscaledTime,
+                contactFactUpdateInterval);
+            return true;
+        }
+
+        /// <summary>Creates a probe lifecycle tracker wired to the aggregate contact stream.</summary>
+        public TrackedHandContactTracker CreateContactTracker(
+            XRNode node,
+            XRHandJointID joint,
+            TrackedHandContactProbe probe)
+        {
+            EnsureContactEventSubscriptions();
+            if (probe == TrackedHandContactProbe.None)
+            {
+                return null;
+            }
+            var tracker = new TrackedHandContactTracker(node, joint, probe);
+            tracker.FactChanged += contactAggregator.Accept;
+            return tracker;
         }
 
         private void HandleContactFact(TrackedHandContactFact fact)
@@ -567,9 +630,10 @@ namespace QuestMmdPlayer
                 visual.relays[index] = relay;
                 if (probe != TrackedHandContactProbe.None)
                 {
-                    var tracker = new TrackedHandContactTracker(visual.node, JointIds[index], probe);
-                    tracker.FactChanged += contactAggregator.Accept;
-                    visual.contactTrackers[index] = tracker;
+                    visual.contactTrackers[index] = CreateContactTracker(
+                        visual.node,
+                        JointIds[index],
+                        probe);
                 }
             }
 
