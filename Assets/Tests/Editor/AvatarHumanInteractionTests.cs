@@ -9,12 +9,14 @@ namespace QuestMmdPlayer.Tests
     {
         private GameObject avatarObject;
         private GameObject serviceObject;
+        private Mesh generatedMesh;
 
         [TearDown]
         public void TearDown()
         {
             if (serviceObject != null) Object.DestroyImmediate(serviceObject);
             if (avatarObject != null) Object.DestroyImmediate(avatarObject);
+            if (generatedMesh != null) Object.DestroyImmediate(generatedMesh);
         }
 
         [Test]
@@ -113,6 +115,56 @@ namespace QuestMmdPlayer.Tests
             Object.DestroyImmediate(renderer);
             Assert.DoesNotThrow(() => interaction.enabled = false);
             Object.DestroyImmediate(mesh);
+        }
+
+        [Test]
+        public void TouchMorphLayerPreservesAndRestoresFreshUpstreamExpression()
+        {
+            avatarObject = new GameObject("LayeredMorphAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var rendererObject = new GameObject("LayeredFaceRenderer");
+            rendererObject.transform.SetParent(avatarObject.transform, false);
+            var renderer = rendererObject.AddComponent<SkinnedMeshRenderer>();
+            generatedMesh = new Mesh
+            {
+                vertices = new[] { Vector3.zero, Vector3.right, Vector3.up },
+                triangles = new[] { 0, 1, 2 }
+            };
+            var delta = new Vector3[3];
+            generatedMesh.AddBlendShapeFrame(
+                "smile",
+                100f,
+                delta,
+                delta,
+                delta);
+            renderer.sharedMesh = generatedMesh;
+
+            serviceObject = new GameObject("LayeredMorphInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            interaction.PlayReaction(HumanInteractionKind.HeadPat, 2f);
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(AvatarHumanInteraction).GetField("fade", flags)
+                ?.SetValue(interaction, 1f);
+            var lateUpdate = typeof(AvatarHumanInteraction).GetMethod("LateUpdate", flags);
+            var restoreMorphs = typeof(AvatarHumanInteraction).GetMethod("RestoreMorphs", flags);
+            Assert.That(lateUpdate, Is.Not.Null);
+            Assert.That(restoreMorphs, Is.Not.Null);
+
+            renderer.SetBlendShapeWeight(0, 40f);
+            lateUpdate.Invoke(interaction, null);
+            Assert.That(renderer.GetBlendShapeWeight(0), Is.EqualTo(76f).Within(.001f));
+
+            renderer.SetBlendShapeWeight(0, 45f);
+            lateUpdate.Invoke(interaction, null);
+            Assert.That(renderer.GetBlendShapeWeight(0), Is.EqualTo(81f).Within(.001f));
+
+            renderer.SetBlendShapeWeight(0, 52f);
+            restoreMorphs.Invoke(interaction, null);
+            Assert.That(renderer.GetBlendShapeWeight(0), Is.EqualTo(52f).Within(.001f));
         }
 
         [Test]

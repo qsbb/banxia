@@ -531,7 +531,28 @@ namespace QuestMmdPlayer
                     await loader.LoadFromFileAsync(targetPath);
                 }
 
+                var catalogDroppedBefore = performance == null
+                    ? 0f
+                    : performance.physicsTotalDroppedSeconds;
+                var catalogStartedAt = Time.realtimeSinceStartup;
                 var actions = await library.RefreshAsync();
+                var catalogElapsedMs = Mathf.Max(
+                    0,
+                    Mathf.RoundToInt(
+                        (Time.realtimeSinceStartup - catalogStartedAt) * 1000f));
+                var catalogDroppedAfter = performance == null
+                    ? catalogDroppedBefore
+                    : performance.physicsTotalDroppedSeconds;
+                Debug.Log(
+                    "[BanxiaQA] vmd_catalog status=ready" +
+                    " elapsed_ms=" + catalogElapsedMs +
+                    " action_count=" + actions.Count +
+                    " physics_drop_delta_s=" + Mathf.Max(
+                        0f,
+                        catalogDroppedAfter - catalogDroppedBefore)
+                        .ToString("F4", CultureInfo.InvariantCulture) +
+                    " headset_worn=" + (performance != null && performance.headsetWorn),
+                    this);
                 var actionSelection = ClampQaIndex(requestedActionIndex, actions.Count);
                 if (actionSelection < 0)
                 {

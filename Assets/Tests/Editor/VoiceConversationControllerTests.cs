@@ -1057,6 +1057,148 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void SpeechVisemeCrossfadeMovesBothVowelsWithoutInstantSwap()
+        {
+            var outgoing = AvatarConversationPresenter.SmoothVisemeInfluence(
+                1f, 0f, .016f, 14f);
+            var incoming = AvatarConversationPresenter.SmoothVisemeInfluence(
+                0f, 1f, .016f, 14f);
+
+            Assert.That(outgoing, Is.GreaterThan(0f).And.LessThan(1f));
+            Assert.That(incoming, Is.GreaterThan(0f).And.LessThan(1f));
+            Assert.That(outgoing + incoming, Is.EqualTo(1f).Within(.001f));
+        }
+
+        [Test]
+        public void ClearedTimelineReleasesLastVowelWithoutJumpingToFallback()
+        {
+            owner = new GameObject("Mouth release test");
+            var avatarObject = new GameObject("Mouth release avatar");
+            avatarObject.transform.SetParent(owner.transform, false);
+            var renderer = CreateMorphRenderer(avatarObject, "あ", "い");
+            renderer.SetBlendShapeWeight(0, 3f);
+            renderer.SetBlendShapeWeight(1, 7f);
+            var avatar = avatarObject.AddComponent<AvatarController>();
+            avatar.Initialize(avatarObject.transform);
+            var presenter = owner.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(avatar, null, null);
+            presenter.SetSpeechTimeline(new[]
+            {
+                new SpeechVisemeCue
+                {
+                    Symbol = "I",
+                    StartMs = 0,
+                    EndMs = 100,
+                    Weight = 1f
+                }
+            });
+            presenter.ClearSpeechTimeline();
+
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var influences = (float[])typeof(AvatarConversationPresenter)
+                .GetField("visemeInfluences", flags)?.GetValue(presenter);
+            Assert.That(influences, Is.Not.Null);
+            influences[1] = 1f;
+            typeof(AvatarConversationPresenter)
+                .GetField("smoothedMouthAmount", flags)?.SetValue(presenter, .8f);
+            typeof(AvatarConversationPresenter)
+                .GetField("mouthWasActive", flags)?.SetValue(presenter, true);
+            var applyMouth = typeof(AvatarConversationPresenter).GetMethod(
+                "ApplyMouth",
+                flags,
+                null,
+                new[] { typeof(float), typeof(float) },
+                null);
+            Assert.That(applyMouth, Is.Not.Null);
+
+            applyMouth.Invoke(presenter, new object[] { 0f, .02f });
+
+            Assert.That(renderer.GetBlendShapeWeight(0), Is.EqualTo(3f).Within(.001f));
+            Assert.That(renderer.GetBlendShapeWeight(1), Is.GreaterThan(7f));
+
+            applyMouth.Invoke(presenter, new object[] { 0f, 1f });
+
+            Assert.That(renderer.GetBlendShapeWeight(0), Is.EqualTo(3f).Within(.001f));
+            Assert.That(renderer.GetBlendShapeWeight(1), Is.EqualTo(7f).Within(.001f));
+            Assert.That(influences[0], Is.Zero);
+            Assert.That(influences[1], Is.Zero);
+        }
+
+        [Test]
+        public void FreshVmdMorphSurvivesSpeechReleaseAfterActionSwitch()
+        {
+            owner = new GameObject("VMD mouth action switch test");
+            var avatarObject = new GameObject("VMD mouth avatar");
+            avatarObject.transform.SetParent(owner.transform, false);
+            var renderer = CreateMorphRenderer(avatarObject, "あ");
+            renderer.SetBlendShapeWeight(0, 5f);
+            var avatar = avatarObject.AddComponent<AvatarController>();
+            avatar.Initialize(avatarObject.transform);
+            var presenter = owner.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(avatar, null, null);
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var applyMouth = typeof(AvatarConversationPresenter).GetMethod(
+                "ApplyMouth",
+                flags,
+                null,
+                new[] { typeof(float), typeof(float) },
+                null);
+            Assert.That(applyMouth, Is.Not.Null);
+
+            renderer.SetBlendShapeWeight(0, 42f);
+            applyMouth.Invoke(presenter, new object[] { 1f, .1f });
+            Assert.That(renderer.GetBlendShapeWeight(0), Is.GreaterThan(42f));
+
+            renderer.SetBlendShapeWeight(0, 55f);
+            applyMouth.Invoke(presenter, new object[] { 0f, 1f });
+
+            Assert.That(renderer.GetBlendShapeWeight(0), Is.EqualTo(55f).Within(.001f));
+        }
+
+        [Test]
+        public void ModelRebindRestoresOldMouthAndClearsSpeechBlendState()
+        {
+            owner = new GameObject("Mouth model rebind test");
+            var firstObject = new GameObject("First mouth avatar");
+            var secondObject = new GameObject("Second mouth avatar");
+            firstObject.transform.SetParent(owner.transform, false);
+            secondObject.transform.SetParent(owner.transform, false);
+            var firstRenderer = CreateMorphRenderer(firstObject, "あ");
+            var secondRenderer = secondObject.AddComponent<SkinnedMeshRenderer>();
+            secondRenderer.sharedMesh = generatedMesh;
+            firstRenderer.SetBlendShapeWeight(0, 12f);
+            secondRenderer.SetBlendShapeWeight(0, 4f);
+            var firstAvatar = firstObject.AddComponent<AvatarController>();
+            var secondAvatar = secondObject.AddComponent<AvatarController>();
+            firstAvatar.Initialize(firstObject.transform);
+            secondAvatar.Initialize(secondObject.transform);
+            var presenter = owner.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(firstAvatar, null, null);
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var applyMouth = typeof(AvatarConversationPresenter).GetMethod(
+                "ApplyMouth",
+                flags,
+                null,
+                new[] { typeof(float), typeof(float) },
+                null);
+            Assert.That(applyMouth, Is.Not.Null);
+            applyMouth.Invoke(presenter, new object[] { 1f, .1f });
+            Assert.That(firstRenderer.GetBlendShapeWeight(0), Is.GreaterThan(12f));
+
+            presenter.Bind(secondAvatar, null, null);
+
+            Assert.That(firstRenderer.GetBlendShapeWeight(0), Is.EqualTo(12f).Within(.001f));
+            Assert.That(secondRenderer.GetBlendShapeWeight(0), Is.EqualTo(4f).Within(.001f));
+            Assert.That(presenter.SmoothedMouthAmount, Is.Zero);
+            var influences = (float[])typeof(AvatarConversationPresenter)
+                .GetField("visemeInfluences", flags)?.GetValue(presenter);
+            Assert.That(influences, Is.All.Zero);
+        }
+
+        [Test]
         public void SpeechAndExpressionLayersPreserveFreshAuthoredMorphWeights()
         {
             var authored = AvatarConversationPresenter.ResolveMorphLayerBaseWeight(
@@ -1094,6 +1236,30 @@ namespace QuestMmdPlayer.Tests
                     true,
                     0f),
                 Is.EqualTo(90f).Within(.001f));
+        }
+
+        private SkinnedMeshRenderer CreateMorphRenderer(
+            GameObject target,
+            params string[] morphNames)
+        {
+            generatedMesh = new Mesh
+            {
+                vertices = new[] { Vector3.zero, Vector3.right, Vector3.up },
+                triangles = new[] { 0, 1, 2 }
+            };
+            var delta = new Vector3[3];
+            foreach (var morphName in morphNames)
+            {
+                generatedMesh.AddBlendShapeFrame(
+                    morphName,
+                    100f,
+                    delta,
+                    delta,
+                    delta);
+            }
+            var renderer = target.AddComponent<SkinnedMeshRenderer>();
+            renderer.sharedMesh = generatedMesh;
+            return renderer;
         }
 
         private sealed class RecordingVoiceTransport : MonoBehaviour, IConversationTransport

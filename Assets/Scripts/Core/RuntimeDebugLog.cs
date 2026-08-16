@@ -429,6 +429,10 @@ namespace QuestMmdPlayer
                 case "configuration_missing": return "尚未绑定后端";
                 case "configuration_invalid": return "后端绑定配置无效";
                 case "vmd_request": return "开始准备导入动作";
+                case "vmd_catalog_scan": return "正在后台扫描动作目录";
+                case "vmd_catalog_unchanged": return "动作目录未变化";
+                case "vmd_catalog_ready": return "动作目录扫描完成";
+                case "vmd_catalog_failed": return "动作目录扫描失败";
                 case "vmd_cache_hit": return "命中动作内存缓存";
                 case "vmd_read_completed": return "动作文件读取完成";
                 case "vmd_motion_converted": return "身体动作转换完成";

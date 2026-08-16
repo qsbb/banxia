@@ -108,7 +108,7 @@ adb shell am start -n com.lingxi.banxia/com.unity3d.player.UnityPlayerActivity -
 
 Use `logcat` to collect `[BanxiaQA] vmd_pass` entries. Index values are clamped to the current on-device catalog. This command never accepts a filesystem path and does not expose pairing credentials.
 
-跨重启缓存验收需连续运行上面的完整命令两次。第一次 `cold` 应显示 `disk_cache=False` 并完成曲线写入；应用退出后第二次 `cold` 应显示 `disk_cache=True`、`motion_ms=-1`，且 `disk_read_ms + disk_rebuild_ms` 明显小于第一次转换耗时。两次都必须保持 `physics_drop_delta_s=0.0000`，损坏或删除 `VmdActionCache/v1` 后应安全回退首次转换。
+跨重启缓存验收需连续运行上面的完整命令两次。每轮先检查 `vmd_catalog`：目录扫描应给出 `elapsed_ms/action_count/physics_drop_delta_s`，且扫描期间物理丢弃应为零。第一次 `cold` 应显示 `disk_cache=False` 并完成曲线写入；应用退出后第二次 `cold` 应显示 `disk_cache=True`、`motion_ms=-1`，且 `disk_read_ms + disk_rebuild_ms` 明显小于第一次转换耗时。两次都必须保持 `physics_drop_delta_s=0.0000`，损坏或删除 `VmdActionCache/v1` 后应安全回退首次转换。
 
 # Device Performance QA
 

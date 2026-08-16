@@ -422,6 +422,18 @@ namespace QuestMmdPlayer
             internal string motionPath;
             internal string facialPath;
             internal string cacheKey;
+            internal VmdActionInfo info;
+        }
+
+        private sealed class CatalogScanResult
+        {
+            internal bool unchanged;
+            internal bool stableSnapshot;
+            internal string fingerprint = string.Empty;
+            internal VmdActionInfo[] actions = Array.Empty<VmdActionInfo>();
+            internal Dictionary<string, ActionSource> sources =
+                new Dictionary<string, ActionSource>(StringComparer.OrdinalIgnoreCase);
+            internal string[] warnings = Array.Empty<string>();
         }
 
         private sealed class PreparedAction
@@ -501,6 +513,8 @@ namespace QuestMmdPlayer
         public float LastPrepareFrameBudgetMilliseconds { get; private set; } = -1f;
         public bool LastPrepareSuspendedLivePhysics { get; private set; }
         public bool LastPrepareUsedDiskCache { get; private set; }
+        public int LastCatalogRefreshMilliseconds { get; private set; } = -1;
+        public int LastCatalogActionCount { get; private set; }
         public bool IsPrepared(string actionId) => !string.IsNullOrEmpty(actionId) && preparedActions.ContainsKey(actionId);
 
         private sealed class BoneBinding
@@ -524,121 +538,61 @@ namespace QuestMmdPlayer
 
         public async Task<IReadOnlyList<VmdActionInfo>> RefreshAsync()
         {
+            var refreshStartedAt = Time.realtimeSinceStartup;
+            diagnostics ??= GetComponent<RuntimeDebugLog>();
+            diagnostics?.RecordStage("avatar_action", "processing", "vmd_catalog_scan");
             await refreshGate.WaitAsync();
             try
             {
-                var discovered = new List<VmdActionInfo>();
-                var discoveredPaths = new Dictionary<string, ActionSource>(StringComparer.OrdinalIgnoreCase);
+                CatalogScanResult scan;
                 try
                 {
-                    Directory.CreateDirectory(MotionsDirectory);
-                    var fingerprint = BuildActionDirectoryFingerprint(MotionsDirectory);
-                    if (hasRefreshSnapshot && string.Equals(
-                            fingerprint,
-                            actionDirectoryFingerprint,
-                            StringComparison.Ordinal))
-                    {
-                        return actions;
-                    }
-                    var files = Directory.GetFiles(MotionsDirectory, "*", SearchOption.TopDirectoryOnly)
-                        .Where(path => string.Equals(Path.GetExtension(path), ".vmd", StringComparison.OrdinalIgnoreCase))
-                        .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                        .ToArray();
-                    foreach (var file in files)
-                    {
-                        await Task.Yield();
-                        var actionId = Path.GetFileNameWithoutExtension(file);
-                        if (!VmdActionFilePolicy.TryResolveActionPath(MotionsDirectory, actionId, out var expectedPath) ||
-                            !string.Equals(Path.GetFullPath(file), expectedPath, StringComparison.OrdinalIgnoreCase) ||
-                            discoveredPaths.ContainsKey(actionId))
-                        {
-                            ReportFailure("Ignored unsafe or duplicate VMD action: " + Path.GetFileName(file));
-                            continue;
-                        }
-
-                        try
-                        {
-                            var info = VmdActionFilePolicy.Inspect(file, actionId, limits);
-                            discovered.Add(info);
-                            discoveredPaths.Add(info.Id, new ActionSource
-                            {
-                                motionPath = expectedPath,
-                                cacheKey = BuildSourceCacheKey(expectedPath, string.Empty)
-                            });
-                        }
-                        catch (Exception exception) when (
-                            exception is IOException ||
-                            exception is UnauthorizedAccessException ||
-                            exception is InvalidDataException ||
-                            exception is ArgumentException)
-                        {
-                            ReportFailure("VMD action rejected: " + Path.GetFileName(file) + " - " + exception.Message);
-                        }
-                    }
-
-                    var packages = Directory.GetDirectories(MotionsDirectory, "*", SearchOption.TopDirectoryOnly)
-                        .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                        .ToArray();
-                    foreach (var package in packages)
-                    {
-                        await Task.Yield();
-                        var actionId = Path.GetFileName(package);
-                        if (!VmdActionFilePolicy.TryResolvePackagePaths(MotionsDirectory, actionId, out var motionPath, out var facialPath) ||
-                            discoveredPaths.ContainsKey(actionId))
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            var motionInfo = VmdActionFilePolicy.Inspect(motionPath, actionId, limits);
-                            var info = motionInfo;
-                            if (!string.IsNullOrEmpty(facialPath))
-                            {
-                                var facialInfo = VmdActionFilePolicy.Inspect(facialPath, actionId, limits);
-                                var totalKeyframes = checked(motionInfo.KeyframeCount + facialInfo.KeyframeCount);
-                                if (totalKeyframes > limits.maxKeyframeCount)
-                                {
-                                    throw new InvalidDataException("VMD action package keyframe count exceeds the configured limit.");
-                                }
-                                info = new VmdActionInfo(
-                                    actionId,
-                                    checked(motionInfo.ByteLength + facialInfo.ByteLength),
-                                    totalKeyframes,
-                                    Math.Max(motionInfo.LastFrame, facialInfo.LastFrame),
-                                    Math.Max(motionInfo.DurationSeconds, facialInfo.DurationSeconds),
-                                    true);
-                            }
-                            discovered.Add(info);
-                            discoveredPaths.Add(info.Id, new ActionSource
-                            {
-                                motionPath = motionPath,
-                                facialPath = facialPath,
-                                cacheKey = BuildSourceCacheKey(motionPath, facialPath)
-                            });
-                        }
-                        catch (Exception exception) when (
-                            exception is IOException ||
-                            exception is UnauthorizedAccessException ||
-                            exception is InvalidDataException ||
-                            exception is ArgumentException ||
-                            exception is OverflowException)
-                        {
-                            ReportFailure("VMD action package rejected: " + actionId + " - " + exception.Message);
-                        }
-                    }
+                    var directory = MotionsDirectory;
+                    var scanLimits = CopyLimits(limits);
+                    var previousFingerprint = actionDirectoryFingerprint;
+                    var previousSnapshotAvailable = hasRefreshSnapshot;
+                    scan = await Task.Run(() => ScanCatalog(
+                        directory,
+                        scanLimits,
+                        previousFingerprint,
+                        previousSnapshotAvailable));
                 }
                 catch (Exception exception) when (
                     exception is IOException ||
                     exception is UnauthorizedAccessException ||
-                    exception is ArgumentException)
+                    exception is ArgumentException ||
+                    exception is InvalidDataException ||
+                    exception is OverflowException)
                 {
+                    LastCatalogRefreshMilliseconds = ElapsedMilliseconds(refreshStartedAt);
                     ReportFailure("Unable to refresh VMD action directory: " + exception.Message);
+                    diagnostics?.RecordStage(
+                        "avatar_action",
+                        "failed",
+                        "vmd_catalog_failed",
+                        elapsedMs: LastCatalogRefreshMilliseconds);
+                    return actions;
                 }
 
+                if (scan.unchanged)
+                {
+                    LastCatalogRefreshMilliseconds = ElapsedMilliseconds(refreshStartedAt);
+                    LastCatalogActionCount = actions.Length;
+                    diagnostics?.RecordStage(
+                        "avatar_action",
+                        "completed",
+                        "vmd_catalog_unchanged",
+                        elapsedMs: LastCatalogRefreshMilliseconds,
+                        eventCount: LastCatalogActionCount);
+                    return actions;
+                }
+                foreach (var warning in scan.warnings)
+                {
+                    ReportFailure(warning);
+                }
                 actionPaths.Clear();
                 var stalePrepared = preparedActions
-                    .Where(pair => !discoveredPaths.TryGetValue(pair.Key, out var source) ||
+                    .Where(pair => !scan.sources.TryGetValue(pair.Key, out var source) ||
                         !string.Equals(pair.Value.sourceCacheKey, source.cacheKey, StringComparison.Ordinal))
                     .Select(pair => pair.Key)
                     .ToArray();
@@ -646,24 +600,21 @@ namespace QuestMmdPlayer
                 {
                     preparedActions.Remove(actionId);
                 }
-                foreach (var pair in discoveredPaths)
+                foreach (var pair in scan.sources)
                 {
                     actionPaths.Add(pair.Key, pair.Value);
                 }
-                actions = discovered.ToArray();
-                try
-                {
-                    actionDirectoryFingerprint = BuildActionDirectoryFingerprint(MotionsDirectory);
-                    hasRefreshSnapshot = true;
-                }
-                catch (Exception exception) when (
-                    exception is IOException ||
-                    exception is UnauthorizedAccessException ||
-                    exception is ArgumentException)
-                {
-                    hasRefreshSnapshot = false;
-                    ReportFailure("Unable to fingerprint VMD action directory: " + exception.Message);
-                }
+                actions = scan.actions;
+                actionDirectoryFingerprint = scan.fingerprint;
+                hasRefreshSnapshot = scan.stableSnapshot;
+                LastCatalogRefreshMilliseconds = ElapsedMilliseconds(refreshStartedAt);
+                LastCatalogActionCount = actions.Length;
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "completed",
+                    "vmd_catalog_ready",
+                    elapsedMs: LastCatalogRefreshMilliseconds,
+                    eventCount: LastCatalogActionCount);
                 ActionsChanged?.Invoke();
                 return actions;
             }
@@ -671,6 +622,175 @@ namespace QuestMmdPlayer
             {
                 refreshGate.Release();
             }
+        }
+
+        private static CatalogScanResult ScanCatalog(
+            string directory,
+            VmdActionLimits scanLimits,
+            string previousFingerprint,
+            bool previousSnapshotAvailable)
+        {
+            Directory.CreateDirectory(directory);
+            var initialFingerprint = BuildActionDirectoryFingerprint(directory);
+            if (previousSnapshotAvailable && string.Equals(
+                    initialFingerprint,
+                    previousFingerprint,
+                    StringComparison.Ordinal))
+            {
+                return new CatalogScanResult
+                {
+                    unchanged = true,
+                    stableSnapshot = true,
+                    fingerprint = initialFingerprint
+                };
+            }
+
+            var discovered = new List<VmdActionInfo>();
+            var discoveredPaths = new Dictionary<string, ActionSource>(
+                StringComparer.OrdinalIgnoreCase);
+            var warnings = new List<string>();
+            var files = Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                .Where(path => string.Equals(
+                    Path.GetExtension(path),
+                    ".vmd",
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            foreach (var file in files)
+            {
+                var actionId = Path.GetFileNameWithoutExtension(file);
+                if (!VmdActionFilePolicy.TryResolveActionPath(
+                        directory,
+                        actionId,
+                        out var expectedPath) ||
+                    !string.Equals(
+                        Path.GetFullPath(file),
+                        expectedPath,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    discoveredPaths.ContainsKey(actionId))
+                {
+                    warnings.Add("Ignored unsafe or duplicate VMD action: " + Path.GetFileName(file));
+                    continue;
+                }
+
+                try
+                {
+                    var info = VmdActionFilePolicy.Inspect(file, actionId, scanLimits);
+                    discovered.Add(info);
+                    discoveredPaths.Add(info.Id, new ActionSource
+                    {
+                        motionPath = expectedPath,
+                        cacheKey = BuildSourceCacheKey(expectedPath, string.Empty),
+                        info = info
+                    });
+                }
+                catch (Exception exception) when (
+                    exception is IOException ||
+                    exception is UnauthorizedAccessException ||
+                    exception is InvalidDataException ||
+                    exception is ArgumentException)
+                {
+                    warnings.Add(
+                        "VMD action rejected: " + Path.GetFileName(file) + " - " +
+                        exception.Message);
+                }
+            }
+
+            var packages = Directory.GetDirectories(
+                    directory,
+                    "*",
+                    SearchOption.TopDirectoryOnly)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            foreach (var package in packages)
+            {
+                var actionId = Path.GetFileName(package);
+                if (!VmdActionFilePolicy.TryResolvePackagePaths(
+                        directory,
+                        actionId,
+                        out var motionPath,
+                        out var facialPath) ||
+                    discoveredPaths.ContainsKey(actionId))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var motionInfo = VmdActionFilePolicy.Inspect(
+                        motionPath,
+                        actionId,
+                        scanLimits);
+                    var info = motionInfo;
+                    if (!string.IsNullOrEmpty(facialPath))
+                    {
+                        var facialInfo = VmdActionFilePolicy.Inspect(
+                            facialPath,
+                            actionId,
+                            scanLimits);
+                        var totalKeyframes = checked(
+                            motionInfo.KeyframeCount + facialInfo.KeyframeCount);
+                        if (totalKeyframes > scanLimits.maxKeyframeCount)
+                        {
+                            throw new InvalidDataException(
+                                "VMD action package keyframe count exceeds the configured limit.");
+                        }
+                        info = new VmdActionInfo(
+                            actionId,
+                            checked(motionInfo.ByteLength + facialInfo.ByteLength),
+                            totalKeyframes,
+                            Math.Max(motionInfo.LastFrame, facialInfo.LastFrame),
+                            Math.Max(
+                                motionInfo.DurationSeconds,
+                                facialInfo.DurationSeconds),
+                            true);
+                    }
+                    discovered.Add(info);
+                    discoveredPaths.Add(info.Id, new ActionSource
+                    {
+                        motionPath = motionPath,
+                        facialPath = facialPath,
+                        cacheKey = BuildSourceCacheKey(motionPath, facialPath),
+                        info = info
+                    });
+                }
+                catch (Exception exception) when (
+                    exception is IOException ||
+                    exception is UnauthorizedAccessException ||
+                    exception is InvalidDataException ||
+                    exception is ArgumentException ||
+                    exception is OverflowException)
+                {
+                    warnings.Add(
+                        "VMD action package rejected: " + actionId + " - " +
+                        exception.Message);
+                }
+            }
+
+            var finalFingerprint = BuildActionDirectoryFingerprint(directory);
+            return new CatalogScanResult
+            {
+                stableSnapshot = string.Equals(
+                    initialFingerprint,
+                    finalFingerprint,
+                    StringComparison.Ordinal),
+                fingerprint = finalFingerprint,
+                actions = discovered.ToArray(),
+                sources = discoveredPaths,
+                warnings = warnings.ToArray()
+            };
+        }
+
+        private static VmdActionLimits CopyLimits(VmdActionLimits source)
+        {
+            source ??= new VmdActionLimits();
+            return new VmdActionLimits
+            {
+                maxFileBytes = source.maxFileBytes,
+                maxKeyframeCount = source.maxKeyframeCount,
+                maxDurationSeconds = source.maxDurationSeconds,
+                frameRate = source.frameRate
+            };
         }
 
         private static string BuildActionDirectoryFingerprint(string directory)
@@ -792,6 +912,7 @@ namespace QuestMmdPlayer
                 if (!string.Equals(source.cacheKey, currentSourceCacheKey, StringComparison.Ordinal))
                 {
                     source.cacheKey = currentSourceCacheKey;
+                    source.info = null;
                     preparedActions.Remove(actionId);
                 }
                 if (preparedActions.TryGetValue(actionId, out var prepared) &&
@@ -810,25 +931,6 @@ namespace QuestMmdPlayer
                 {
                     CacheMissCount++;
                     preparedActions.Remove(actionId);
-                    info = VmdActionFilePolicy.Inspect(source.motionPath, actionId, limits);
-                    if (!string.IsNullOrEmpty(source.facialPath))
-                    {
-                        var facialInfo = VmdActionFilePolicy.Inspect(source.facialPath, actionId, limits);
-                        var totalKeyframes = checked(info.KeyframeCount + facialInfo.KeyframeCount);
-                        if (totalKeyframes > limits.maxKeyframeCount)
-                        {
-                            throw new InvalidDataException("VMD action keyframe count exceeds the configured limit.");
-                        }
-                        info = new VmdActionInfo(
-                            actionId,
-                            checked(info.ByteLength + facialInfo.ByteLength),
-                            totalKeyframes,
-                            Math.Max(info.LastFrame, facialInfo.LastFrame),
-                            Math.Max(info.DurationSeconds, facialInfo.DurationSeconds),
-                            true);
-                    }
-
-                    ProgressChanged?.Invoke("正在读取 " + info.DisplayName);
                     LastPrepareFrameBudgetMilliseconds = SelectPreparationFrameBudget(
                         frameBudgetMilliseconds,
                         requestModel == null || requestModel.rigidBodies == null
@@ -842,6 +944,40 @@ namespace QuestMmdPlayer
                     preparationSuspendedLivePhysics = SuspendLivePhysicsForPreparation(
                         requestTransformManager);
                     LastPrepareSuspendedLivePhysics = preparationSuspendedLivePhysics;
+                    info = source.info;
+                    if (info == null)
+                    {
+                        info = VmdActionFilePolicy.Inspect(
+                            source.motionPath,
+                            actionId,
+                            limits);
+                        if (!string.IsNullOrEmpty(source.facialPath))
+                        {
+                            var facialInfo = VmdActionFilePolicy.Inspect(
+                                source.facialPath,
+                                actionId,
+                                limits);
+                            var totalKeyframes = checked(
+                                info.KeyframeCount + facialInfo.KeyframeCount);
+                            if (totalKeyframes > limits.maxKeyframeCount)
+                            {
+                                throw new InvalidDataException(
+                                    "VMD action keyframe count exceeds the configured limit.");
+                            }
+                            info = new VmdActionInfo(
+                                actionId,
+                                checked(info.ByteLength + facialInfo.ByteLength),
+                                totalKeyframes,
+                                Math.Max(info.LastFrame, facialInfo.LastFrame),
+                                Math.Max(
+                                    info.DurationSeconds,
+                                    facialInfo.DurationSeconds),
+                                true);
+                        }
+                        source.info = info;
+                    }
+
+                    ProgressChanged?.Invoke("正在读取 " + info.DisplayName);
                     var options = CreateMotionConversionOptions(
                         limits.frameRate,
                         physicsWarmUpDuration);

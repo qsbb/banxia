@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -50,6 +51,57 @@ namespace QuestMmdPlayer.Tests
             Assert.That(info.KeyframeCount, Is.EqualTo(3));
             Assert.That(info.LastFrame, Is.EqualTo(90));
             Assert.That(info.DurationSeconds, Is.EqualTo(3f).Within(.0001f));
+        }
+
+        [Test]
+        public void CatalogScanReturnsValidatedMetadataAndStableFingerprint()
+        {
+            var path = Path.Combine(directory, "greeting.vmd");
+            WriteVmd(path, new uint[] { 0, 90 }, new uint[] { 30 });
+            var scan = typeof(VmdActionLibrary).GetMethod(
+                "ScanCatalog",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(scan, Is.Not.Null);
+
+            var first = scan.Invoke(null, new object[]
+            {
+                directory,
+                new VmdActionLimits(),
+                string.Empty,
+                false
+            });
+            Assert.That(first, Is.Not.Null);
+            var resultType = first.GetType();
+            var actions = (VmdActionInfo[])resultType.GetField(
+                "actions",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(first);
+            var sources = (IDictionary)resultType.GetField(
+                "sources",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(first);
+            var fingerprint = (string)resultType.GetField(
+                "fingerprint",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(first);
+
+            Assert.That(actions, Has.Length.EqualTo(1));
+            Assert.That(actions[0].Id, Is.EqualTo("greeting"));
+            Assert.That(sources.Contains("greeting"), Is.True);
+            var source = sources["greeting"];
+            Assert.That(source.GetType().GetField(
+                "info",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(source),
+                Is.SameAs(actions[0]));
+
+            var second = scan.Invoke(null, new object[]
+            {
+                directory,
+                new VmdActionLimits(),
+                fingerprint,
+                true
+            });
+            Assert.That((bool)resultType.GetField(
+                "unchanged",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(second),
+                Is.True);
         }
 
         [Test]

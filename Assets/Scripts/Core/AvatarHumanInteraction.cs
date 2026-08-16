@@ -241,6 +241,9 @@ namespace QuestMmdPlayer
             public int index;
             public int kind;
             public float baseWeight;
+            public float lastContribution;
+            public float lastCompositeWeight;
+            public bool hasComposite;
         }
 
         void Awake()
@@ -875,7 +878,29 @@ namespace QuestMmdPlayer
                     kind == HumanInteractionKind.HeadPat ? (morph.kind == 0 ? 36f : morph.kind == 1 ? 12f : morph.kind == 3 ? 38f : 0f) :
                     kind == HumanInteractionKind.CheekPinch ? (morph.kind == 1 ? 45f : morph.kind == 2 ? 14f : morph.kind == 3 ? 16f : 0f) :
                     kind == HumanInteractionKind.BodyTouch && trackedContactRegion == AvatarContactRegion.Face && morph.kind == 1 ? 8f : 0f;
-                morph.renderer.SetBlendShapeWeight(morph.index, Mathf.Clamp(morph.baseWeight + add * amount, 0f, 100f));
+                if (morph.renderer == null)
+                {
+                    continue;
+                }
+                var contribution = Mathf.Max(0f, add * amount);
+                var current = morph.renderer.GetBlendShapeWeight(morph.index);
+                var authored = AvatarConversationPresenter.ResolveMorphLayerBaseWeight(
+                    current,
+                    morph.lastCompositeWeight,
+                    morph.lastContribution,
+                    morph.hasComposite,
+                    morph.baseWeight);
+                var composite = AvatarConversationPresenter.ComposeMorphLayerWeight(
+                    authored,
+                    contribution);
+                if (contribution > .001f || morph.hasComposite)
+                {
+                    morph.renderer.SetBlendShapeWeight(morph.index, composite);
+                }
+                morph.lastContribution = Mathf.Max(0f, composite - authored);
+                morph.lastCompositeWeight = composite;
+                morph.hasComposite = contribution > .001f;
+                morphs[i] = morph;
             }
         }
 
@@ -890,7 +915,21 @@ namespace QuestMmdPlayer
                 {
                     continue;
                 }
-                morph.renderer.SetBlendShapeWeight(morph.index, morph.baseWeight);
+                var current = morph.renderer.GetBlendShapeWeight(morph.index);
+                var authored = AvatarConversationPresenter.ResolveMorphLayerBaseWeight(
+                    current,
+                    morph.lastCompositeWeight,
+                    morph.lastContribution,
+                    morph.hasComposite,
+                    morph.baseWeight);
+                if (morph.hasComposite)
+                {
+                    morph.renderer.SetBlendShapeWeight(morph.index, authored);
+                }
+                morph.lastContribution = 0f;
+                morph.lastCompositeWeight = 0f;
+                morph.hasComposite = false;
+                morphs[i] = morph;
             }
         }
         void UnlockTouch() { if (touch != null) touch.SetSemanticInteractionLock(false); }

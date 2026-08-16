@@ -73,6 +73,8 @@ namespace QuestMmdPlayer
         private float nextParsedCacheTrimAt;
         private bool restoreStarted;
         private int loadMetricsStartFrame = int.MaxValue;
+        private MMDPhysicsManager modelLoadSuspendedPhysics;
+        private bool modelLoadPreviousSimulationSuspended;
 
         private sealed class ParsedModelCacheEntry
         {
@@ -814,6 +816,7 @@ namespace QuestMmdPlayer
                 " bytes=" + new FileInfo(pmxPath).Length +
                 " textureRoot=" + (Directory.Exists(resolvedTextureRoot) ? "ready" : "missing"));
             NotifyProgress("Reading PMX");
+            SuspendCurrentModelPhysicsForLoad();
 
             PMXImportResult importedResult = null;
             GameObject importedAvatarHost = null;
@@ -842,6 +845,7 @@ namespace QuestMmdPlayer
                 currentAvatar = avatar;
                 CurrentModelPath = pmxPath;
                 CurrentModelContentSha256 = importedArtifacts.contentSha256;
+                modelRoot.SetActive(true);
                 RememberSelectedModel(pmxPath);
                 importedResult = null;
                 importedAvatarHost = null;
@@ -912,6 +916,7 @@ namespace QuestMmdPlayer
                 {
                     IsLoading = false;
                     loadMetricsStartFrame = int.MaxValue;
+                    RestoreCurrentModelPhysicsAfterLoad();
                 }
                 if (ReferenceEquals(loadCancellation, currentCancellation))
                 {
@@ -993,6 +998,7 @@ namespace QuestMmdPlayer
                 // UMT silently falls back to CPU SDEF skinning for every SDEF
                 // renderer, which is especially expensive on joint-heavy models.
                 umtResources = ResolveRuntimeUmtResources(),
+                buildRootInactive = true,
                 applyRenames = false,
                 createAvatar = false,
                 timingCallback = (stage, elapsed) => Debug.Log(
@@ -1025,6 +1031,43 @@ namespace QuestMmdPlayer
                 result = result,
                 contentSha256 = contentSha256
             };
+        }
+
+        private void SuspendCurrentModelPhysicsForLoad()
+        {
+            var manager = currentResult == null
+                ? null
+                : currentResult.mmdTransformResult.transformManager?.physicsManager;
+            if (manager == null)
+            {
+                return;
+            }
+            if (!ReferenceEquals(modelLoadSuspendedPhysics, manager))
+            {
+                RestoreCurrentModelPhysicsAfterLoad();
+                modelLoadSuspendedPhysics = manager;
+                modelLoadPreviousSimulationSuspended = manager.simulationSuspended;
+            }
+            manager.SetSimulationSuspended(true);
+        }
+
+        private void RestoreCurrentModelPhysicsAfterLoad()
+        {
+            var manager = modelLoadSuspendedPhysics;
+            modelLoadSuspendedPhysics = null;
+            var previous = modelLoadPreviousSimulationSuspended;
+            modelLoadPreviousSimulationSuspended = false;
+            if (manager == null)
+            {
+                return;
+            }
+            var currentManager = currentResult == null
+                ? null
+                : currentResult.mmdTransformResult.transformManager?.physicsManager;
+            if (ReferenceEquals(manager, currentManager))
+            {
+                manager.SetSimulationSuspended(previous);
+            }
         }
 
         private UMTResources ResolveRuntimeUmtResources()

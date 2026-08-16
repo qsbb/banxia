@@ -157,6 +157,10 @@ namespace UMT
 
             string modelName = PMXUtilities.GetModelName(model, options);
             result.root = new GameObject(modelName);
+            if (options.buildRootInactive)
+            {
+                result.root.SetActive(false);
+            }
             if (options.parent != null)
             {
                 result.root.transform.SetParent(options.parent, false);
@@ -276,6 +280,10 @@ namespace UMT
                 cancellationToken.ThrowIfCancellationRequested();
                 string modelName = PMXUtilities.GetModelName(model, options);
                 result.root = new GameObject(modelName);
+                if (options.buildRootInactive)
+                {
+                    result.root.SetActive(false);
+                }
                 if (options.parent != null)
                 {
                     result.root.transform.SetParent(options.parent, false);

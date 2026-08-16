@@ -17,6 +17,8 @@ namespace UMT
         public string textureBaseDirectory;
         /// <summary>Optional parent transform for the generated root object.</summary>
         public Transform parent;
+        /// <summary>When true, keeps the generated root inactive until the caller commits the completed import.</summary>
+        public bool buildRootInactive;
         /// <summary>When true, applies PMX renames before building objects and metadata.</summary>
         public bool applyRenames = true;
         /// <summary>UMT resources providing rename lists, romanization dictionaries, and avatar mappings.</summary>

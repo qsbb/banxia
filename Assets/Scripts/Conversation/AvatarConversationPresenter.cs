@@ -84,9 +84,11 @@ namespace QuestMmdPlayer
         private SpeechVisemeCue[] speechTimeline = Array.Empty<SpeechVisemeCue>();
         private bool speechTimelineMatchesAvatar;
         private readonly float[] visemeInfluences = new float[5];
+        private readonly float[] targetVisemeInfluences = new float[5];
         [SerializeField, Range(1f, 12f)] private float expressionBlendSpeed = 6f;
         [SerializeField, Range(1f, 24f)] private float mouthAttackSpeed = 11f;
         [SerializeField, Range(1f, 24f)] private float mouthReleaseSpeed = 7f;
+        [SerializeField, Range(1f, 30f)] private float visemeCrossfadeSpeed = 14f;
 
         public int MatchedVisemeCount => visemes.Count;
         public float LastAudibleRms => lastAudibleRms;
@@ -153,6 +155,7 @@ namespace QuestMmdPlayer
             lastTimelinePositionMs = 0f;
             lastTimelinePeak = 0f;
             fallbackVisemeGroup = -1;
+            ResetVisemeInfluences();
             ClearSpeechTimeline();
             behavior.Reset(Time.unscaledTime, UnityEngine.Random.value);
 
@@ -1124,6 +1127,11 @@ namespace QuestMmdPlayer
 
         private void ApplyMouth(float rms)
         {
+            ApplyMouth(rms, Time.unscaledDeltaTime);
+        }
+
+        private void ApplyMouth(float rms, float deltaTime)
+        {
             lastAudibleRms = Mathf.Max(0f, rms);
             if (visemes.Count == 0 && jaw == null)
             {
@@ -1137,7 +1145,7 @@ namespace QuestMmdPlayer
             var amount = SmoothMouthAmount(
                 smoothedMouthAmount,
                 targetAmount,
-                Time.unscaledDeltaTime,
+                deltaTime,
                 mouthAttackSpeed,
                 mouthReleaseSpeed);
             smoothedMouthAmount = amount;
@@ -1147,7 +1155,14 @@ namespace QuestMmdPlayer
                 ? audioPlayer.AudiblePlaybackSeconds * 1000f
                 : 0f;
             var timelinePeak = useTimeline ? TimelinePeak(timelinePositionMs) : 1f;
-            var visibleAmount = amount * timelinePeak;
+            var totalInfluence = visemes.Count == 0
+                ? 1f
+                : BuildVisemeInfluences(
+                    useTimeline,
+                    timelinePositionMs,
+                    targetAmount <= .001f,
+                    deltaTime);
+            var visibleAmount = amount * Mathf.Clamp01(totalInfluence);
             lastTimelinePositionMs = timelinePositionMs;
             lastTimelinePeak = timelinePeak;
             lastVisibleMouthAmount = visibleAmount;
@@ -1159,11 +1174,14 @@ namespace QuestMmdPlayer
                     RestoreJaw();
                     mouthWasActive = false;
                 }
+                if (amount <= .001f)
+                {
+                    ResetVisemeInfluences();
+                }
                 return;
             }
 
             mouthWasActive = true;
-            var totalInfluence = BuildVisemeInfluences(useTimeline, timelinePositionMs);
             for (var i = 0; i < visemes.Count; i++)
             {
                 var viseme = visemes[i];
@@ -1228,27 +1246,79 @@ namespace QuestMmdPlayer
             return peak;
         }
 
-        private float BuildVisemeInfluences(bool useTimeline, float positionMs)
+        private float BuildVisemeInfluences(
+            bool useTimeline,
+            float positionMs,
+            bool preserveCurrentDistribution,
+            float deltaTime)
         {
-            Array.Clear(visemeInfluences, 0, visemeInfluences.Length);
+            Array.Clear(targetVisemeInfluences, 0, targetVisemeInfluences.Length);
             if (useTimeline)
             {
-                for (var group = 0; group < visemeInfluences.Length; group++)
+                for (var group = 0; group < targetVisemeInfluences.Length; group++)
                 {
-                    visemeInfluences[group] = TimelineInfluence(group, positionMs);
+                    targetVisemeInfluences[group] = TimelineInfluence(group, positionMs);
                 }
             }
-            else if (fallbackVisemeGroup >= 0 && fallbackVisemeGroup < visemeInfluences.Length)
+            else if (preserveCurrentDistribution)
             {
-                visemeInfluences[fallbackVisemeGroup] = 1f;
+                // Reply completion clears the timeline before the RMS envelope
+                // has fully released. Retaining the last vowel while the mouth
+                // closes avoids a visible last-frame jump back to the fallback A.
+                Array.Copy(
+                    visemeInfluences,
+                    targetVisemeInfluences,
+                    visemeInfluences.Length);
+            }
+            else if (fallbackVisemeGroup >= 0 &&
+                     fallbackVisemeGroup < targetVisemeInfluences.Length)
+            {
+                targetVisemeInfluences[fallbackVisemeGroup] = 1f;
+            }
+
+            var targetTotal = 0f;
+            for (var group = 0; group < targetVisemeInfluences.Length; group++)
+            {
+                targetTotal += Mathf.Max(0f, targetVisemeInfluences[group]);
+            }
+            if (targetTotal > 1f)
+            {
+                for (var group = 0; group < targetVisemeInfluences.Length; group++)
+                {
+                    targetVisemeInfluences[group] /= targetTotal;
+                }
             }
 
             var total = 0f;
             for (var group = 0; group < visemeInfluences.Length; group++)
             {
-                total += Mathf.Max(0f, visemeInfluences[group]);
+                visemeInfluences[group] = SmoothVisemeInfluence(
+                    visemeInfluences[group],
+                    targetVisemeInfluences[group],
+                    deltaTime,
+                    visemeCrossfadeSpeed);
+                total += visemeInfluences[group];
             }
             return total;
+        }
+
+        public static float SmoothVisemeInfluence(
+            float current,
+            float target,
+            float deltaTime,
+            float speed)
+        {
+            var safeCurrent = Mathf.Clamp01(current);
+            var safeTarget = Mathf.Clamp01(target);
+            var blend = 1f - Mathf.Exp(
+                -Mathf.Max(.01f, speed) * Mathf.Max(0f, deltaTime));
+            return Mathf.Lerp(safeCurrent, safeTarget, blend);
+        }
+
+        private void ResetVisemeInfluences()
+        {
+            Array.Clear(visemeInfluences, 0, visemeInfluences.Length);
+            Array.Clear(targetVisemeInfluences, 0, targetVisemeInfluences.Length);
         }
 
         public static float NormalizeVisemeInfluence(float influence, float totalInfluence)

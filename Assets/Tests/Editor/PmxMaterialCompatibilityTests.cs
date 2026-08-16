@@ -123,6 +123,32 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void RuntimeImporterCanKeepGeneratedRootInactiveUntilCommit()
+        {
+            var model = ScriptableObject.CreateInstance<PMXModel>();
+            PMXImportResult result = null;
+            try
+            {
+                result = PMXImporter.BuildUnityObjects(
+                    model,
+                    new PMXImportOptions
+                    {
+                        applyRenames = false,
+                        createAvatar = false,
+                        buildRootInactive = true
+                    });
+
+                Assert.That(result.root, Is.Not.Null);
+                Assert.That(result.root.activeSelf, Is.False);
+            }
+            finally
+            {
+                if (result?.root != null) Object.DestroyImmediate(result.root);
+                Object.DestroyImmediate(model);
+            }
+        }
+
+        [Test]
         public void AmbiguousRecursiveTextureBasenameFailsClosed()
         {
             var root = Path.Combine(
