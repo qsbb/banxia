@@ -1,4 +1,5 @@
 #if UNITY_EDITOR
+using System.Reflection;
 using NUnit.Framework;
 using UMT;
 using UnityEngine;
@@ -67,6 +68,20 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ConversationalGazeRunsAfterVmdButBeforePhysicalTouch()
+        {
+            var presenterOrder = typeof(AvatarConversationPresenter)
+                .GetCustomAttribute<DefaultExecutionOrder>().order;
+            var touchOrder = typeof(AvatarHumanInteraction)
+                .GetCustomAttribute<DefaultExecutionOrder>().order;
+            var vmdOrder = typeof(VmdActionLibrary)
+                .GetCustomAttribute<DefaultExecutionOrder>().order;
+
+            Assert.That(presenterOrder, Is.GreaterThan(vmdOrder));
+            Assert.That(presenterOrder, Is.LessThan(touchOrder));
+        }
+
+        [Test]
         public void ActionBoneWritersRetainHeadOwnershipDuringGazePass()
         {
             Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("wave"), Is.True);
@@ -74,6 +89,67 @@ namespace QuestMmdPlayer.Tests
             Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("crouch"), Is.True);
             Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("talk"), Is.False);
             Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("idle"), Is.False);
+            Assert.That(AvatarConversationPresenter.GetActionGazeWeight("nod"),
+                Is.GreaterThan(0f).And.LessThan(.3f));
+            Assert.That(AvatarConversationPresenter.GetActionGazeWeight("vmd"),
+                Is.GreaterThan(.3f).And.LessThan(.5f));
+            Assert.That(AvatarConversationPresenter.GetActionGazeWeight("wave"),
+                Is.GreaterThan(AvatarConversationPresenter.GetActionGazeWeight("vmd")));
+            Assert.That(AvatarConversationPresenter.GetActionGazeWeight("talk"), Is.EqualTo(1f));
+            Assert.That(
+                AvatarConversationPresenter.GetActionGazeWeight("vmd", ConversationState.Speaking),
+                Is.EqualTo(.65f));
+            Assert.That(
+                AvatarConversationPresenter.GetActionGazeWeight("nod", ConversationState.Thinking),
+                Is.EqualTo(.65f));
+            Assert.That(
+                AvatarConversationPresenter.GetActionGazeWeight("vmd", ConversationState.Idle),
+                Is.EqualTo(.35f));
+        }
+
+        [Test]
+        public void VmdHeadPoseReceivesAnAdditiveConversationGazeOffset()
+        {
+            avatarObject = new GameObject("VMD gaze avatar");
+            var headObject = new GameObject("Head");
+            headObject.transform.SetParent(avatarObject.transform, false);
+            headObject.transform.localPosition = new Vector3(0f, 1.4f, 0f);
+            headObject.AddComponent<MMDBoneTransform>().boneName = "頭";
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var presenter = avatarObject.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(controller, null, null);
+            Assert.That(controller.PlayActionFromSource("vmd", AvatarActionSource.Imported), Is.True);
+            presenter.SetConversationState(ConversationState.Speaking);
+
+            serviceObject = new GameObject("VMD gaze camera");
+            serviceObject.tag = "MainCamera";
+            serviceObject.transform.position = new Vector3(.35f, 1.55f, 1.5f);
+            serviceObject.AddComponent<Camera>();
+            var authored = Quaternion.Euler(7f, -11f, 4f);
+            var existingOffset = Quaternion.Euler(0f, 8f, 0f);
+            headObject.transform.localRotation = authored;
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            typeof(AvatarConversationPresenter).GetField("gazeBlend", flags)
+                ?.SetValue(presenter, 1f);
+            typeof(AvatarConversationPresenter).GetField("smoothedHeadRotation", flags)
+                ?.SetValue(presenter, existingOffset);
+            typeof(AvatarConversationPresenter).GetField("hasSmoothedHeadRotation", flags)
+                ?.SetValue(presenter, true);
+
+            typeof(AvatarConversationPresenter).GetMethod("LateUpdate", flags)
+                ?.Invoke(presenter, null);
+            var appliedOffset = (Quaternion)(typeof(AvatarConversationPresenter)
+                .GetField("smoothedHeadRotation", flags)
+                ?.GetValue(presenter) ?? Quaternion.identity);
+
+            Assert.That(
+                Quaternion.Angle(authored * appliedOffset, headObject.transform.localRotation),
+                Is.LessThan(.05f));
+            Assert.That(
+                Quaternion.Angle(appliedOffset, headObject.transform.localRotation),
+                Is.GreaterThan(1f),
+                "Gaze must not replace the authored VMD head pose with an absolute rotation.");
         }
 
         [Test]
@@ -95,6 +171,36 @@ namespace QuestMmdPlayer.Tests
             var secondAngle = Quaternion.Angle(Quaternion.identity, second);
             Assert.That(firstAngle, Is.GreaterThan(0f).And.LessThan(30f));
             Assert.That(secondAngle, Is.GreaterThan(firstAngle).And.LessThan(30f));
+        }
+
+        [Test]
+        public void GazeReleaseKeepsAResidualOffsetDuringSmoothExit()
+        {
+            avatarObject = new GameObject("gaze release avatar");
+            var headObject = new GameObject("Head");
+            headObject.transform.SetParent(avatarObject.transform, false);
+            headObject.AddComponent<MMDBoneTransform>().boneName = "頭";
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var presenter = avatarObject.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(controller, null, null);
+
+            serviceObject = new GameObject("gaze release camera");
+            serviceObject.tag = "MainCamera";
+            serviceObject.AddComponent<Camera>();
+
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            typeof(AvatarConversationPresenter).GetField("smoothedHeadRotation", flags)
+                ?.SetValue(presenter, Quaternion.Euler(0f, 12f, 0f));
+            typeof(AvatarConversationPresenter).GetField("hasSmoothedHeadRotation", flags)
+                ?.SetValue(presenter, true);
+            typeof(AvatarConversationPresenter).GetMethod("ApplyGaze", flags)
+                ?.Invoke(presenter, new object[] { 0f, "none" });
+
+            Assert.That(
+                Quaternion.Angle(Quaternion.identity, headObject.transform.localRotation),
+                Is.GreaterThan(.01f),
+                "releasing gaze must not snap the head to the authored base in one frame");
         }
 
         [Test]

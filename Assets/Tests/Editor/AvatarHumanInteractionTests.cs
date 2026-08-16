@@ -85,6 +85,37 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void DisableSkipsMorphRendererDestroyedBeforeInteractionService()
+        {
+            avatarObject = new GameObject("MorphTeardownAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var rendererObject = new GameObject("FaceRenderer");
+            rendererObject.transform.SetParent(avatarObject.transform, false);
+            var renderer = rendererObject.AddComponent<SkinnedMeshRenderer>();
+            var mesh = new Mesh();
+            mesh.vertices = new[] { Vector3.zero, Vector3.right, Vector3.up };
+            mesh.triangles = new[] { 0, 1, 2 };
+            mesh.AddBlendShapeFrame(
+                "smile",
+                100f,
+                new[] { Vector3.zero, Vector3.zero, Vector3.zero },
+                new[] { Vector3.zero, Vector3.zero, Vector3.zero },
+                new[] { Vector3.zero, Vector3.zero, Vector3.zero });
+            renderer.sharedMesh = mesh;
+
+            serviceObject = new GameObject("MorphTeardownInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            Assert.That(interaction.MatchedMorphCount, Is.EqualTo(1));
+
+            Object.DestroyImmediate(renderer);
+            Assert.DoesNotThrow(() => interaction.enabled = false);
+            Object.DestroyImmediate(mesh);
+        }
+
+        [Test]
         public void TrackedColliderContactRaisesPhysicalSemanticEvent()
         {
             avatarObject = new GameObject("PhysicalAvatar");

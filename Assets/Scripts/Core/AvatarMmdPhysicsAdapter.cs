@@ -25,6 +25,19 @@ namespace QuestMmdPlayer
         private bool highFrequencyContact;
         private int updateParity;
         private int activeProbeCount;
+        private readonly Vector3[] probePositions =
+            new Vector3[QuestTrackedHandVisualizer.PhysicsProbeCount];
+        private readonly float[] probeRadii =
+            new float[QuestTrackedHandVisualizer.PhysicsProbeCount];
+        private readonly bool[] probeTracked =
+            new bool[QuestTrackedHandVisualizer.PhysicsProbeCount];
+        private Bounds cachedAvatarBounds;
+        private bool cachedAvatarBoundsAvailable;
+        private float nextAvatarBoundsRefreshAt;
+        private Vector3 cachedAvatarPosition;
+        private Quaternion cachedAvatarRotation;
+        private Vector3 cachedAvatarScale;
+        private const float AvatarBoundsRefreshInterval = .1f;
         private string status = "等待角色物理管理器";
 
         public string Status => status;
@@ -49,6 +62,9 @@ namespace QuestMmdPlayer
                 : avatar.GetComponentsInChildren<Renderer>(true);
             configured = false;
             activeProbeCount = 0;
+            cachedAvatarBoundsAvailable = false;
+            nextAvatarBoundsRefreshAt = 0f;
+            CaptureAvatarRootPose();
             status = physicsManager == null ? "当前角色没有 UMT 物理管理器" : "等待初始化外部手部刚体";
         }
 
@@ -95,23 +111,87 @@ namespace QuestMmdPlayer
                 }
             }
 
-            activeProbeCount = 0;
-            var hasAvatarBounds = TryCalculateAvatarBounds(out var avatarBounds);
+            var hasTrackedProbe = false;
             for (var index = 0; index < QuestTrackedHandVisualizer.PhysicsProbeCount; index++)
             {
                 if (!trackedHands.TryGetPhysicsProbe(index, out var position, out var radius, out var active))
                 {
                     active = false;
                 }
+                probePositions[index] = position;
+                probeRadii[index] = radius;
+                probeTracked[index] = active;
+                hasTrackedProbe |= active;
+            }
+            if (!hasTrackedProbe)
+            {
+                DeactivateExternalProbes();
+                return;
+            }
+
+            activeProbeCount = 0;
+            var hasAvatarBounds = TryGetCachedAvatarBounds(out var avatarBounds);
+            for (var index = 0; index < QuestTrackedHandVisualizer.PhysicsProbeCount; index++)
+            {
+                var active = probeTracked[index];
                 active = ShouldActivatePhysicsProbe(
                     active,
                     hasAvatarBounds,
                     avatarBounds,
-                    position,
-                    radius);
-                physicsManager.SetExternalKinematicSpherePose(index, position, active);
+                    probePositions[index],
+                    probeRadii[index]);
+                physicsManager.SetExternalKinematicSpherePose(index, probePositions[index], active);
                 if (active) activeProbeCount++;
             }
+        }
+
+        private void DeactivateExternalProbes()
+        {
+            if (activeProbeCount <= 0)
+            {
+                return;
+            }
+            for (var index = 0; index < physicsManager.externalKinematicSphereCount; index++)
+            {
+                physicsManager.SetExternalKinematicSpherePose(index, Vector3.zero, false);
+            }
+            activeProbeCount = 0;
+        }
+
+        private bool TryGetCachedAvatarBounds(out Bounds bounds)
+        {
+            var rootChanged = HasAvatarRootPoseChanged();
+            if (!cachedAvatarBoundsAvailable || rootChanged ||
+                Time.unscaledTime >= nextAvatarBoundsRefreshAt)
+            {
+                cachedAvatarBoundsAvailable = TryCalculateAvatarBounds(out cachedAvatarBounds);
+                nextAvatarBoundsRefreshAt = Time.unscaledTime + AvatarBoundsRefreshInterval;
+                CaptureAvatarRootPose();
+            }
+            bounds = cachedAvatarBounds;
+            return cachedAvatarBoundsAvailable;
+        }
+
+        private bool HasAvatarRootPoseChanged()
+        {
+            return avatar != null &&
+                (avatar.transform.position != cachedAvatarPosition ||
+                 avatar.transform.rotation != cachedAvatarRotation ||
+                 avatar.transform.lossyScale != cachedAvatarScale);
+        }
+
+        private void CaptureAvatarRootPose()
+        {
+            if (avatar == null)
+            {
+                cachedAvatarPosition = Vector3.zero;
+                cachedAvatarRotation = Quaternion.identity;
+                cachedAvatarScale = Vector3.one;
+                return;
+            }
+            cachedAvatarPosition = avatar.transform.position;
+            cachedAvatarRotation = avatar.transform.rotation;
+            cachedAvatarScale = avatar.transform.lossyScale;
         }
 
         public static bool ShouldActivatePhysicsProbe(
@@ -165,11 +245,7 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            for (var index = 0; index < physicsManager.externalKinematicSphereCount; index++)
-            {
-                physicsManager.SetExternalKinematicSpherePose(index, Vector3.zero, false);
-            }
-            activeProbeCount = 0;
+            DeactivateExternalProbes();
         }
     }
 }

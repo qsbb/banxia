@@ -6,7 +6,10 @@ using UnityEngine;
 
 namespace QuestMmdPlayer
 {
-    [DefaultExecutionOrder(10500)]
+    // UMT and imported VMD write the authored pose first. Gaze is a small
+    // additive post-process, while physical contact remains the final owner of
+    // the head so a hand can override attention in the same frame.
+    [DefaultExecutionOrder(11050)]
     public sealed class AvatarConversationPresenter : MonoBehaviour
     {
         private struct Viseme
@@ -48,6 +51,8 @@ namespace QuestMmdPlayer
         [SerializeField, Range(.5f, 6f)] private float idleGazeBlendSpeed = 2.25f;
         [SerializeField, Range(2f, 20f)] private float gazeTrackingSpeed = 8f;
         private float gazeBlend;
+        // Offset from the pose authored by the current action/VMD. Keeping it
+        // separate prevents gaze from erasing head choreography or accumulating.
         private Quaternion smoothedHeadRotation;
         private bool hasSmoothedHeadRotation;
         private bool mouthWasActive;
@@ -135,7 +140,7 @@ namespace QuestMmdPlayer
             if (head != null)
             {
                 headBaseRotation = head.localRotation;
-                smoothedHeadRotation = headBaseRotation;
+                smoothedHeadRotation = Quaternion.identity;
                 hasSmoothedHeadRotation = true;
             }
             jaw = FindJaw(avatar);
@@ -843,26 +848,51 @@ namespace QuestMmdPlayer
 
         public static bool ShouldSuspendGazeForAction(string action)
         {
+            // Compatibility/query helper: true means that this action has
+            // authored head motion and therefore receives a reduced gaze
+            // weight. Gaze is no longer completely disabled for the action.
+            return GetActionGazeWeight(action) < .999f;
+        }
+
+        public static float GetActionGazeWeight(string action)
+        {
             switch (string.IsNullOrWhiteSpace(action) ? string.Empty : action.Trim().ToLowerInvariant())
             {
-                case "wave":
                 case "bow":
                 case "nod":
-                case "sway":
+                    return .18f;
+                case "refuse":
+                    return .25f;
                 case "dance":
                 case "dance_next":
-                case "raise_hand":
+                case "vmd":
+                    return .35f;
                 case "turn_half":
-                case "crouch":
+                    return .45f;
                 case "sit":
                 case "lie_down":
-                case "refuse":
+                    return .55f;
+                case "wave":
+                case "sway":
+                case "raise_hand":
+                case "crouch":
                 case "step_back":
-                case "vmd":
-                    return true;
+                    return .78f;
                 default:
-                    return false;
+                    return 1f;
             }
+        }
+
+        public static float GetActionGazeWeight(string action, ConversationState conversationState)
+        {
+            var authoredWeight = GetActionGazeWeight(action);
+            var isConversation = conversationState == ConversationState.Listening ||
+                conversationState == ConversationState.Thinking ||
+                conversationState == ConversationState.Speaking;
+            // During a live turn the avatar must visibly keep attending to the
+            // user. The authored pose remains the base, but cannot reduce gaze
+            // below this readable conversational weight.
+            return isConversation ? Mathf.Max(.65f, authoredWeight) : authoredWeight;
         }
 
         public static Quaternion SmoothGazeRotation(
@@ -877,7 +907,7 @@ namespace QuestMmdPlayer
 
         private void ApplyGaze(float amount, string mode)
         {
-            if (head == null || (avatar != null && ShouldSuspendGazeForAction(avatar.CurrentAction)))
+            if (head == null)
             {
                 hasSmoothedHeadRotation = false;
                 return;
@@ -892,15 +922,18 @@ namespace QuestMmdPlayer
             {
                 if (!hasSmoothedHeadRotation)
                 {
-                    smoothedHeadRotation = head.localRotation;
+                    smoothedHeadRotation = Quaternion.identity;
                     hasSmoothedHeadRotation = true;
                 }
                 smoothedHeadRotation = SmoothGazeRotation(
                     smoothedHeadRotation,
-                    headBaseRotation,
+                    Quaternion.identity,
                     Time.unscaledDeltaTime,
                     gazeTrackingSpeed);
-                head.localRotation = smoothedHeadRotation;
+                // Keep composing the decaying local offset for this frame.
+                // Returning before this write would snap an authored action
+                // directly to its base pose when attention is released.
+                head.localRotation = head.localRotation * smoothedHeadRotation;
                 return;
             }
 
@@ -915,11 +948,15 @@ namespace QuestMmdPlayer
             var pitch = mode == "away"
                 ? 2f
                 : Mathf.Clamp(-Mathf.Asin(Mathf.Clamp(localDirection.y, -1f, 1f)) * Mathf.Rad2Deg, -14f, 14f);
-            var target = headBaseRotation * Quaternion.Euler(pitch, yaw * .65f, 0f);
-            var desired = Quaternion.Slerp(headBaseRotation, target, amount);
+            var desired = Quaternion.Slerp(
+                Quaternion.identity,
+                Quaternion.Euler(pitch, yaw * .65f, 0f),
+                Mathf.Clamp01(amount * (avatar == null
+                    ? 1f
+                    : GetActionGazeWeight(avatar.CurrentAction, state))));
             if (!hasSmoothedHeadRotation)
             {
-                smoothedHeadRotation = head.localRotation;
+                smoothedHeadRotation = Quaternion.identity;
                 hasSmoothedHeadRotation = true;
             }
             smoothedHeadRotation = SmoothGazeRotation(
@@ -927,7 +964,9 @@ namespace QuestMmdPlayer
                 desired,
                 Time.unscaledDeltaTime,
                 gazeTrackingSpeed);
-            head.localRotation = smoothedHeadRotation;
+            // The base for this frame is the pose written by the active action
+            // or imported VMD. Compose the attention offset on top of it.
+            head.localRotation = head.localRotation * smoothedHeadRotation;
         }
 
         private void ApplyMouth(float rms)
@@ -1228,6 +1267,7 @@ namespace QuestMmdPlayer
             {
                 head.localRotation = headBaseRotation;
             }
+            smoothedHeadRotation = Quaternion.identity;
             hasSmoothedHeadRotation = false;
         }
 

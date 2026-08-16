@@ -289,8 +289,10 @@ namespace QuestMmdPlayer
             var displays = new List<XRDisplaySubsystem>();
             var requestAccepted = false;
             var lastReportedRefreshRate = 0f;
+            var deadline = Time.unscaledTime + 10f;
+            var nextRequestAt = 0f;
             ApplyFramePacing(PreferredRefreshRate);
-            for (var attempt = 0; attempt < 120; attempt++)
+            while (Time.unscaledTime < deadline)
             {
                 displays.Clear();
                 SubsystemManager.GetInstances(displays);
@@ -301,9 +303,10 @@ namespace QuestMmdPlayer
                     {
                         continue;
                     }
-                    if (!requestAccepted && attempt % 15 == 0)
+                    if (!requestAccepted && Time.unscaledTime >= nextRequestAt)
                     {
                         requestAccepted = display.TryRequestDisplayRefreshRate(PreferredRefreshRate);
+                        nextRequestAt = Time.unscaledTime + .5f;
                     }
                     if (display.TryGetDisplayRefreshRate(out var reported) &&
                         reported > 0f && !float.IsNaN(reported) && !float.IsInfinity(reported))

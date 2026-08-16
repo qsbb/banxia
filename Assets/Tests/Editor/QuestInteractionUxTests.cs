@@ -8,6 +8,15 @@ namespace QuestMmdPlayer.Tests
 {
     public sealed class QuestInteractionUxTests
     {
+        [TestCase(-10, 5, 0)]
+        [TestCase(3, 5, 3)]
+        [TestCase(99, 5, 4)]
+        [TestCase(0, 0, -1)]
+        public void QaScenarioIndicesAreBounded(int requested, int count, int expected)
+        {
+            Assert.That(CompanionWorldMenu.ClampQaIndex(requested, count), Is.EqualTo(expected));
+        }
+
         [TestCase(0f, 0f)]
         [TestCase(.2f, 0f)]
         [TestCase(.6f, .5f)]

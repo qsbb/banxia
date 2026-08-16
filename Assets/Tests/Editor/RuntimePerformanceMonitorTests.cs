@@ -13,6 +13,21 @@ namespace QuestMmdPlayer.Tests
                 Is.GreaterThanOrEqualTo(30f));
         }
 
+        [TestCase(false, false, true)]
+        [TestCase(true, false, false)]
+        [TestCase(true, true, true)]
+        public void AndroidSystemSamplingNeverOverlaps(
+            bool taskExists,
+            bool taskCompleted,
+            bool expected)
+        {
+            Assert.That(
+                RuntimePerformanceMonitor.ShouldStartAndroidSystemSample(
+                    taskExists,
+                    taskCompleted),
+                Is.EqualTo(expected));
+        }
+
         [Test]
         public void AndroidSamplingDoesNotThrottlePerSecondXrTelemetry()
         {

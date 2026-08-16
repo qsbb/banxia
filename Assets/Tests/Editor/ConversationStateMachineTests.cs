@@ -20,6 +20,10 @@ namespace QuestMmdPlayer.Tests
             Assert.AreEqual(ConversationState.Speaking, machine.State);
             Assert.IsTrue(machine.Apply(Event(turnId, ConversationEventType.ReplyEnd)));
             Assert.IsFalse(machine.TryFinishAudio(false));
+            Assert.AreEqual(
+                ConversationState.Speaking,
+                machine.State,
+                "reply.end must not end conversational gaze while PCM is still audible");
             Assert.IsTrue(machine.TryFinishAudio(true));
             Assert.AreEqual(ConversationState.Idle, machine.State);
             Assert.AreEqual("hello", machine.Transcript);

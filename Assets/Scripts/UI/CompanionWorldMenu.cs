@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
 using Keyboard = UnityEngine.InputSystem.Keyboard;
 using UnityEngine.UI;
@@ -254,6 +255,26 @@ namespace QuestMmdPlayer
                         }
                         return false;
                     }
+                    if (string.Equals(command, "run_vmd_qa", StringComparison.Ordinal))
+                    {
+                        var requestedModelIndex = intent.Call<int>(
+                            "getIntExtra",
+                            "quest_debug_model_index",
+                            0);
+                        var requestedActionIndex = intent.Call<int>(
+                            "getIntExtra",
+                            "quest_debug_action_index",
+                            0);
+                        var exitWhenComplete = intent.Call<bool>(
+                            "getBooleanExtra",
+                            "quest_debug_exit",
+                            true);
+                        StartCoroutine(RunQaVmdScenarioWhenReady(
+                            requestedModelIndex,
+                            requestedActionIndex,
+                            exitWhenComplete));
+                        return false;
+                    }
                 }
             }
             catch (Exception exception)
@@ -397,6 +418,154 @@ namespace QuestMmdPlayer
             ShowTextInputPanel();
             OpenConversationKeyboard();
             Debug.Log("[CompanionMenu] Android QA text input opened; keyboard_requested=" + (conversationKeyboard != null), this);
+        }
+
+        private IEnumerator RunQaVmdScenarioWhenReady(
+            int requestedModelIndex,
+            int requestedActionIndex,
+            bool exitWhenComplete)
+        {
+            var remaining = 30f;
+            while (remaining > 0f &&
+                   (owner?.ModelLoader == null || owner.VmdActions == null || owner.ModelLoader.IsLoading))
+            {
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
+                yield return null;
+            }
+
+            if (owner?.ModelLoader == null || owner.VmdActions == null || owner.ModelLoader.IsLoading)
+            {
+                Debug.LogWarning("[BanxiaQA] vmd_scenario status=timeout phase=runtime_ready", this);
+                if (exitWhenComplete) Application.Quit();
+                yield break;
+            }
+
+            RunQaVmdScenarioAsync(requestedModelIndex, requestedActionIndex, exitWhenComplete);
+        }
+
+        private async void RunQaVmdScenarioAsync(
+            int requestedModelIndex,
+            int requestedActionIndex,
+            bool exitWhenComplete)
+        {
+            var loader = owner?.ModelLoader;
+            var library = owner?.VmdActions;
+            var performance = owner?.Performance;
+            if (loader == null || library == null)
+            {
+                if (exitWhenComplete) Application.Quit();
+                return;
+            }
+
+            var originalPath = loader.CurrentModelPath;
+            var originalDetailedSampling = performance != null && performance.detailedSamplingEnabled;
+            var targetPath = string.Empty;
+            try
+            {
+                var models = loader.DiscoverInstalledModels();
+                var modelSelection = ClampQaIndex(requestedModelIndex, models.Count);
+                if (modelSelection < 0)
+                {
+                    throw new InvalidOperationException("No installed model is available.");
+                }
+
+                targetPath = models[modelSelection].Path;
+                performance?.SetDetailedSamplingEnabled(true);
+                Debug.Log(
+                    "[BanxiaQA] vmd_scenario status=started model_index=" + modelSelection +
+                    " requested_action_index=" + requestedActionIndex,
+                    this);
+
+                if (!string.Equals(originalPath, targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    await loader.LoadFromFileAsync(targetPath);
+                }
+
+                var actions = await library.RefreshAsync();
+                var actionSelection = ClampQaIndex(requestedActionIndex, actions.Count);
+                if (actionSelection < 0)
+                {
+                    throw new InvalidOperationException("No imported VMD action is available.");
+                }
+
+                var actionId = actions[actionSelection].Id;
+                await RunQaVmdPassAsync("cold", actionId, actionSelection, library, performance);
+                library.StopAndReturnToIdle();
+                await System.Threading.Tasks.Task.Yield();
+                await RunQaVmdPassAsync("warm", actionId, actionSelection, library, performance);
+                library.StopAndReturnToIdle();
+                Debug.Log("[BanxiaQA] vmd_scenario status=completed", this);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning(
+                    "[BanxiaQA] vmd_scenario status=failed error=" + exception.GetType().Name,
+                    this);
+            }
+            finally
+            {
+                library.StopAndReturnToIdle();
+                if (!string.IsNullOrWhiteSpace(originalPath) &&
+                    !string.Equals(loader.CurrentModelPath, originalPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        await loader.LoadFromFileAsync(originalPath);
+                        Debug.Log("[BanxiaQA] vmd_scenario original_model_restored=true", this);
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogWarning(
+                            "[BanxiaQA] vmd_scenario original_model_restored=false error=" +
+                            exception.GetType().Name,
+                            this);
+                    }
+                }
+                performance?.SetDetailedSamplingEnabled(originalDetailedSampling);
+                if (exitWhenComplete) Application.Quit();
+            }
+        }
+
+        private static async System.Threading.Tasks.Task RunQaVmdPassAsync(
+            string pass,
+            string actionId,
+            int actionIndex,
+            VmdActionLibrary library,
+            RuntimePerformanceMonitor performance)
+        {
+            var wasPrepared = library.IsPrepared(actionId);
+            var droppedBefore = performance == null ? 0f : performance.physicsTotalDroppedSeconds;
+            var startedAt = Time.realtimeSinceStartup;
+            var played = await library.PlayAsync(actionId);
+            var elapsedMs = Mathf.Max(
+                0,
+                Mathf.RoundToInt((Time.realtimeSinceStartup - startedAt) * 1000f));
+            var droppedAfter = performance == null ? droppedBefore : performance.physicsTotalDroppedSeconds;
+            Debug.Log(
+                "[BanxiaQA] vmd_pass pass=" + pass +
+                " action_index=" + actionIndex +
+                " status=" + (played ? "ready" : "failed") +
+                " cache_before=" + wasPrepared +
+                " elapsed_ms=" + elapsedMs +
+                " prepare_ms=" + library.LastPrepareMilliseconds +
+                " read_ms=" + library.LastPrepareReadMilliseconds +
+                " motion_ms=" + library.LastPrepareMotionConversionMilliseconds +
+                " facial_ms=" + library.LastPrepareFacialConversionMilliseconds +
+                " binding_ms=" + library.LastPrepareBindingMilliseconds +
+                " yields=" + library.LastPrepareYieldCount +
+                " live_physics_paused=" + library.LastPrepareSuspendedLivePhysics +
+                " physics_drop_delta_s=" + Mathf.Max(0f, droppedAfter - droppedBefore)
+                    .ToString("F4", CultureInfo.InvariantCulture) +
+                " headset_worn=" + (performance != null && performance.headsetWorn) +
+                " fps_5s=" + (performance == null ? 0f : performance.fps5Seconds)
+                    .ToString("F1", CultureInfo.InvariantCulture) +
+                " frame_p95_ms=" + (performance == null ? 0f : performance.frameTimeP95Ms)
+                    .ToString("F2", CultureInfo.InvariantCulture));
+        }
+
+        public static int ClampQaIndex(int requested, int count)
+        {
+            return count <= 0 ? -1 : Mathf.Clamp(requested, 0, count - 1);
         }
 
         public static float ActiveWaitDelta(float unscaledDeltaTime)

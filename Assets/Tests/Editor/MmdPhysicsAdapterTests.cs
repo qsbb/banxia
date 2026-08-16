@@ -142,6 +142,24 @@ namespace QuestMmdPlayer.Tests
                 .02f));
         }
 
+        [TestCase(false, false, false, false)]
+        [TestCase(true, false, false, false)]
+        [TestCase(true, true, false, true)]
+        [TestCase(true, false, true, true)]
+        public void PhysicalContactEvaluationRunsOnlyWithInteractionAndAnActiveProbe(
+            bool interactionAvailable,
+            bool leftProbeActive,
+            bool rightProbeActive,
+            bool expected)
+        {
+            Assert.That(
+                QuestTrackedHandVisualizer.ShouldEvaluatePhysicalContacts(
+                    interactionAvailable,
+                    leftProbeActive,
+                    rightProbeActive),
+                Is.EqualTo(expected));
+        }
+
         [Test]
         public void JointHeavyModelsRemainCappedAtOneInFinePolicy()
         {

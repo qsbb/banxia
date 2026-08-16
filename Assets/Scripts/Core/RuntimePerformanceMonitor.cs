@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UMT;
 using UnityEngine;
 using UnityEngine.Profiling;
@@ -46,12 +47,15 @@ namespace QuestMmdPlayer
         private int currentModelInstanceId;
         private RuntimeMmdModelLoader currentModelLoader;
         private MMDPhysicsManager currentPhysicsManager;
+        private MMDTransformManager currentTransformManager;
+        private QuestTrackedHandVisualizer currentTrackedHands;
         private bool applicationFocused = true;
         private bool activeSamplingState;
         private float activeSessionStartedAt;
         private float physicsObservedTotalDroppedSeconds;
         private int physicsObservedDroppedFrameCount;
         private float compositorObservedDroppedFrames;
+        private Task<AndroidSystemMetricsSample> androidSystemMetricsTask;
 
         private readonly struct TimedFrameSample
         {
@@ -76,6 +80,26 @@ namespace QuestMmdPlayer
                 this.time = time;
                 this.seconds = seconds;
                 this.dropped = dropped;
+            }
+        }
+
+        private readonly struct AndroidSystemMetricsSample
+        {
+            internal readonly bool pssAvailable;
+            internal readonly long pssBytes;
+            internal readonly bool thermalAvailable;
+            internal readonly DeviceThermalState thermalState;
+
+            internal AndroidSystemMetricsSample(
+                bool pssAvailable,
+                long pssBytes,
+                bool thermalAvailable,
+                DeviceThermalState thermalState)
+            {
+                this.pssAvailable = pssAvailable;
+                this.pssBytes = Math.Max(0L, pssBytes);
+                this.thermalAvailable = thermalAvailable;
+                this.thermalState = thermalState;
             }
         }
 
@@ -159,6 +183,7 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
+            PublishCompletedAndroidMetrics();
             // Presence is a cheap XR device query. Sampling it every frame
             // prevents one-second off-head gaps from entering the valid FPS or
             // physics-drop windows while the low-frequency metrics remain on
@@ -205,10 +230,10 @@ namespace QuestMmdPlayer
                 if (captureAndroidSystemMetrics)
                 {
                     // Debug.getPss walks process memory maps and the thermal
-                    // query crosses Binder. Running both every second on the
-                    // Unity thread made the performance panel reduce the FPS
-                    // it was measuring, especially with joint-heavy avatars.
-                    CaptureAndroidMetrics();
+                    // query crosses Binder. Run both on an attached background
+                    // JNI thread so the performance panel cannot reduce the
+                    // FPS it is measuring, especially with joint-heavy avatars.
+                    ScheduleAndroidMetricsCapture();
                 }
             }
         }
@@ -670,47 +695,106 @@ namespace QuestMmdPlayer
             gcGeneration2Collections = Math.Max(0, GC.CollectionCount(2));
         }
 
-        private void CaptureAndroidMetrics()
+        private void ScheduleAndroidMetricsCapture()
         {
-            androidPssAvailable = false;
-            androidPssBytes = 0L;
-            thermalStatusAvailable = false;
-            thermalState = DeviceThermalState.Unavailable;
 #if UNITY_ANDROID && !UNITY_EDITOR
-            try
+            if (ShouldStartAndroidSystemSample(
+                    androidSystemMetricsTask != null,
+                    androidSystemMetricsTask != null && androidSystemMetricsTask.IsCompleted))
             {
-                using (var debug = new AndroidJavaClass("android.os.Debug"))
-                {
-                    var pssKilobytes = debug.CallStatic<long>("getPss");
-                    if (pssKilobytes >= 0L && pssKilobytes <= long.MaxValue / BytesPerKilobyte)
-                    {
-                        androidPssAvailable = true;
-                        androidPssBytes = pssKilobytes * BytesPerKilobyte;
-                    }
-                }
+                androidSystemMetricsTask = Task.Run(QueryAndroidSystemMetrics);
             }
-            catch (Exception)
+#else
+            ApplyAndroidSystemMetrics(default);
+#endif
+        }
+
+        public static bool ShouldStartAndroidSystemSample(bool taskExists, bool taskCompleted)
+        {
+            return !taskExists || taskCompleted;
+        }
+
+        private void PublishCompletedAndroidMetrics()
+        {
+            var task = androidSystemMetricsTask;
+            if (task == null || !task.IsCompleted)
             {
-                androidPssAvailable = false;
-                androidPssBytes = 0L;
+                return;
             }
 
+            androidSystemMetricsTask = null;
+            ApplyAndroidSystemMetrics(task.Status == TaskStatus.RanToCompletion
+                ? task.Result
+                : default);
+        }
+
+        private void ApplyAndroidSystemMetrics(AndroidSystemMetricsSample sample)
+        {
+            androidPssAvailable = sample.pssAvailable;
+            androidPssBytes = sample.pssAvailable ? sample.pssBytes : 0L;
+            thermalStatusAvailable = sample.thermalAvailable;
+            thermalState = sample.thermalAvailable
+                ? sample.thermalState
+                : DeviceThermalState.Unavailable;
+        }
+
+        private static AndroidSystemMetricsSample QueryAndroidSystemMetrics()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            var pssAvailable = false;
+            var pssBytes = 0L;
+            var thermalAvailable = false;
+            var mappedThermalState = DeviceThermalState.Unavailable;
+            AndroidJNI.AttachCurrentThread();
             try
             {
-                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
-                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
-                using (var power = activity.Call<AndroidJavaObject>("getSystemService", "power"))
+                try
                 {
-                    var status = power.Call<int>("getCurrentThermalStatus");
-                    thermalStatusAvailable = true;
-                    thermalState = MapAndroidThermalStatus(status);
+                    using (var debug = new AndroidJavaClass("android.os.Debug"))
+                    {
+                        var pssKilobytes = debug.CallStatic<long>("getPss");
+                        if (pssKilobytes >= 0L && pssKilobytes <= long.MaxValue / BytesPerKilobyte)
+                        {
+                            pssAvailable = true;
+                            pssBytes = pssKilobytes * BytesPerKilobyte;
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    pssAvailable = false;
+                    pssBytes = 0L;
+                }
+
+                try
+                {
+                    using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                    using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                    using (var power = activity.Call<AndroidJavaObject>("getSystemService", "power"))
+                    {
+                        var status = power.Call<int>("getCurrentThermalStatus");
+                        thermalAvailable = true;
+                        mappedThermalState = MapAndroidThermalStatus(status);
+                    }
+                }
+                catch (Exception)
+                {
+                    thermalAvailable = false;
+                    mappedThermalState = DeviceThermalState.Unavailable;
                 }
             }
-            catch (Exception)
+            finally
             {
-                thermalStatusAvailable = false;
-                thermalState = DeviceThermalState.Unavailable;
+                AndroidJNI.DetachCurrentThread();
             }
+
+            return new AndroidSystemMetricsSample(
+                pssAvailable,
+                pssBytes,
+                thermalAvailable,
+                mappedThermalState);
+#else
+            return default;
 #endif
         }
 
@@ -728,6 +812,7 @@ namespace QuestMmdPlayer
             currentModelInstanceId = instanceId;
             ResetModelComplexity();
             currentPhysicsManager = null;
+            currentTransformManager = null;
             ResetActiveSessionMetrics();
             if (root == null)
             {
@@ -792,12 +877,13 @@ namespace QuestMmdPlayer
             modelMaterialCount = materials.Count;
             modelTextureCount = textures.Count;
 
-            var transformManager = root.GetComponentInChildren<MMDTransformManager>(true);
-            modelBoneCount = transformManager == null || transformManager.bones == null
+            currentTransformManager = root.GetComponentInChildren<MMDTransformManager>(true);
+            modelBoneCount = currentTransformManager == null || currentTransformManager.bones == null
                 ? 0
-                : transformManager.bones.Length;
+                : currentTransformManager.bones.Length;
             var physics = root.GetComponentInChildren<MMDPhysicsManager>(true);
             currentPhysicsManager = physics;
+            currentTrackedHands ??= GetComponent<QuestTrackedHandVisualizer>();
             ApplyPhysicsSuspension();
             physicsObservedTotalDroppedSeconds = physics == null
                 ? 0f
@@ -851,14 +937,14 @@ namespace QuestMmdPlayer
                 physicsDroppedFrameCount - physicsObservedDroppedFrameCount);
             physicsObservedTotalDroppedSeconds = physicsTotalDroppedSeconds;
             physicsObservedDroppedFrameCount = physicsDroppedFrameCount;
-            var transformManager = physics.GetComponent<MMDTransformManager>();
+            var transformManager = currentTransformManager;
             mmdSamplingMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSamplingMilliseconds);
             mmdSolverMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSolverMilliseconds);
             mmdBoneAndIkMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastBoneAndIkMilliseconds);
             mmdPhysicsMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastPhysicsMilliseconds);
             mmdFlushMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastFlushMilliseconds);
             mmdSdefMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSdefMilliseconds);
-            var trackedHands = GetComponent<QuestTrackedHandVisualizer>();
+            var trackedHands = currentTrackedHands;
             handContactMilliseconds = trackedHands == null
                 ? 0f
                 : Mathf.Max(0f, trackedHands.LastContactEvaluationMilliseconds);
@@ -919,6 +1005,7 @@ namespace QuestMmdPlayer
             modelRigidBodyCount = 0;
             modelJointCount = 0;
             currentPhysicsManager = null;
+            currentTransformManager = null;
         }
 
         private static int SaturatingAdd(int left, int right)

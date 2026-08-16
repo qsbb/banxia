@@ -881,7 +881,18 @@ namespace QuestMmdPlayer
 
         void RestoreScale() { if (scaleChanged && bones != null && bones.head != null) { bones.head.localScale = bones.headScale; scaleChanged = false; } }
         void RestorePose() { if (bones != null) bones.ResetPose(); scaleChanged = false; }
-        void RestoreMorphs() { for (var i = 0; i < morphs.Count; i++) morphs[i].renderer.SetBlendShapeWeight(morphs[i].index, morphs[i].baseWeight); }
+        void RestoreMorphs()
+        {
+            for (var i = 0; i < morphs.Count; i++)
+            {
+                var morph = morphs[i];
+                if (morph.renderer == null)
+                {
+                    continue;
+                }
+                morph.renderer.SetBlendShapeWeight(morph.index, morph.baseWeight);
+            }
+        }
         void UnlockTouch() { if (touch != null) touch.SetSemanticInteractionLock(false); }
 
         static BoneSet FindBones(AvatarController target)

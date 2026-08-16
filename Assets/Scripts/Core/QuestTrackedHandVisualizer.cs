@@ -51,6 +51,9 @@ namespace QuestMmdPlayer
         private RuntimeDebugLog diagnostics;
         private float lastContactDiagnosticHoverAt = float.NegativeInfinity;
         private bool contactEventsSubscribed;
+        private int statusTrackedCount = -1;
+        private string statusLeftSource = string.Empty;
+        private string statusRightSource = string.Empty;
 
         public string Status { get; private set; } = "代理手等待 XR 输入";
         public int TrackedHandCount { get; private set; }
@@ -205,19 +208,65 @@ namespace QuestMmdPlayer
             tracked += UpdateTrackedHand(left, subsystem == null ? default(XRHand) : subsystem.leftHand, subsystem != null);
             tracked += UpdateTrackedHand(right, subsystem == null ? default(XRHand) : subsystem.rightHand, subsystem != null);
             TrackedHandCount = tracked;
-            var trackingLabel = tracked == 2 ? "双手追踪" : tracked == 1 ? "单手追踪" : "控制器或无 XR 输入";
-            Status = trackingLabel + " | 左：" + left.inputSource + " 右：" + right.inputSource;
+            if (tracked != statusTrackedCount ||
+                !string.Equals(left.inputSource, statusLeftSource, StringComparison.Ordinal) ||
+                !string.Equals(right.inputSource, statusRightSource, StringComparison.Ordinal))
+            {
+                statusTrackedCount = tracked;
+                statusLeftSource = left.inputSource;
+                statusRightSource = right.inputSource;
+                var trackingLabel = tracked == 2 ? "双手追踪" : tracked == 1 ? "单手追踪" : "控制器或无 XR 输入";
+                Status = trackingLabel + " | 左：" + left.inputSource + " 右：" + right.inputSource;
+            }
         }
 
         private void LateUpdate()
         {
+            var leftActive = HasActiveContactProbe(left);
+            var rightActive = HasActiveContactProbe(right);
+            if (!ShouldEvaluatePhysicalContacts(interaction != null, leftActive, rightActive))
+            {
+                EndContactFacts(left);
+                EndContactFacts(right);
+                ActiveContactCount = 0;
+                LastContactEvaluationMilliseconds = 0f;
+                return;
+            }
             // Hand joints are written in Update and the UMT avatar solver runs
             // before this component (see DefaultExecutionOrder). Explicitly
             // publish both sets of Transform changes before ComputePenetration.
             Physics.SyncTransforms();
-            EvaluatePhysicalContacts(left);
-            EvaluatePhysicalContacts(right);
+            if (leftActive) EvaluatePhysicalContacts(left);
+            else EndContactFacts(left);
+            if (rightActive) EvaluatePhysicalContacts(right);
+            else EndContactFacts(right);
             ActiveContactCount = CountActiveContacts(left) + CountActiveContacts(right);
+        }
+
+        public static bool ShouldEvaluatePhysicalContacts(
+            bool interactionAvailable,
+            bool leftProbeActive,
+            bool rightProbeActive)
+        {
+            return interactionAvailable && (leftProbeActive || rightProbeActive);
+        }
+
+        private static bool HasActiveContactProbe(HandVisual visual)
+        {
+            if (visual.root == null || !visual.root.activeInHierarchy ||
+                visual.contactColliders == null)
+            {
+                return false;
+            }
+            for (var index = 0; index < visual.contactColliders.Length; index++)
+            {
+                if (visual.contactColliders[index] is SphereCollider sphere &&
+                    sphere.enabled && ContactProbeForJoint(JointIds[index]) != TrackedHandContactProbe.None)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void EvaluatePhysicalContacts(HandVisual visual)

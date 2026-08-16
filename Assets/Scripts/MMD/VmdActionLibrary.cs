@@ -455,6 +455,8 @@ namespace QuestMmdPlayer
         private bool physicsArbitrationActive;
         private bool previousTransformEnabled;
         private bool previousLivePhysics;
+        private bool isDestroying;
+        private bool isQuitting;
         private bool endPoseHoldActive;
         private float endPoseHoldClock;
         private bool blendOutActive;
@@ -1417,7 +1419,11 @@ namespace QuestMmdPlayer
             IsPlaying = false;
             PlaybackPhase = VmdPlaybackPhase.Idle;
             EndPhysicsArbitration();
-            boundAvatar?.PlayActionFromSource("idle", AvatarActionSource.System);
+            if (hadPlayback && !isDestroying && !isQuitting &&
+                boundAvatar != null && boundAvatar.isActiveAndEnabled)
+            {
+                boundAvatar.PlayActionFromSource("idle", AvatarActionSource.System);
+            }
             if (hadPlayback)
             {
                 diagnostics?.RecordStage("avatar_action", "completed", "vmd_idle_restored");
@@ -1628,8 +1634,17 @@ namespace QuestMmdPlayer
             CompleteReturnToIdle();
         }
 
+        private void OnApplicationQuit()
+        {
+            // Unity can disable this component before OnDestroy while the
+            // Avatar hierarchy is already in teardown. Keep cleanup local and
+            // suppress cross-component idle notifications during that phase.
+            isQuitting = true;
+        }
+
         private void OnDestroy()
         {
+            isDestroying = true;
             generation++;
             CompleteReturnToIdle();
         }

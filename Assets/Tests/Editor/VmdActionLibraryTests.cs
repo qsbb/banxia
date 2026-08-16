@@ -191,6 +191,64 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void DestroyedAvatarIsNotNotifiedDuringVmdTeardown()
+        {
+            var avatarRoot = new GameObject("Destroyed VMD avatar");
+            var libraryRoot = new GameObject("Destroyed VMD library");
+            try
+            {
+                var avatar = avatarRoot.AddComponent<AvatarController>();
+                avatar.Initialize(avatarRoot.transform);
+                var library = libraryRoot.AddComponent<VmdActionLibrary>();
+                typeof(VmdActionLibrary).GetField("boundAvatar", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.SetValue(library, avatar);
+                typeof(VmdActionLibrary).GetProperty(nameof(VmdActionLibrary.IsPlaying))
+                    ?.SetValue(library, true);
+
+                UnityEngine.Object.DestroyImmediate(avatarRoot);
+                avatarRoot = null;
+                Assert.DoesNotThrow(() => library.enabled = false);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(libraryRoot);
+                if (avatarRoot != null) UnityEngine.Object.DestroyImmediate(avatarRoot);
+            }
+        }
+
+        [Test]
+        public void ApplicationQuitSuppressesIdleNotificationAndTeardownIsIdempotent()
+        {
+            var avatarRoot = new GameObject("Quitting VMD avatar");
+            var libraryRoot = new GameObject("Quitting VMD library");
+            try
+            {
+                var avatar = avatarRoot.AddComponent<AvatarController>();
+                avatar.Initialize(avatarRoot.transform);
+                var notifications = 0;
+                avatar.ActionChanged += _ => notifications++;
+                var library = libraryRoot.AddComponent<VmdActionLibrary>();
+                typeof(VmdActionLibrary).GetField("boundAvatar", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.SetValue(library, avatar);
+                typeof(VmdActionLibrary).GetProperty(nameof(VmdActionLibrary.IsPlaying))
+                    ?.SetValue(library, true);
+                typeof(VmdActionLibrary).GetMethod("OnApplicationQuit", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.Invoke(library, null);
+
+                library.enabled = false;
+                UnityEngine.Object.DestroyImmediate(libraryRoot);
+                libraryRoot = null;
+
+                Assert.That(notifications, Is.Zero);
+            }
+            finally
+            {
+                if (libraryRoot != null) UnityEngine.Object.DestroyImmediate(libraryRoot);
+                UnityEngine.Object.DestroyImmediate(avatarRoot);
+            }
+        }
+
+        [Test]
         public void QuestActionPreparationKeepsAHeadroomSizedFrameSlice()
         {
             var host = new GameObject("VMD frame budget policy");

@@ -97,3 +97,13 @@ Android 构建后必须用 APK/Dex 分析确认 com.lingxi.banxia.filepicker.Ban
 | 脱敏运行诊断快照与阶段时间线 | 已实现 | RuntimeDiagnosticsSnapshot、RuntimeDebugLog、菜单左侧调试区；覆盖配置、授权、SSE、麦克风、上传、STT、EventBus、LLM、TTS、播放和结束阶段 |
 | 连续手臂 IK 与自然注视 | 已实现，待真机调参 | AvatarPresence、AvatarController、AvatarTouchInteraction |
 | Quest 3 真机显示与性能 | 待测试 | 需要设备 |
+# Device VMD QA
+
+`run_vmd_qa` is an ADB-only bounded scenario for investigating first-play stalls. It accepts installed model and action indices, runs one cold and one cached preparation, logs only indices and numeric timing/physics data, restores the previously selected model, and exits by default:
+
+```powershell
+adb shell am force-stop com.lingxi.banxia
+adb shell am start -n com.lingxi.banxia/com.unity3d.player.UnityPlayerActivity --ei quest_debug_model_index 3 --ei quest_debug_action_index 0 --ez quest_debug_exit true --es quest_debug_command run_vmd_qa
+```
+
+Use `logcat` to collect `[BanxiaQA] vmd_pass` entries. Index values are clamped to the current on-device catalog. This command never accepts a filesystem path and does not expose pairing credentials.
