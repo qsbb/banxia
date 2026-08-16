@@ -118,6 +118,31 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ExternalHandProbeIsInactiveOutsideAvatarBroadphase()
+        {
+            var bounds = new Bounds(Vector3.zero, Vector3.one);
+
+            Assert.IsFalse(AvatarMmdPhysicsAdapter.ShouldActivatePhysicsProbe(
+                true,
+                true,
+                bounds,
+                new Vector3(1.7f, 0f, 0f),
+                .02f));
+            Assert.IsTrue(AvatarMmdPhysicsAdapter.ShouldActivatePhysicsProbe(
+                true,
+                true,
+                bounds,
+                new Vector3(.65f, 0f, 0f),
+                .02f));
+            Assert.IsFalse(AvatarMmdPhysicsAdapter.ShouldActivatePhysicsProbe(
+                false,
+                false,
+                default,
+                Vector3.zero,
+                .02f));
+        }
+
+        [Test]
         public void JointHeavyModelsRemainCappedAtOneInFinePolicy()
         {
             MMDPhysicsManager.ConfigureRuntimeQuality(120, 4, 2);

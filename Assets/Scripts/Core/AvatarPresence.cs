@@ -33,6 +33,7 @@ namespace QuestMmdPlayer
         [SerializeField, Range(1f, 8f)] private float idleSwayCyclesPerMinute = 3.6f;
 
         private AvatarController avatar;
+        private AvatarConversationPresenter conversationPresenter;
         private AvatarHumanInteraction humanInteraction;
         private Transform head;
         private Transform chest;
@@ -73,6 +74,9 @@ namespace QuestMmdPlayer
             Restore();
             avatar = targetAvatar;
             humanInteraction = avatar == null ? null : avatar.GetComponentInParent<AvatarHumanInteraction>();
+            conversationPresenter = avatar == null
+                ? null
+                : avatar.GetComponentInParent<AvatarConversationPresenter>();
             head = null;
             chest = null;
             lowerBody = null;
@@ -254,6 +258,13 @@ namespace QuestMmdPlayer
         }
         private void ApplyAttention()
         {
+            // Conversational gaze has one owner. Presence still owns blink,
+            // breathing and body turns, but must not restore the head baseline
+            // after a reply has aimed the avatar at the user.
+            if (conversationPresenter != null && conversationPresenter.isActiveAndEnabled)
+            {
+                return;
+            }
             if ((avatar != null && IsActionTurnBlocked(avatar.CurrentAction)) ||
                 (humanInteraction != null && humanInteraction.HasSemanticContact))
             {

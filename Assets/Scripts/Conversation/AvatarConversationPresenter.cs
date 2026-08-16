@@ -43,8 +43,12 @@ namespace QuestMmdPlayer
         private ConversationState state;
         private string lookAtMode = "none";
         [SerializeField] private bool gazeAtUserWhileIdle = true;
+        [SerializeField] private bool gazeAtUserDuringConversation = true;
         [SerializeField, Range(.5f, 6f)] private float idleGazeBlendSpeed = 2.25f;
+        [SerializeField, Range(2f, 20f)] private float gazeTrackingSpeed = 8f;
         private float gazeBlend;
+        private Quaternion smoothedHeadRotation;
+        private bool hasSmoothedHeadRotation;
         private bool mouthWasActive;
         private float smoothedMouthAmount;
         private string targetEmotion = "neutral";
@@ -104,6 +108,7 @@ namespace QuestMmdPlayer
             targetEmotionIntensity = 0f;
             manualExpression = "neutral";
             gazeBlend = 0f;
+            hasSmoothedHeadRotation = false;
             lookAtMode = "none";
             mouthWasActive = false;
             smoothedMouthAmount = 0f;
@@ -122,6 +127,8 @@ namespace QuestMmdPlayer
             if (head != null)
             {
                 headBaseRotation = head.localRotation;
+                smoothedHeadRotation = headBaseRotation;
+                hasSmoothedHeadRotation = true;
             }
             jaw = FindJaw(avatar);
             if (jaw != null)
@@ -674,9 +681,14 @@ namespace QuestMmdPlayer
 
             var semanticContact = humanInteraction != null && humanInteraction.HasSemanticContact;
             var idleAttention = ShouldUseIdleUserGaze(state, semanticContact, gazeAtUserWhileIdle);
-            var wantsAttention = !semanticContact && (lookAtMode != "none" || idleAttention);
+            var conversationAttention = ShouldUseConversationUserGaze(
+                state,
+                semanticContact,
+                gazeAtUserDuringConversation);
+            var wantsAttention = !semanticContact &&
+                (lookAtMode != "none" || idleAttention || conversationAttention);
             gazeBlend = Mathf.MoveTowards(gazeBlend, wantsAttention ? 1f : 0f, Time.unscaledDeltaTime * (idleAttention ? idleGazeBlendSpeed : 3.5f));
-            var gazeMode = ResolveGazeMode(state, idleAttention, lookAtMode);
+            var gazeMode = ResolveGazeMode(state, idleAttention, conversationAttention, lookAtMode);
             ApplyGaze(gazeBlend, gazeMode);
 
             var speechLevel = state == ConversationState.Speaking && audioPlayer != null ? audioPlayer.AudibleRms : 0f;
@@ -779,6 +791,19 @@ namespace QuestMmdPlayer
             bool idleAttention,
             string requestedMode)
         {
+            return ResolveGazeMode(
+                conversationState,
+                idleAttention,
+                ShouldUseConversationUserGaze(conversationState, false, true),
+                requestedMode);
+        }
+
+        public static string ResolveGazeMode(
+            ConversationState conversationState,
+            bool idleAttention,
+            bool conversationAttention,
+            string requestedMode)
+        {
             var normalized = string.IsNullOrWhiteSpace(requestedMode)
                 ? "none"
                 : requestedMode.Trim().ToLowerInvariant();
@@ -786,18 +811,81 @@ namespace QuestMmdPlayer
             {
                 return "user";
             }
+            if (conversationAttention && normalized == "none") return "user";
             return idleAttention && normalized == "none" ? "user" : normalized;
+        }
+
+        public static bool ShouldUseConversationUserGaze(
+            ConversationState conversationState,
+            bool semanticContact,
+            bool enabled)
+        {
+            return enabled && !semanticContact &&
+                (conversationState == ConversationState.Listening ||
+                    conversationState == ConversationState.Thinking ||
+                    conversationState == ConversationState.Speaking);
+        }
+
+        public static bool ShouldSuspendGazeForAction(string action)
+        {
+            switch (string.IsNullOrWhiteSpace(action) ? string.Empty : action.Trim().ToLowerInvariant())
+            {
+                case "wave":
+                case "bow":
+                case "nod":
+                case "sway":
+                case "dance":
+                case "dance_next":
+                case "raise_hand":
+                case "turn_half":
+                case "crouch":
+                case "sit":
+                case "lie_down":
+                case "refuse":
+                case "step_back":
+                case "vmd":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        public static Quaternion SmoothGazeRotation(
+            Quaternion current,
+            Quaternion target,
+            float deltaTime,
+            float trackingSpeed)
+        {
+            var amount = 1f - Mathf.Exp(-Mathf.Max(.01f, trackingSpeed) * Mathf.Max(0f, deltaTime));
+            return Quaternion.Slerp(current, target, amount);
         }
 
         private void ApplyGaze(float amount, string mode)
         {
-            if (head == null)
+            if (head == null || (avatar != null && ShouldSuspendGazeForAction(avatar.CurrentAction)))
+            {
+                hasSmoothedHeadRotation = false;
+                return;
+            }
+            // XR cameras can be unavailable during reconnect. Do not erase
+            // the current action pose just because a target is missing.
+            if (Camera.main == null)
             {
                 return;
             }
-            if (amount <= .001f || Camera.main == null)
+            if (amount <= .001f)
             {
-                head.localRotation = Quaternion.Slerp(head.localRotation, headBaseRotation, Time.unscaledDeltaTime * 8f);
+                if (!hasSmoothedHeadRotation)
+                {
+                    smoothedHeadRotation = head.localRotation;
+                    hasSmoothedHeadRotation = true;
+                }
+                smoothedHeadRotation = SmoothGazeRotation(
+                    smoothedHeadRotation,
+                    headBaseRotation,
+                    Time.unscaledDeltaTime,
+                    gazeTrackingSpeed);
+                head.localRotation = smoothedHeadRotation;
                 return;
             }
 
@@ -813,7 +901,18 @@ namespace QuestMmdPlayer
                 ? 2f
                 : Mathf.Clamp(-Mathf.Asin(Mathf.Clamp(localDirection.y, -1f, 1f)) * Mathf.Rad2Deg, -14f, 14f);
             var target = headBaseRotation * Quaternion.Euler(pitch, yaw * .65f, 0f);
-            head.localRotation = Quaternion.Slerp(headBaseRotation, target, amount);
+            var desired = Quaternion.Slerp(headBaseRotation, target, amount);
+            if (!hasSmoothedHeadRotation)
+            {
+                smoothedHeadRotation = head.localRotation;
+                hasSmoothedHeadRotation = true;
+            }
+            smoothedHeadRotation = SmoothGazeRotation(
+                smoothedHeadRotation,
+                desired,
+                Time.unscaledDeltaTime,
+                gazeTrackingSpeed);
+            head.localRotation = smoothedHeadRotation;
         }
 
         private void ApplyMouth(float rms)
@@ -1115,6 +1214,7 @@ namespace QuestMmdPlayer
             {
                 head.localRotation = headBaseRotation;
             }
+            hasSmoothedHeadRotation = false;
         }
 
         private void RestoreJaw()

@@ -52,6 +52,93 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ConversationStatesKeepGazeOnUserWithoutAnExplicitIntent()
+        {
+            Assert.That(AvatarConversationPresenter.ShouldUseConversationUserGaze(
+                ConversationState.Listening, false, true), Is.True);
+            Assert.That(AvatarConversationPresenter.ShouldUseConversationUserGaze(
+                ConversationState.Thinking, false, true), Is.True);
+            Assert.That(AvatarConversationPresenter.ShouldUseConversationUserGaze(
+                ConversationState.Speaking, false, true), Is.True);
+            Assert.That(AvatarConversationPresenter.ShouldUseConversationUserGaze(
+                ConversationState.Speaking, true, true), Is.False);
+            Assert.That(AvatarConversationPresenter.ResolveGazeMode(
+                ConversationState.Speaking, false, true, "none"), Is.EqualTo("user"));
+        }
+
+        [Test]
+        public void ActionBoneWritersRetainHeadOwnershipDuringGazePass()
+        {
+            Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("wave"), Is.True);
+            Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("dance"), Is.True);
+            Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("crouch"), Is.True);
+            Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("talk"), Is.False);
+            Assert.That(AvatarConversationPresenter.ShouldSuspendGazeForAction("idle"), Is.False);
+        }
+
+        [Test]
+        public void GazeRotationApproachesMovingTargetWithoutSnapping()
+        {
+            var target = Quaternion.Euler(0f, 30f, 0f);
+            var first = AvatarConversationPresenter.SmoothGazeRotation(
+                Quaternion.identity,
+                target,
+                .1f,
+                8f);
+            var second = AvatarConversationPresenter.SmoothGazeRotation(
+                first,
+                target,
+                .1f,
+                8f);
+
+            var firstAngle = Quaternion.Angle(Quaternion.identity, first);
+            var secondAngle = Quaternion.Angle(Quaternion.identity, second);
+            Assert.That(firstAngle, Is.GreaterThan(0f).And.LessThan(30f));
+            Assert.That(secondAngle, Is.GreaterThan(firstAngle).And.LessThan(30f));
+        }
+
+        [Test]
+        public void PresenceDoesNotOverwritePresenterSpeechGaze()
+        {
+            avatarObject = new GameObject("Conversational gaze avatar");
+            var headObject = new GameObject("Head");
+            headObject.transform.SetParent(avatarObject.transform, false);
+            headObject.transform.localPosition = new Vector3(0f, 1.4f, 0f);
+            headObject.AddComponent<MMDBoneTransform>().boneName = "頭";
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var presenter = avatarObject.AddComponent<AvatarConversationPresenter>();
+            var presence = avatarObject.AddComponent<AvatarPresence>();
+            presenter.Bind(controller, null, null);
+            presence.Bind(controller);
+            presenter.SetConversationState(ConversationState.Speaking);
+
+            serviceObject = new GameObject("Conversational gaze camera");
+            serviceObject.tag = "MainCamera";
+            serviceObject.transform.position = new Vector3(.35f, 1.55f, 1.5f);
+            serviceObject.AddComponent<Camera>();
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(AvatarConversationPresenter).GetField("gazeBlend", flags)
+                ?.SetValue(presenter, 1f);
+            typeof(AvatarConversationPresenter).GetField("smoothedHeadRotation", flags)
+                ?.SetValue(presenter, Quaternion.Euler(0f, 8f, 0f));
+            typeof(AvatarConversationPresenter).GetField("hasSmoothedHeadRotation", flags)
+                ?.SetValue(presenter, true);
+
+            typeof(AvatarConversationPresenter).GetMethod("LateUpdate", flags)
+                ?.Invoke(presenter, null);
+            var presenterRotation = headObject.transform.localRotation;
+            typeof(AvatarPresence).GetMethod("LateUpdate", flags)
+                ?.Invoke(presence, null);
+
+            Assert.That(Quaternion.Angle(Quaternion.identity, presenterRotation), Is.GreaterThan(1f));
+            Assert.That(
+                Quaternion.Angle(presenterRotation, headObject.transform.localRotation),
+                Is.LessThan(.01f));
+        }
+
+        [Test]
         public void PresenterReportsWhetherBackendActionWasActuallyAccepted()
         {
             avatarObject = new GameObject("TestAvatar");

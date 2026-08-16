@@ -42,13 +42,14 @@ namespace QuestMmdPlayer
         private int frameTimeWriteIndex;
         private float nextSlowSampleAt;
         private int currentModelInstanceId;
+        private RuntimeMmdModelLoader currentModelLoader;
         private MMDPhysicsManager currentPhysicsManager;
         private bool applicationFocused = true;
         private bool activeSamplingState;
         private float activeSessionStartedAt;
-        private float physicsSessionBaselineSeconds;
-        private int physicsSessionBaselineFrames;
-        private float compositorDroppedBaseline;
+        private float physicsObservedTotalDroppedSeconds;
+        private int physicsObservedDroppedFrameCount;
+        private float compositorObservedDroppedFrames;
 
         private readonly struct TimedFrameSample
         {
@@ -155,6 +156,12 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
+            // Presence is a cheap XR device query. Sampling it every frame
+            // prevents one-second off-head gaps from entering the valid FPS or
+            // physics-drop windows while the low-frequency metrics remain on
+            // the slow sampling path below.
+            CaptureHeadsetState();
+            CaptureModelComplexityIfChanged();
             var activeSample = IsActivePerformanceSample();
             if (activeSample != activeSamplingState)
             {
@@ -173,7 +180,6 @@ namespace QuestMmdPlayer
             {
                 FrameTimingManager.CaptureFrameTimings();
                 CaptureFrameTiming();
-                CaptureXrPerformanceMetrics();
             }
 
             if (Time.unscaledTime < nextSlowSampleAt)
@@ -182,9 +188,8 @@ namespace QuestMmdPlayer
             }
 
             nextSlowSampleAt = Time.unscaledTime + SlowSampleIntervalSeconds;
-            CaptureHeadsetState();
+            CaptureXrPerformanceMetrics();
             CaptureTargetFrameRate();
-            CaptureModelComplexityIfChanged();
             if (detailedSamplingEnabled)
             {
                 CaptureMemoryAndGc();
@@ -330,7 +335,24 @@ namespace QuestMmdPlayer
 
         private bool IsActivePerformanceSample()
         {
-            return applicationFocused && (!headsetPresenceAvailable || headsetWorn);
+            return applicationFocused && !IsModelLoading() &&
+                (!headsetPresenceAvailable || headsetWorn);
+        }
+
+        private bool IsModelLoading()
+        {
+            ResolveModelLoader();
+            return currentModelLoader != null && currentModelLoader.IsLoading;
+        }
+
+        private void ResolveModelLoader()
+        {
+            if (currentModelLoader != null)
+            {
+                return;
+            }
+            var bootstrap = GetComponent<QuestMmdPlayerBootstrap>();
+            currentModelLoader = bootstrap == null ? null : bootstrap.ModelLoader;
         }
 
         private void ResetActiveSessionMetrics()
@@ -349,13 +371,13 @@ namespace QuestMmdPlayer
             activePhysicsDrops.Clear();
             activeSessionStartedAt = Time.unscaledTime;
             activeSessionSeconds = 0f;
-            physicsSessionBaselineSeconds = currentPhysicsManager == null
+            physicsObservedTotalDroppedSeconds = currentPhysicsManager == null
                 ? 0f
                 : Mathf.Max(0f, currentPhysicsManager.totalDroppedSimulationSeconds);
-            physicsSessionBaselineFrames = currentPhysicsManager == null
+            physicsObservedDroppedFrameCount = currentPhysicsManager == null
                 ? 0
                 : Mathf.Max(0, currentPhysicsManager.droppedSimulationFrameCount);
-            compositorDroppedBaseline = Mathf.Max(0f, compositorDroppedFrames);
+            compositorObservedDroppedFrames = Mathf.Max(0f, compositorDroppedFrames);
             physicsSessionDroppedSeconds = 0f;
             physicsSessionDroppedFrameCount = 0;
             physicsDroppedMillisecondsPerSecond5s = 0f;
@@ -519,8 +541,13 @@ namespace QuestMmdPlayer
                 xrGpuUtilization = hasGpuUtil && gpuUtil >= 0f ? gpuUtil : 0f;
                 if (hasDrops && drops >= 0f)
                 {
+                    var droppedDelta = ResolveCounterDelta(compositorObservedDroppedFrames, drops);
+                    compositorObservedDroppedFrames = drops;
                     compositorDroppedFrames = drops;
-                    compositorDroppedFramesSession = Mathf.Max(0f, drops - compositorDroppedBaseline);
+                    if (IsActivePerformanceSample())
+                    {
+                        compositorDroppedFramesSession += droppedDelta;
+                    }
                 }
                 return;
             }
@@ -531,10 +558,20 @@ namespace QuestMmdPlayer
             var previousAvailable = headsetPresenceAvailable;
             var previousWorn = headsetWorn;
             var headset = InputDevices.GetDeviceAtXRNode(XRNode.Head);
-            var present = false;
-            headsetPresenceAvailable = headset.isValid &&
-                headset.TryGetFeatureValue(CommonUsages.userPresence, out present);
-            headsetWorn = headsetPresenceAvailable && present;
+            if (headset.isValid &&
+                headset.TryGetFeatureValue(CommonUsages.userPresence, out var present))
+            {
+                headsetPresenceAvailable = true;
+                headsetWorn = present;
+            }
+            else if (!previousAvailable)
+            {
+                // Keep the explicit "presence unavailable" fallback. Once a
+                // runtime has supplied presence, a transient failed feature
+                // read must not split the worn session or resume physics.
+                headsetPresenceAvailable = false;
+                headsetWorn = false;
+            }
             if (previousAvailable != headsetPresenceAvailable || previousWorn != headsetWorn)
             {
                 ApplyPhysicsSuspension();
@@ -634,7 +671,8 @@ namespace QuestMmdPlayer
 
         private void CaptureModelComplexityIfChanged()
         {
-            var loader = GetComponent<QuestMmdPlayerBootstrap>()?.ModelLoader;
+            ResolveModelLoader();
+            var loader = currentModelLoader;
             var root = loader == null ? null : loader.CurrentModel;
             var instanceId = root == null ? 0 : root.GetInstanceID();
             if (instanceId == currentModelInstanceId)
@@ -716,8 +754,12 @@ namespace QuestMmdPlayer
             var physics = root.GetComponentInChildren<MMDPhysicsManager>(true);
             currentPhysicsManager = physics;
             ApplyPhysicsSuspension();
-            physicsSessionBaselineSeconds = physics == null ? 0f : physics.totalDroppedSimulationSeconds;
-            physicsSessionBaselineFrames = physics == null ? 0 : physics.droppedSimulationFrameCount;
+            physicsObservedTotalDroppedSeconds = physics == null
+                ? 0f
+                : Mathf.Max(0f, physics.totalDroppedSimulationSeconds);
+            physicsObservedDroppedFrameCount = physics == null
+                ? 0
+                : Mathf.Max(0, physics.droppedSimulationFrameCount);
             modelRigidBodyCount = physics == null || physics.rigidBodies == null ? 0 : physics.rigidBodies.Length;
             modelJointCount = physics == null || physics.joints == null ? 0 : physics.joints.Length;
         }
@@ -756,6 +798,14 @@ namespace QuestMmdPlayer
             physicsLastDroppedSeconds = Mathf.Max(0f, physics.lastDroppedSimulationSeconds);
             physicsTotalDroppedSeconds = Mathf.Max(0f, physics.totalDroppedSimulationSeconds);
             physicsDroppedFrameCount = Mathf.Max(0, physics.droppedSimulationFrameCount);
+            var droppedSecondsDelta = ResolvePhysicsDropDelta(
+                physicsObservedTotalDroppedSeconds,
+                physicsTotalDroppedSeconds);
+            var droppedFrameDelta = Mathf.Max(
+                0,
+                physicsDroppedFrameCount - physicsObservedDroppedFrameCount);
+            physicsObservedTotalDroppedSeconds = physicsTotalDroppedSeconds;
+            physicsObservedDroppedFrameCount = physicsDroppedFrameCount;
             var transformManager = physics.GetComponent<MMDTransformManager>();
             mmdSamplingMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSamplingMilliseconds);
             mmdSolverMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSolverMilliseconds);
@@ -767,16 +817,47 @@ namespace QuestMmdPlayer
             handContactMilliseconds = trackedHands == null
                 ? 0f
                 : Mathf.Max(0f, trackedHands.LastContactEvaluationMilliseconds);
-            physicsSessionDroppedSeconds = Mathf.Max(0f, physicsTotalDroppedSeconds - physicsSessionBaselineSeconds);
-            physicsSessionDroppedFrameCount = Mathf.Max(0, physicsDroppedFrameCount - physicsSessionBaselineFrames);
             if (IsActivePerformanceSample())
             {
+                physicsSessionDroppedSeconds += droppedSecondsDelta;
+                physicsSessionDroppedFrameCount += droppedFrameDelta;
                 activePhysicsDrops.Enqueue(new PhysicsDropSample(
                     Time.unscaledTime,
-                    physicsLastDroppedSeconds,
-                    physicsLastDroppedSeconds > 0f));
+                    droppedSecondsDelta,
+                    droppedFrameDelta > 0));
                 UpdateRecentPhysicsRates(Time.unscaledTime);
             }
+        }
+
+        public static float ResolvePhysicsDropDelta(
+            float previousTotalDroppedSeconds,
+            float currentTotalDroppedSeconds)
+        {
+            if (!IsFinitePositive(currentTotalDroppedSeconds))
+            {
+                return 0f;
+            }
+
+            if (!IsFinitePositive(previousTotalDroppedSeconds) ||
+                currentTotalDroppedSeconds < previousTotalDroppedSeconds)
+            {
+                return currentTotalDroppedSeconds;
+            }
+
+            return currentTotalDroppedSeconds - previousTotalDroppedSeconds;
+        }
+
+        private static float ResolveCounterDelta(float previous, float current)
+        {
+            if (!IsFinitePositive(current))
+            {
+                return 0f;
+            }
+            if (!IsFinitePositive(previous) || current < previous)
+            {
+                return current;
+            }
+            return current - previous;
         }
 
         private void ResetModelComplexity()

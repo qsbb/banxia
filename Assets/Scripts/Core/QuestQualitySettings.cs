@@ -35,6 +35,7 @@ namespace QuestMmdPlayer
 
         [SerializeField] private QuestQualityPreset defaultPreset = QuestQualityPreset.Balanced;
         [SerializeField] private MmdPhysicsPreset defaultPhysicsPreset = MmdPhysicsPreset.Balanced;
+        private Coroutine refreshRateRequest;
 
         public event Action<QuestQualityPreset> QualityChanged;
         public QuestQualityPreset CurrentPreset { get; private set; }
@@ -47,9 +48,14 @@ namespace QuestMmdPlayer
         public int PhysicsReinforcement { get; private set; } = 1;
         public bool FullHandContact { get; private set; } = true;
         public string RefreshRateStatus { get; private set; } = "等待 XR 显示器";
+        public int ApplicationTargetFrameRate { get; private set; }
 
         private void Awake()
         {
+            // XR presents on its own cadence. Unity's quality-level VSync can
+            // otherwise select a half-rate cadence on Quest even when the
+            // runtime is running at 72Hz.
+            ApplyFramePacing(PreferredRefreshRate);
             var saved = PlayerPrefs.GetInt(PresetKey, (int)defaultPreset);
             var savedPhysics = PlayerPrefs.GetInt(PhysicsPresetKey, (int)defaultPhysicsPreset);
             ApplyRenderPreset(ParsePreset(saved), false);
@@ -58,7 +64,48 @@ namespace QuestMmdPlayer
 
         private void OnEnable()
         {
-            StartCoroutine(RequestPreferredRefreshRate());
+            ApplyFramePacing(PreferredRefreshRate);
+            RestartRefreshRateRequest();
+        }
+
+        private void OnDisable()
+        {
+            if (refreshRateRequest != null)
+            {
+                StopCoroutine(refreshRateRequest);
+                refreshRateRequest = null;
+            }
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            if (hasFocus)
+            {
+                ApplyFramePacing(PreferredRefreshRate);
+                RestartRefreshRateRequest();
+            }
+        }
+
+        private void OnApplicationPause(bool pauseStatus)
+        {
+            if (!pauseStatus)
+            {
+                ApplyFramePacing(PreferredRefreshRate);
+                RestartRefreshRateRequest();
+            }
+        }
+
+        private void RestartRefreshRateRequest()
+        {
+            if (!isActiveAndEnabled)
+            {
+                return;
+            }
+            if (refreshRateRequest != null)
+            {
+                StopCoroutine(refreshRateRequest);
+            }
+            refreshRateRequest = StartCoroutine(RequestPreferredRefreshRate());
         }
 
         public void ApplyPreset(QuestQualityPreset preset)
@@ -194,7 +241,11 @@ namespace QuestMmdPlayer
                     fullHandContact = true;
                     return;
                 default:
-                    frequencyHz = 72;
+                    // Keep the balanced profile at a bounded 60 Hz physics
+                    // cadence. XR presentation remains explicitly requested
+                    // at 72 Hz, so Bullet does not consume the render budget
+                    // just to mirror the display refresh rate.
+                    frequencyHz = 60;
                     maximumSubsteps = 2;
                     reinforcement = 1;
                     fullHandContact = true;
@@ -248,12 +299,41 @@ namespace QuestMmdPlayer
                         continue;
                     }
                     var requested = display.TryRequestDisplayRefreshRate(PreferredRefreshRate);
-                    RefreshRateStatus = requested ? "已请求 72Hz" : "运行时未接受 72Hz 请求";
+                    var actual = PreferredRefreshRate;
+                    if (display.TryGetDisplayRefreshRate(out var reported) &&
+                        reported > 0f && !float.IsNaN(reported) && !float.IsInfinity(reported))
+                    {
+                        actual = reported;
+                    }
+                    ApplyFramePacing(actual);
+                    RefreshRateStatus = requested
+                        ? "已请求 " + actual.ToString("F0") + "Hz · 目标 " + ApplicationTargetFrameRate + "FPS"
+                        : "运行时未接受 " + PreferredRefreshRate.ToString("F0") + "Hz 请求 · 目标 " + ApplicationTargetFrameRate + "FPS";
+                    refreshRateRequest = null;
                     yield break;
                 }
                 yield return null;
             }
             RefreshRateStatus = "XR 显示器不可用";
+            ApplyFramePacing(PreferredRefreshRate);
+            refreshRateRequest = null;
+        }
+
+        private void ApplyFramePacing(float refreshRate)
+        {
+            var target = NormalizeRefreshRate(refreshRate);
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = target;
+            ApplicationTargetFrameRate = target;
+        }
+
+        public static int NormalizeRefreshRate(float refreshRate)
+        {
+            if (float.IsNaN(refreshRate) || float.IsInfinity(refreshRate) || refreshRate <= 0f)
+            {
+                return (int)PreferredRefreshRate;
+            }
+            return Mathf.Clamp(Mathf.RoundToInt(refreshRate), 30, 120);
         }
 
         private static QuestQualityPreset ParsePreset(int value)

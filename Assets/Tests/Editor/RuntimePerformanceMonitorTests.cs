@@ -80,6 +80,22 @@ namespace QuestMmdPlayer.Tests
             Assert.That(1000f / average, Is.InRange(71f, 73f));
         }
 
+        [TestCase(0f, 0f, 0f)]
+        [TestCase(0f, .25f, .25f)]
+        [TestCase(.25f, .25f, 0f)]
+        [TestCase(.25f, .4f, .15f)]
+        [TestCase(.4f, .25f, .25f)]
+        [TestCase(float.NaN, .2f, .2f)]
+        public void PhysicsDropDeltaCountsOnlyNewAccumulatedTime(
+            float previous,
+            float current,
+            float expected)
+        {
+            Assert.That(
+                RuntimePerformanceMonitor.ResolvePhysicsDropDelta(previous, current),
+                Is.EqualTo(expected).Within(.0001f));
+        }
+
         [Test]
         public void EnablingDetailedSamplingDoesNotResetWornFrameWindow()
         {

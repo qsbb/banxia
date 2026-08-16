@@ -121,6 +121,23 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void BroadphaseRejectsDistantPointAndAcceptsNearSweptProbe()
+        {
+            var bounds = new Bounds(new Vector3(0f, 1f, 0f), new Vector3(.8f, 2f, .8f));
+
+            Assert.IsFalse(AvatarTouchInteraction.SweptProbeMayReachBounds(
+                bounds,
+                new Vector3(2f, 1f, 0f),
+                new Vector3(2f, 1.2f, 0f),
+                .02f));
+            Assert.IsTrue(AvatarTouchInteraction.SweptProbeMayReachBounds(
+                bounds,
+                new Vector3(-.7f, 1f, 0f),
+                new Vector3(.7f, 1f, 0f),
+                .02f));
+        }
+
+        [Test]
         public void TrackedHandPinchNeverDragsTheWholeAvatar()
         {
             Assert.IsFalse(AvatarTouchInteraction.CanDragAvatar(true, true, true, true));

@@ -32,6 +32,8 @@ namespace QuestMmdPlayer
         private readonly List<AvatarContactProxy> contactProxies = new List<AvatarContactProxy>();
         private GameObject collisionProxyRoot;
         private bool collisionGeometryReady;
+        private bool contactBroadphaseReady;
+        private Bounds contactBroadphaseBounds;
         private int modelCollisionVolumeCount;
         private AvatarController avatar;
         private Renderer[] avatarRenderers = Array.Empty<Renderer>();
@@ -108,6 +110,7 @@ namespace QuestMmdPlayer
             ClearCollisionProxies();
             avatar = target;
             avatarRenderers = Array.Empty<Renderer>();
+            contactBroadphaseReady = false;
             previousTouched = false;
             leftHand.touched = rightHand.touched = false;
             leftHand.nearGrab = rightHand.nearGrab = false;
@@ -175,6 +178,8 @@ namespace QuestMmdPlayer
             ReadHand(rightHand);
 
             var bounds = CalculateAvatarBounds();
+            contactBroadphaseBounds = bounds;
+            contactBroadphaseReady = true;
             EnsureCollisionProxies(bounds);
             UpdateCollisionProxyScale();
             UpdateTouchState(bounds);
@@ -670,6 +675,11 @@ namespace QuestMmdPlayer
 
             var bestPriority = 0;
             var safeRadius = Mathf.Max(.005f, radius);
+            if (contactBroadphaseReady &&
+                !IsWithinDistance(contactBroadphaseBounds, point, safeRadius + .12f))
+            {
+                return false;
+            }
             for (var i = 0; i < contactProxies.Count; i++)
             {
                 var proxy = contactProxies[i];
@@ -721,6 +731,11 @@ namespace QuestMmdPlayer
             }
 
             var safeRadius = Mathf.Max(.005f, radius);
+            if (contactBroadphaseReady &&
+                !IsWithinDistance(contactBroadphaseBounds, probePoint, safeRadius + .12f))
+            {
+                return false;
+            }
             var bestDistanceSquared = float.PositiveInfinity;
             Collider bestCollider = null;
             for (var index = 0; index < contactProxies.Count; index++)
@@ -772,6 +787,11 @@ namespace QuestMmdPlayer
         {
             region = AvatarContactRegion.None;
             contactPoint = to;
+            if (contactBroadphaseReady &&
+                !SweptProbeMayReachBounds(contactBroadphaseBounds, from, to, radius, .12f))
+            {
+                return false;
+            }
             var distance = Vector3.Distance(from, to);
             var stepLength = Mathf.Max(.008f, Mathf.Max(.005f, radius) * .55f);
             var steps = Mathf.Clamp(Mathf.CeilToInt(distance / stepLength), 1, 24);
@@ -811,6 +831,15 @@ namespace QuestMmdPlayer
             if (handCollider == null || contactProxies.Count == 0)
             {
                 return false;
+            }
+            if (contactBroadphaseReady)
+            {
+                var broadphase = contactBroadphaseBounds;
+                broadphase.Expand(.24f);
+                if (!broadphase.Intersects(handCollider.bounds))
+                {
+                    return false;
+                }
             }
 
             var bestDistance = 0f;
@@ -860,6 +889,21 @@ namespace QuestMmdPlayer
             }
 
             return bestDistance > .000001f;
+        }
+
+        public static bool SweptProbeMayReachBounds(
+            Bounds bounds,
+            Vector3 from,
+            Vector3 to,
+            float radius,
+            float margin = .12f)
+        {
+            var padding = Mathf.Max(.005f, radius) + Mathf.Max(0f, margin);
+            var minimum = Vector3.Min(from, to) - Vector3.one * padding;
+            var maximum = Vector3.Max(from, to) + Vector3.one * padding;
+            var sweptBounds = new Bounds();
+            sweptBounds.SetMinMax(minimum, maximum);
+            return bounds.Intersects(sweptBounds);
         }
 
         private static int ContactPriority(AvatarContactRegion region)
@@ -1256,6 +1300,7 @@ namespace QuestMmdPlayer
             collisionProxyRoot = null;
             contactProxies.Clear();
             collisionGeometryReady = false;
+            contactBroadphaseReady = false;
             modelCollisionVolumeCount = 0;
         }
 

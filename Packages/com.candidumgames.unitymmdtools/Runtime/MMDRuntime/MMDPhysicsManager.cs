@@ -965,6 +965,11 @@ namespace UMT
             [BurstCompile]
             internal static void TransformPhysicsInternal(float elapsedTime, ref MMDTransformManager.SolverContext transformManagerContext, ref PhysicsSolverContext runtimeContext)
             {
+                // The public diagnostic is per rendered frame. Clear it before
+                // zero-time synchronization so a drop from an earlier frame is
+                // never reported again while physics is suspended.
+                runtimeContext.lastSubstepCount = 0;
+                runtimeContext.lastDroppedSimulationSeconds = 0.0f;
                 if (!runtimeContext.bulletPhysicsContext.isValid)
                 {
                     return;

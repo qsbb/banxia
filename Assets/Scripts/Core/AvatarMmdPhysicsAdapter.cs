@@ -1,3 +1,4 @@
+using System;
 using UMT;
 using UnityEngine;
 
@@ -19,6 +20,7 @@ namespace QuestMmdPlayer
         private AvatarController avatar;
         private QuestTrackedHandVisualizer trackedHands;
         private MMDPhysicsManager physicsManager;
+        private Renderer[] avatarRenderers = Array.Empty<Renderer>();
         private bool configured;
         private bool highFrequencyContact;
         private int updateParity;
@@ -42,6 +44,9 @@ namespace QuestMmdPlayer
             physicsManager = avatar == null
                 ? null
                 : avatar.GetComponentInChildren<MMDTransformManager>(true)?.physicsManager;
+            avatarRenderers = avatar == null
+                ? Array.Empty<Renderer>()
+                : avatar.GetComponentsInChildren<Renderer>(true);
             configured = false;
             activeProbeCount = 0;
             status = physicsManager == null ? "当前角色没有 UMT 物理管理器" : "等待初始化外部手部刚体";
@@ -91,15 +96,66 @@ namespace QuestMmdPlayer
             }
 
             activeProbeCount = 0;
+            var hasAvatarBounds = TryCalculateAvatarBounds(out var avatarBounds);
             for (var index = 0; index < QuestTrackedHandVisualizer.PhysicsProbeCount; index++)
             {
-                if (!trackedHands.TryGetPhysicsProbe(index, out var position, out _, out var active))
+                if (!trackedHands.TryGetPhysicsProbe(index, out var position, out var radius, out var active))
                 {
                     active = false;
                 }
+                active = ShouldActivatePhysicsProbe(
+                    active,
+                    hasAvatarBounds,
+                    avatarBounds,
+                    position,
+                    radius);
                 physicsManager.SetExternalKinematicSpherePose(index, position, active);
                 if (active) activeProbeCount++;
             }
+        }
+
+        public static bool ShouldActivatePhysicsProbe(
+            bool trackedActive,
+            bool hasAvatarBounds,
+            Bounds avatarBounds,
+            Vector3 position,
+            float radius,
+            float margin = .18f)
+        {
+            if (!trackedActive)
+            {
+                return false;
+            }
+            if (!hasAvatarBounds)
+            {
+                return true;
+            }
+            var distance = Mathf.Max(.005f, radius) + Mathf.Max(0f, margin);
+            return avatarBounds.SqrDistance(position) <= distance * distance;
+        }
+
+        private bool TryCalculateAvatarBounds(out Bounds bounds)
+        {
+            bounds = default;
+            var found = false;
+            for (var index = 0; index < avatarRenderers.Length; index++)
+            {
+                var renderer = avatarRenderers[index];
+                if (renderer == null)
+                {
+                    continue;
+                }
+                if (!found)
+                {
+                    bounds = renderer.bounds;
+                    found = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderer.bounds);
+                }
+            }
+            return found;
         }
 
         private void OnDisable()
