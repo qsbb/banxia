@@ -76,6 +76,66 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void MenuLayerDetectionRecognizesDevicePerformancePanel()
+        {
+            var rootObject = new GameObject("Diagnostics Performance Menu Root");
+            try
+            {
+                CreateLayer(rootObject.transform, "Device Performance Layer", true);
+
+                Assert.That(
+                    RuntimeDiagnosticsBuilder.DetectMenuLayer(rootObject.transform, true),
+                    Is.EqualTo(RuntimeMenuLayer.Performance));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(rootObject);
+            }
+        }
+
+        [Test]
+        public void PerformanceMonitorCalculatesFramePercentilesAndIgnoresInvalidSamples()
+        {
+            RuntimePerformanceMonitor.CalculateFrameStatistics(
+                new[] { 10f, 20f, 30f, 40f, 0f, float.NaN },
+                6,
+                out var average,
+                out var p50,
+                out var p95,
+                out var maximum);
+
+            Assert.That(average, Is.EqualTo(25f).Within(.001f));
+            Assert.That(p50, Is.EqualTo(25f).Within(.001f));
+            Assert.That(p95, Is.EqualTo(38.5f).Within(.001f));
+            Assert.That(maximum, Is.EqualTo(40f).Within(.001f));
+            Assert.That(RuntimePerformanceMonitor.EstimateRgbaTextureBytes(2048, 1024), Is.EqualTo(8L * 1024 * 1024));
+            Assert.That(RuntimePerformanceMonitor.MapAndroidThermalStatus(99), Is.EqualTo(DeviceThermalState.Unknown));
+        }
+
+        [Test]
+        public void PerformanceMonitorKeepsRollingFrameSummaryBounded()
+        {
+            var rootObject = new GameObject("Performance Monitor Test");
+            try
+            {
+                var monitor = rootObject.AddComponent<RuntimePerformanceMonitor>();
+                for (var index = 0; index < 300; index++)
+                {
+                    monitor.RecordFrameDurationMilliseconds(10f + (index % 4));
+                }
+
+                Assert.That(monitor.frameSampleCount, Is.EqualTo(240));
+                Assert.That(monitor.currentFps, Is.GreaterThan(0f));
+                Assert.That(monitor.frameTimeP95Ms, Is.GreaterThanOrEqualTo(monitor.frameTimeP50Ms));
+                Assert.That(monitor.frameTimeMaxMs, Is.EqualTo(13f).Within(.001f));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(rootObject);
+            }
+        }
+
+        [Test]
         public void TimingParserProjectsOnlyWhitelistedNumericMetrics()
         {
             var timing = RuntimeDiagnosticsBuilder.ParseConversationTiming(

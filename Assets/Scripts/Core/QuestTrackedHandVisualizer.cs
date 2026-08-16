@@ -277,6 +277,10 @@ namespace QuestMmdPlayer
         /// avatar without changing the hand pose. Optional XR adapters can use
         /// the same contact path as the built-in hand provider.
         /// </summary>
+        public float LastContactEvaluationMilliseconds { get; private set; }
+        private int contactTimingFrame = -1;
+        private double contactEvaluationSeconds;
+
         public bool EvaluatePhysicalProbe(
             SphereCollider sphere,
             TrackedHandContactTracker tracker,
@@ -296,6 +300,9 @@ namespace QuestMmdPlayer
                 return false;
             }
 
+            BeginContactTimingFrame();
+            var timingStarted = Time.realtimeSinceStartupAsDouble;
+
             var hasPenetration = interaction.TryGetPenetrationCorrection(
                 sphere,
                 out var penetrationCorrection,
@@ -311,6 +318,7 @@ namespace QuestMmdPlayer
             {
                 tracker.Clear(Time.unscaledTime);
                 region = AvatarContactRegion.None;
+                CompleteContactTiming(timingStarted);
                 return false;
             }
 
@@ -346,7 +354,25 @@ namespace QuestMmdPlayer
                 authoritativeTrackedPose,
                 Time.unscaledTime,
                 contactFactUpdateInterval);
+            CompleteContactTiming(timingStarted);
             return true;
+        }
+
+        private void BeginContactTimingFrame()
+        {
+            if (contactTimingFrame == Time.frameCount)
+            {
+                return;
+            }
+            contactTimingFrame = Time.frameCount;
+            contactEvaluationSeconds = 0d;
+            LastContactEvaluationMilliseconds = 0f;
+        }
+
+        private void CompleteContactTiming(double startedAt)
+        {
+            contactEvaluationSeconds += Math.Max(0d, Time.realtimeSinceStartupAsDouble - startedAt);
+            LastContactEvaluationMilliseconds = (float)(contactEvaluationSeconds * 1000d);
         }
 
         /// <summary>Creates a probe lifecycle tracker wired to the aggregate contact stream.</summary>

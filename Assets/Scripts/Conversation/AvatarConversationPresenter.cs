@@ -148,7 +148,10 @@ namespace QuestMmdPlayer
             string lookAt,
             float intensity = 1f,
             int durationMs = 2000,
-            AvatarActionExecutionContext executionContext = null)
+            AvatarActionExecutionContext executionContext = null,
+            AvatarActionParameters actionParameters = null,
+            AvatarActionTransition actionTransition = null,
+            string actionSource = "backend")
         {
             if (avatar == null)
             {
@@ -183,8 +186,21 @@ namespace QuestMmdPlayer
                 return false;
             }
 
-            diagnostics?.Record("AvatarAction", "后端动作意图已接受：" + acceptedGesture);
-            diagnostics?.RecordStage("avatar_action", "processing", "backend_intent_accepted");
+            diagnostics?.Record(
+                "AvatarAction",
+                "后端动作意图已接受：" + acceptedGesture +
+                " source=" + (string.IsNullOrWhiteSpace(actionSource) ? "backend" : actionSource));
+            diagnostics?.RecordStage(
+                "avatar_action",
+                "processing",
+                "backend_intent_accepted");
+
+            if (acceptedGesture == "crouch" && !avatar.SupportsCrouch)
+            {
+                diagnostics?.RecordStage("avatar_action", "limited", "crouch_rig_missing");
+                ReportRejected(executionContext, "asset_missing");
+                return false;
+            }
 
             if (acceptedGesture == "sit" || acceptedGesture == "lie_down")
             {
@@ -245,6 +261,7 @@ namespace QuestMmdPlayer
                 acceptedGesture == "dance" || acceptedGesture == "dance_next" ||
                 acceptedGesture == "nod" || acceptedGesture == "sway" ||
                 acceptedGesture == "raise_hand" || acceptedGesture == "turn_half" ||
+                acceptedGesture == "crouch" ||
                 acceptedGesture == "refuse" || acceptedGesture == "step_back" ||
                 acceptedGesture == "idle")
             {
@@ -257,7 +274,12 @@ namespace QuestMmdPlayer
                 else
                 {
                     PrepareTrackedAction(executionContext);
-                    var played = avatar.PlayActionFromSource(acceptedGesture, AvatarActionSource.Backend);
+                    var played = avatar.PlayActionFromSource(
+                        acceptedGesture,
+                        AvatarActionSource.Backend,
+                        actionParameters,
+                        actionTransition,
+                        actionSource);
                     if (played)
                     {
                         ReportAccepted(executionContext);
@@ -338,6 +360,12 @@ namespace QuestMmdPlayer
             if (normalized == "dance" || normalized == "dance_next")
             {
                 _ = PlayRecommendedDance(normalized == "dance_next");
+                return;
+            }
+
+            if (normalized == "crouch" && (avatar == null || !avatar.SupportsCrouch))
+            {
+                diagnostics?.RecordStage("avatar_action", "limited", "crouch_rig_missing");
                 return;
             }
 

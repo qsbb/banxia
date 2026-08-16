@@ -16,6 +16,80 @@ namespace QuestMmdPlayer.PlayModeTests
     public sealed class RuntimeLifecycleSmokeTests
     {
         [UnityTest]
+        public IEnumerator MissingStartupSelectionCreatesFallbackAfterRestoreAttempt()
+        {
+            const string absolutePreference = "Banxia.RuntimeMmdModel.SelectedPath";
+            const string relativePreference = "Banxia.RuntimeMmdModel.SelectedRelativePath";
+            var previousAbsolute = PlayerPrefs.GetString(absolutePreference, string.Empty);
+            var previousRelative = PlayerPrefs.GetString(relativePreference, string.Empty);
+            GameObject root = null;
+            GameObject fallback = null;
+            try
+            {
+                PlayerPrefs.DeleteKey(absolutePreference);
+                PlayerPrefs.DeleteKey(relativePreference);
+                PlayerPrefs.Save();
+
+                root = new GameObject("Startup fallback integration test");
+                root.SetActive(false);
+                var loader = root.AddComponent(RuntimeType(
+                    "QuestMmdPlayer.RuntimeMmdModelLoader"));
+                var bootstrap = root.AddComponent(RuntimeType(
+                    "QuestMmdPlayer.QuestMmdPlayerBootstrap"));
+                foreach (var field in new[]
+                {
+                    "createCameraIfMissing",
+                    "createLightIfMissing",
+                    "createPrototypeHud",
+                    "createTouchInteraction",
+                    "createHumanInteraction",
+                    "createConversationPrototype",
+                    "createVrLocomotion",
+                    "createAvatarPlacement"
+                })
+                {
+                    SetField(bootstrap, field, false);
+                }
+                SetField(bootstrap, "createFallbackAvatar", true);
+
+                root.SetActive(true);
+                yield return null;
+                yield return null;
+
+                var avatar = Read<Component>(bootstrap, "Avatar");
+                Assert.That(avatar, Is.Not.Null);
+                fallback = avatar.gameObject;
+                Assert.That(Read<GameObject>(loader, "CurrentModel"), Is.Null);
+            }
+            finally
+            {
+                if (fallback != null && (root == null || fallback != root))
+                {
+                    UnityEngine.Object.Destroy(fallback);
+                }
+                if (root != null) UnityEngine.Object.Destroy(root);
+                if (string.IsNullOrEmpty(previousAbsolute))
+                {
+                    PlayerPrefs.DeleteKey(absolutePreference);
+                }
+                else
+                {
+                    PlayerPrefs.SetString(absolutePreference, previousAbsolute);
+                }
+                if (string.IsNullOrEmpty(previousRelative))
+                {
+                    PlayerPrefs.DeleteKey(relativePreference);
+                }
+                else
+                {
+                    PlayerPrefs.SetString(relativePreference, previousRelative);
+                }
+                PlayerPrefs.Save();
+            }
+            yield return null;
+        }
+
+        [UnityTest]
         public IEnumerator RapidModelReplacementCancelsOldBuildWithoutClearingNewState()
         {
             var pmxPath = Environment.GetEnvironmentVariable("BANXIA_TEST_PMX");
@@ -168,6 +242,7 @@ namespace QuestMmdPlayer.PlayModeTests
         public IEnumerator OptionalRealPmxSelectionRestoresAfterLoaderRecreation()
         {
             const string preferenceKey = "Banxia.RuntimeMmdModel.SelectedPath";
+            const string relativePreferenceKey = "Banxia.RuntimeMmdModel.SelectedRelativePath";
             var sourcePmxPath = Environment.GetEnvironmentVariable("BANXIA_TEST_PMX");
             if (string.IsNullOrWhiteSpace(sourcePmxPath) || !File.Exists(sourcePmxPath))
             {
@@ -175,6 +250,9 @@ namespace QuestMmdPlayer.PlayModeTests
             }
 
             var previousSelection = PlayerPrefs.GetString(preferenceKey, string.Empty);
+            var previousRelativeSelection = PlayerPrefs.GetString(
+                relativePreferenceKey,
+                string.Empty);
             var packageRoot = Path.Combine(
                 Application.persistentDataPath,
                 "MmdModels",
@@ -215,6 +293,10 @@ namespace QuestMmdPlayer.PlayModeTests
                 Assert.That(
                     PlayerPrefs.GetString(preferenceKey, string.Empty),
                     Is.EqualTo(Path.GetFullPath(copiedPmxPath)));
+                Assert.That(
+                    PlayerPrefs.GetString(relativePreferenceKey, string.Empty)
+                        .Replace('\\', '/'),
+                    Does.EndWith("/" + Path.GetFileName(copiedPmxPath)));
 
                 UnityEngine.Object.Destroy(firstRoot);
                 firstRoot = null;
@@ -256,6 +338,16 @@ namespace QuestMmdPlayer.PlayModeTests
                 else
                 {
                     PlayerPrefs.SetString(preferenceKey, previousSelection);
+                }
+                if (string.IsNullOrEmpty(previousRelativeSelection))
+                {
+                    PlayerPrefs.DeleteKey(relativePreferenceKey);
+                }
+                else
+                {
+                    PlayerPrefs.SetString(
+                        relativePreferenceKey,
+                        previousRelativeSelection);
                 }
                 PlayerPrefs.Save();
                 if (Directory.Exists(packageRoot)) Directory.Delete(packageRoot, true);

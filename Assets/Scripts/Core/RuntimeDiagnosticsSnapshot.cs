@@ -16,6 +16,7 @@ namespace QuestMmdPlayer
         Models,
         ModelList,
         Quality,
+        Performance,
         Voice,
         TextInput,
         Debug,
@@ -40,7 +41,7 @@ namespace QuestMmdPlayer
     [Serializable]
     public sealed class RuntimeDiagnosticsSnapshot
     {
-        public const string CurrentSchemaVersion = "1.0";
+        public const string CurrentSchemaVersion = "1.1";
 
         public string SchemaVersion { get; }
         public float CapturedAtRealtimeSeconds { get; }
@@ -55,6 +56,7 @@ namespace QuestMmdPlayer
         public RoomDiagnostics Room { get; }
         public MotionDiagnostics Motion { get; }
         public ModelLoadDiagnostics ModelLoad { get; }
+        public PerformanceDiagnostics Performance { get; }
 
         internal RuntimeDiagnosticsSnapshot(
             float capturedAtRealtimeSeconds,
@@ -68,7 +70,8 @@ namespace QuestMmdPlayer
             PlacementDiagnostics placement,
             RoomDiagnostics room,
             MotionDiagnostics motion,
-            ModelLoadDiagnostics modelLoad)
+            ModelLoadDiagnostics modelLoad,
+            PerformanceDiagnostics performance)
         {
             SchemaVersion = CurrentSchemaVersion;
             CapturedAtRealtimeSeconds = Mathf.Max(0f, capturedAtRealtimeSeconds);
@@ -83,6 +86,7 @@ namespace QuestMmdPlayer
             Room = room;
             Motion = motion;
             ModelLoad = modelLoad;
+            Performance = performance;
         }
     }
 
@@ -471,6 +475,157 @@ namespace QuestMmdPlayer
         }
     }
 
+    [Serializable]
+    public sealed class PerformanceDiagnostics
+    {
+        public bool Available { get; }
+        public bool DetailedSamplingEnabled { get; }
+        public bool HeadsetPresenceAvailable { get; }
+        public bool HeadsetWorn { get; }
+        public bool TargetFpsAvailable { get; }
+        public float CurrentFps { get; }
+        public float TargetFps { get; }
+        public int FrameSampleCount { get; }
+        public float FrameTimeP50Ms { get; }
+        public float FrameTimeP95Ms { get; }
+        public float FrameTimeMaxMs { get; }
+        public float Fps5Seconds { get; }
+        public float Fps30Seconds { get; }
+        public float ActiveSessionSeconds { get; }
+        public bool CpuFrameTimeAvailable { get; }
+        public float CpuFrameTimeMs { get; }
+        public bool GpuFrameTimeAvailable { get; }
+        public float GpuFrameTimeMs { get; }
+        public bool XrPerformanceMetricsAvailable { get; }
+        public float XrAppCpuTimeMs { get; }
+        public float XrAppGpuTimeMs { get; }
+        public float XrCpuUtilization { get; }
+        public float XrGpuUtilization { get; }
+        public float CompositorDroppedFramesSession { get; }
+        public long TotalAllocatedMemoryBytes { get; }
+        public long TotalReservedMemoryBytes { get; }
+        public long ManagedUsedMemoryBytes { get; }
+        public bool AndroidPssAvailable { get; }
+        public long AndroidPssBytes { get; }
+        public int GcGeneration0Collections { get; }
+        public int GcGeneration1Collections { get; }
+        public int GcGeneration2Collections { get; }
+        public bool ThermalStatusAvailable { get; }
+        public DeviceThermalState ThermalState { get; }
+        public bool ModelLoaded { get; }
+        public int ModelRendererCount { get; }
+        public int ModelMaterialCount { get; }
+        public int ModelTextureCount { get; }
+        public long ModelEstimatedTextureBytes { get; }
+        public int ModelVertexCount { get; }
+        public long ModelTriangleCount { get; }
+        public int ModelBlendShapeCount { get; }
+        public int ModelBoneCount { get; }
+        public int ModelRigidBodyCount { get; }
+        public int ModelJointCount { get; }
+        public bool PhysicsMetricsAvailable { get; }
+        public int PhysicsFrequencyHz { get; }
+        public int PhysicsMaximumSubstepsPerFrame { get; }
+        public int PhysicsLastSubsteps { get; }
+        public float PhysicsLastDroppedSeconds { get; }
+        public float PhysicsTotalDroppedSeconds { get; }
+        public int PhysicsDroppedFrameCount { get; }
+        public float PhysicsSessionDroppedSeconds { get; }
+        public int PhysicsSessionDroppedFrameCount { get; }
+        public float PhysicsDroppedMillisecondsPerSecond5s { get; }
+        public float PhysicsDroppedMillisecondsPerSecond30s { get; }
+        public float PhysicsDroppedFramePercent5s { get; }
+        public float PhysicsDroppedFramePercent30s { get; }
+        public float MmdSamplingMilliseconds { get; }
+        public float MmdSolverMilliseconds { get; }
+        public float MmdFlushMilliseconds { get; }
+        public float MmdSdefMilliseconds { get; }
+        public float HandContactMilliseconds { get; }
+
+        internal PerformanceDiagnostics(RuntimePerformanceMonitor monitor)
+        {
+            Available = monitor != null;
+            DetailedSamplingEnabled = monitor != null && monitor.detailedSamplingEnabled;
+            HeadsetPresenceAvailable = monitor != null && monitor.headsetPresenceAvailable;
+            HeadsetWorn = monitor != null && monitor.headsetWorn;
+            TargetFpsAvailable = monitor != null && monitor.targetFpsAvailable;
+            CurrentFps = monitor == null ? 0f : Mathf.Max(0f, monitor.currentFps);
+            TargetFps = monitor == null ? 0f : Mathf.Max(0f, monitor.targetFps);
+            FrameSampleCount = monitor == null ? 0 : Mathf.Max(0, monitor.frameSampleCount);
+            FrameTimeP50Ms = monitor == null ? 0f : Mathf.Max(0f, monitor.frameTimeP50Ms);
+            FrameTimeP95Ms = monitor == null ? 0f : Mathf.Max(0f, monitor.frameTimeP95Ms);
+            FrameTimeMaxMs = monitor == null ? 0f : Mathf.Max(0f, monitor.frameTimeMaxMs);
+            Fps5Seconds = monitor == null ? 0f : Mathf.Max(0f, monitor.fps5Seconds);
+            Fps30Seconds = monitor == null ? 0f : Mathf.Max(0f, monitor.fps30Seconds);
+            ActiveSessionSeconds = monitor == null ? 0f : Mathf.Max(0f, monitor.activeSessionSeconds);
+            CpuFrameTimeAvailable = monitor != null && monitor.cpuFrameTimeAvailable;
+            CpuFrameTimeMs = monitor == null ? 0f : Mathf.Max(0f, monitor.cpuFrameTimeMs);
+            GpuFrameTimeAvailable = monitor != null && monitor.gpuFrameTimeAvailable;
+            GpuFrameTimeMs = monitor == null ? 0f : Mathf.Max(0f, monitor.gpuFrameTimeMs);
+            XrPerformanceMetricsAvailable = monitor != null && monitor.xrPerformanceMetricsAvailable;
+            XrAppCpuTimeMs = monitor == null ? 0f : Mathf.Max(0f, monitor.xrAppCpuTimeMs);
+            XrAppGpuTimeMs = monitor == null ? 0f : Mathf.Max(0f, monitor.xrAppGpuTimeMs);
+            XrCpuUtilization = monitor == null ? 0f : Mathf.Max(0f, monitor.xrCpuUtilization);
+            XrGpuUtilization = monitor == null ? 0f : Mathf.Max(0f, monitor.xrGpuUtilization);
+            CompositorDroppedFramesSession = monitor == null
+                ? 0f
+                : Mathf.Max(0f, monitor.compositorDroppedFramesSession);
+            TotalAllocatedMemoryBytes = monitor == null ? 0L : Math.Max(0L, monitor.totalAllocatedMemoryBytes);
+            TotalReservedMemoryBytes = monitor == null ? 0L : Math.Max(0L, monitor.totalReservedMemoryBytes);
+            ManagedUsedMemoryBytes = monitor == null ? 0L : Math.Max(0L, monitor.managedUsedMemoryBytes);
+            AndroidPssAvailable = monitor != null && monitor.androidPssAvailable;
+            AndroidPssBytes = monitor == null ? 0L : Math.Max(0L, monitor.androidPssBytes);
+            GcGeneration0Collections = monitor == null ? 0 : Mathf.Max(0, monitor.gcGeneration0Collections);
+            GcGeneration1Collections = monitor == null ? 0 : Mathf.Max(0, monitor.gcGeneration1Collections);
+            GcGeneration2Collections = monitor == null ? 0 : Mathf.Max(0, monitor.gcGeneration2Collections);
+            ThermalStatusAvailable = monitor != null && monitor.thermalStatusAvailable;
+            ThermalState = monitor == null ? DeviceThermalState.Unavailable : monitor.thermalState;
+            ModelLoaded = monitor != null && monitor.modelLoaded;
+            ModelRendererCount = monitor == null ? 0 : Mathf.Max(0, monitor.modelRendererCount);
+            ModelMaterialCount = monitor == null ? 0 : Mathf.Max(0, monitor.modelMaterialCount);
+            ModelTextureCount = monitor == null ? 0 : Mathf.Max(0, monitor.modelTextureCount);
+            ModelEstimatedTextureBytes = monitor == null ? 0L : Math.Max(0L, monitor.modelEstimatedTextureBytes);
+            ModelVertexCount = monitor == null ? 0 : Mathf.Max(0, monitor.modelVertexCount);
+            ModelTriangleCount = monitor == null ? 0L : Math.Max(0L, monitor.modelTriangleCount);
+            ModelBlendShapeCount = monitor == null ? 0 : Mathf.Max(0, monitor.modelBlendShapeCount);
+            ModelBoneCount = monitor == null ? 0 : Mathf.Max(0, monitor.modelBoneCount);
+            ModelRigidBodyCount = monitor == null ? 0 : Mathf.Max(0, monitor.modelRigidBodyCount);
+            ModelJointCount = monitor == null ? 0 : Mathf.Max(0, monitor.modelJointCount);
+            PhysicsMetricsAvailable = monitor != null && monitor.physicsMetricsAvailable;
+            PhysicsFrequencyHz = monitor == null ? 0 : Mathf.Max(0, monitor.physicsFrequencyHz);
+            PhysicsMaximumSubstepsPerFrame = monitor == null
+                ? 0
+                : Mathf.Max(0, monitor.physicsMaximumSubstepsPerFrame);
+            PhysicsLastSubsteps = monitor == null ? 0 : Mathf.Max(0, monitor.physicsLastSubsteps);
+            PhysicsLastDroppedSeconds = monitor == null ? 0f : Mathf.Max(0f, monitor.physicsLastDroppedSeconds);
+            PhysicsTotalDroppedSeconds = monitor == null ? 0f : Mathf.Max(0f, monitor.physicsTotalDroppedSeconds);
+            PhysicsDroppedFrameCount = monitor == null ? 0 : Mathf.Max(0, monitor.physicsDroppedFrameCount);
+            PhysicsSessionDroppedSeconds = monitor == null
+                ? 0f
+                : Mathf.Max(0f, monitor.physicsSessionDroppedSeconds);
+            PhysicsSessionDroppedFrameCount = monitor == null
+                ? 0
+                : Mathf.Max(0, monitor.physicsSessionDroppedFrameCount);
+            PhysicsDroppedMillisecondsPerSecond5s = monitor == null
+                ? 0f
+                : Mathf.Max(0f, monitor.physicsDroppedMillisecondsPerSecond5s);
+            PhysicsDroppedMillisecondsPerSecond30s = monitor == null
+                ? 0f
+                : Mathf.Max(0f, monitor.physicsDroppedMillisecondsPerSecond30s);
+            PhysicsDroppedFramePercent5s = monitor == null
+                ? 0f
+                : Mathf.Max(0f, monitor.physicsDroppedFramePercent5s);
+            PhysicsDroppedFramePercent30s = monitor == null
+                ? 0f
+                : Mathf.Max(0f, monitor.physicsDroppedFramePercent30s);
+            MmdSamplingMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdSamplingMilliseconds);
+            MmdSolverMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdSolverMilliseconds);
+            MmdFlushMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdFlushMilliseconds);
+            MmdSdefMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdSdefMilliseconds);
+            HandContactMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.handContactMilliseconds);
+        }
+    }
+
     public struct ConversationTimingDiagnostics
     {
         public int FirstInputChunkMs;
@@ -527,7 +682,8 @@ namespace QuestMmdPlayer
                     owner == null ? null : owner.VmdActions,
                     conversation,
                     owner == null ? null : owner.HumanInteraction),
-                new ModelLoadDiagnostics(owner == null ? null : owner.ModelLoader));
+                new ModelLoadDiagnostics(owner == null ? null : owner.ModelLoader),
+                new PerformanceDiagnostics(owner == null ? null : owner.Performance));
         }
 
         public static RuntimeMenuLayer DetectMenuLayer(CompanionWorldMenu menu)
@@ -561,6 +717,7 @@ namespace QuestMmdPlayer
             {
                 return RuntimeMenuLayer.ModelList;
             }
+            if (IsActive(menuRoot, "Device Performance Layer")) return RuntimeMenuLayer.Performance;
             if (IsActive(menuRoot, "Quality Layer")) return RuntimeMenuLayer.Quality;
             if (IsActive(menuRoot, "Voice Layer")) return RuntimeMenuLayer.Voice;
             if (IsActive(menuRoot, "Model Library Layer")) return RuntimeMenuLayer.Models;

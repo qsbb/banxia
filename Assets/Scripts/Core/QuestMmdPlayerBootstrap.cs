@@ -44,6 +44,7 @@ namespace QuestMmdPlayer
         public QuestQualitySettings Quality { get; private set; }
         public QuestFileImportService FileImport { get; private set; }
         public RuntimeDebugLog DebugLog { get; private set; }
+        public RuntimePerformanceMonitor Performance { get; private set; }
 
         private RuntimeMmdModelLoader runtimeMmdLoader;
         private AvatarController fallbackAvatar;
@@ -53,6 +54,8 @@ namespace QuestMmdPlayer
         {
             ApplyAndroidTaskLabel();
             DebugLog = gameObject.GetComponent<RuntimeDebugLog>() ?? gameObject.AddComponent<RuntimeDebugLog>();
+            Performance = gameObject.GetComponent<RuntimePerformanceMonitor>() ??
+                gameObject.AddComponent<RuntimePerformanceMonitor>();
             EnsureCamera();
             EnsureLight();
 
@@ -184,6 +187,7 @@ namespace QuestMmdPlayer
                 runtimeMmdLoader.ModelWillUnload += HandleModelWillUnload;
                 runtimeMmdLoader.LoadFailed += HandleMmdLoadFailed;
                 runtimeMmdLoader.ProgressChanged += HandleMmdProgress;
+                runtimeMmdLoader.LastModelRestoreCompleted += HandleLastModelRestoreCompleted;
             }
         }
 
@@ -200,6 +204,7 @@ namespace QuestMmdPlayer
                 runtimeMmdLoader.ModelWillUnload -= HandleModelWillUnload;
                 runtimeMmdLoader.LoadFailed -= HandleMmdLoadFailed;
                 runtimeMmdLoader.ProgressChanged -= HandleMmdProgress;
+                runtimeMmdLoader.LastModelRestoreCompleted -= HandleLastModelRestoreCompleted;
             }
         }
 
@@ -245,6 +250,20 @@ namespace QuestMmdPlayer
                 Avatar = fallbackAvatar;
                 BindInteractions();
             }
+        }
+
+        private void HandleLastModelRestoreCompleted(bool restored)
+        {
+            if (restored || Avatar != null || !createFallbackAvatar ||
+                (runtimeMmdLoader != null && runtimeMmdLoader.IsLoading))
+            {
+                return;
+            }
+
+            fallbackAvatar = FallbackAvatarFactory.Create(avatarStartPosition);
+            Avatar = fallbackAvatar;
+            BindInteractions();
+            Debug.Log("[Banxia] No installed model was restored; using the fallback avatar.");
         }
 
         private void HandleMmdProgress(string stage)

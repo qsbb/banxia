@@ -20,12 +20,20 @@ namespace QuestMmdPlayer
         private QuestTrackedHandVisualizer trackedHands;
         private MMDPhysicsManager physicsManager;
         private bool configured;
+        private bool highFrequencyContact;
+        private int updateParity;
         private int activeProbeCount;
         private string status = "等待角色物理管理器";
 
         public string Status => status;
         public int ActiveProbeCount => activeProbeCount;
         public bool IsConfigured => configured && physicsManager != null;
+
+        public void SetHighFrequencyContact(bool enabled)
+        {
+            highFrequencyContact = enabled;
+            updateParity = 0;
+        }
 
         public void Bind(AvatarController targetAvatar, QuestTrackedHandVisualizer sourceHands)
         {
@@ -42,6 +50,11 @@ namespace QuestMmdPlayer
         private void Update()
         {
             if (!enabledForRuntime || trackedHands == null || physicsManager == null)
+            {
+                return;
+            }
+
+            if (!highFrequencyContact && configured && (++updateParity & 1) != 0)
             {
                 return;
             }
@@ -65,7 +78,11 @@ namespace QuestMmdPlayer
                 }
                 physicsManager.ConfigureExternalKinematicSpheres(radii);
                 configured = physicsManager.externalKinematicSphereCount == radii.Length;
-                status = configured ? "外部手部刚体已接入 UMT Bullet" : "外部手部刚体初始化失败";
+                status = configured
+                    ? physicsManager.externalKinematicFullCoverage
+                        ? "外部手部刚体已接入 UMT Bullet"
+                        : "外部手部刚体已接入，模型碰撞组覆盖受限"
+                    : "外部手部刚体初始化失败";
                 Debug.Log("[MmdPhysicsAdapter] " + status + "，数量=" + radii.Length, this);
                 if (!configured)
                 {

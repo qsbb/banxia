@@ -27,6 +27,7 @@ namespace QuestMmdPlayer
             AppendBlock(builder, FormatInteraction(snapshot.Interaction));
             AppendBlock(builder, FormatRoom(snapshot.Room, snapshot.Placement));
             AppendBlock(builder, FormatMotion(snapshot.Motion, snapshot.ModelLoad));
+            AppendBlock(builder, FormatPerformanceSummary(snapshot.Performance));
             AppendLine(builder, "最近阶段：");
             AppendTimeline(builder, timeline, maximumTimelineLines);
             return builder.ToString().TrimEnd();
@@ -112,6 +113,136 @@ namespace QuestMmdPlayer
                 "\n缓存命中/未命中/淘汰" + motion.ActionCacheHits + "/" +
                 motion.ActionCacheMisses + "/" + motion.ActionCacheEvictions +
                 " · 准备" + prepare + " · 模型" + LoadPhaseName(model.Phase) + "/" + load;
+        }
+
+        public static string FormatPerformanceSummary(PerformanceDiagnostics performance)
+        {
+            if (performance == null || !performance.Available)
+            {
+                return "性能：不可用";
+            }
+            var fps = performance.FrameSampleCount <= 0
+                ? "-"
+                : performance.CurrentFps.ToString("F1");
+            var target = performance.TargetFpsAvailable
+                ? performance.TargetFps.ToString("F0")
+                : "-";
+            return "性能：" + HeadsetName(performance) +
+                " · FPS " + fps + "/" + target +
+                " · P95 " + OptionalMilliseconds(
+                    performance.FrameSampleCount > 0,
+                    performance.FrameTimeP95Ms);
+        }
+
+        public static string FormatPerformance(PerformanceDiagnostics performance)
+        {
+            if (performance == null || !performance.Available)
+            {
+                return "设备性能采集不可用";
+            }
+
+            var builder = new StringBuilder(1024);
+            builder.Append("头显：").Append(HeadsetName(performance));
+            if (performance.HeadsetPresenceAvailable && !performance.HeadsetWorn)
+            {
+                builder.Append("\n未佩戴时系统会节流，FPS 不代表佩戴表现");
+            }
+            builder.Append("\nFPS：")
+                .Append(performance.FrameSampleCount > 0 ? performance.CurrentFps.ToString("F1") : "不可用")
+                .Append(" / 目标 ")
+                .Append(performance.TargetFpsAvailable ? performance.TargetFps.ToString("F0") : "不可用")
+                .Append(" · 样本 ").Append(performance.FrameSampleCount);
+            builder.Append("\n帧时：P50 ")
+                .Append(OptionalMilliseconds(performance.FrameSampleCount > 0, performance.FrameTimeP50Ms))
+                .Append(" · P95 ")
+                .Append(OptionalMilliseconds(performance.FrameSampleCount > 0, performance.FrameTimeP95Ms))
+                .Append(" · 最大 ")
+                .Append(OptionalMilliseconds(performance.FrameSampleCount > 0, performance.FrameTimeMaxMs));
+            builder.Append("\nCPU/GPU 帧时：")
+                .Append(OptionalMilliseconds(performance.CpuFrameTimeAvailable, performance.CpuFrameTimeMs))
+                .Append(" / ")
+                .Append(OptionalMilliseconds(performance.GpuFrameTimeAvailable, performance.GpuFrameTimeMs));
+            builder.Append("\n佩戴窗口：5秒 ").Append(performance.Fps5Seconds.ToString("F1"))
+                .Append(" FPS · 30秒 ").Append(performance.Fps30Seconds.ToString("F1"))
+                .Append(" FPS · ").Append(performance.ActiveSessionSeconds.ToString("F0")).Append('s');
+
+            if (performance.XrPerformanceMetricsAvailable)
+            {
+                builder.Append("\nOpenXR App CPU/GPU：")
+                    .Append(performance.XrAppCpuTimeMs.ToString("F2")).Append(" / ")
+                    .Append(performance.XrAppGpuTimeMs.ToString("F2")).Append(" ms");
+                builder.Append("\nOpenXR 利用率 CPU/GPU：")
+                    .Append(performance.XrCpuUtilization.ToString("F0")).Append("% / ")
+                    .Append(performance.XrGpuUtilization.ToString("F0")).Append("% · 合成器丢帧 ")
+                    .Append(performance.CompositorDroppedFramesSession.ToString("F0"));
+            }
+
+            if (!performance.DetailedSamplingEnabled)
+            {
+                builder.Append("\n详细采集：已停止（打开本页后启用）");
+                return builder.ToString();
+            }
+
+            builder.Append("\n内存：已分配 ").Append(Megabytes(performance.TotalAllocatedMemoryBytes))
+                .Append(" · 保留 ").Append(Megabytes(performance.TotalReservedMemoryBytes))
+                .Append(" · 托管 ").Append(Megabytes(performance.ManagedUsedMemoryBytes));
+            builder.Append("\n进程 PSS：")
+                .Append(performance.AndroidPssAvailable ? Megabytes(performance.AndroidPssBytes) : "不可用")
+                .Append(" · GC 0/1/2：")
+                .Append(performance.GcGeneration0Collections).Append('/')
+                .Append(performance.GcGeneration1Collections).Append('/')
+                .Append(performance.GcGeneration2Collections);
+            builder.Append("\n热状态：")
+                .Append(performance.ThermalStatusAvailable
+                    ? ThermalName(performance.ThermalState)
+                    : "不可用");
+
+            if (performance.ModelLoaded)
+            {
+                builder.Append("\n模型：顶点 ").Append(performance.ModelVertexCount)
+                    .Append(" · 三角形 ").Append(performance.ModelTriangleCount)
+                    .Append(" · 渲染器 ").Append(performance.ModelRendererCount);
+                builder.Append("\n模型：材质 ").Append(performance.ModelMaterialCount)
+                    .Append(" · 纹理 ").Append(performance.ModelTextureCount)
+                    .Append("（RGBA估算 ").Append(Megabytes(performance.ModelEstimatedTextureBytes)).Append(')');
+                builder.Append("\n模型：骨骼 ").Append(performance.ModelBoneCount)
+                    .Append(" · 变形 ").Append(performance.ModelBlendShapeCount)
+                    .Append(" · 刚体/关节 ").Append(performance.ModelRigidBodyCount)
+                    .Append('/').Append(performance.ModelJointCount);
+            }
+            else
+            {
+                builder.Append("\n模型复杂度：未加载模型");
+            }
+
+            if (performance.PhysicsMetricsAvailable)
+            {
+                builder.Append("\nMMD物理：").Append(performance.PhysicsFrequencyHz)
+                    .Append("Hz · 本帧 ").Append(performance.PhysicsLastSubsteps)
+                    .Append('/').Append(performance.PhysicsMaximumSubstepsPerFrame).Append(" 步");
+                builder.Append("\n物理丢弃：本帧 ")
+                    .Append((performance.PhysicsLastDroppedSeconds * 1000f).ToString("F1"))
+                    .Append("ms · 本次佩戴 ")
+                    .Append(performance.PhysicsSessionDroppedSeconds.ToString("F2"))
+                    .Append("s/").Append(performance.PhysicsSessionDroppedFrameCount).Append("帧");
+                builder.Append("\n最近丢弃：5秒 ")
+                    .Append(performance.PhysicsDroppedMillisecondsPerSecond5s.ToString("F1"))
+                    .Append("ms/s · ").Append(performance.PhysicsDroppedFramePercent5s.ToString("F1"))
+                    .Append("%帧；30秒 ")
+                    .Append(performance.PhysicsDroppedMillisecondsPerSecond30s.ToString("F1"))
+                    .Append("ms/s · ").Append(performance.PhysicsDroppedFramePercent30s.ToString("F1")).Append("%帧");
+                builder.Append("\nMMD采样/求解/回写/SDEF：")
+                    .Append(performance.MmdSamplingMilliseconds.ToString("F2")).Append('/')
+                    .Append(performance.MmdSolverMilliseconds.ToString("F2")).Append('/')
+                    .Append(performance.MmdFlushMilliseconds.ToString("F2")).Append('/')
+                    .Append(performance.MmdSdefMilliseconds.ToString("F2")).Append("ms");
+                builder.Append(" · 手部接触 ").Append(performance.HandContactMilliseconds.ToString("F2")).Append("ms");
+            }
+            else
+            {
+                builder.Append("\nMMD物理：不可用");
+            }
+            return builder.ToString();
         }
 
         public static string BackendName(BackendChainState value)
@@ -232,6 +363,28 @@ namespace QuestMmdPlayer
 
         public static string YesNo(bool value) => value ? "是" : "否";
 
+        public static string HeadsetName(PerformanceDiagnostics performance)
+        {
+            if (performance == null || !performance.HeadsetPresenceAvailable) return "佩戴状态不可用";
+            return performance.HeadsetWorn ? "已佩戴" : "未佩戴（系统节流）";
+        }
+
+        public static string ThermalName(DeviceThermalState value)
+        {
+            switch (value)
+            {
+                case DeviceThermalState.Normal: return "正常";
+                case DeviceThermalState.Light: return "轻度";
+                case DeviceThermalState.Moderate: return "中度";
+                case DeviceThermalState.Severe: return "严重";
+                case DeviceThermalState.Critical: return "临界";
+                case DeviceThermalState.Emergency: return "紧急";
+                case DeviceThermalState.Shutdown: return "即将关机";
+                case DeviceThermalState.Unknown: return "未知";
+                default: return "不可用";
+            }
+        }
+
         private static void AppendLine(StringBuilder builder, string value)
         {
             if (builder.Length > 0) builder.Append('\n');
@@ -264,5 +417,15 @@ namespace QuestMmdPlayer
         }
 
         private static string Ms(int value) => value < 0 ? "-" : value + "ms";
+
+        private static string OptionalMilliseconds(bool available, float value)
+        {
+            return available ? value.ToString("F1") + "ms" : "不可用";
+        }
+
+        private static string Megabytes(long bytes)
+        {
+            return (Math.Max(0L, bytes) / (1024d * 1024d)).ToString("F1") + "MB";
+        }
     }
 }

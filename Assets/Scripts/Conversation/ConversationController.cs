@@ -47,6 +47,9 @@ namespace QuestMmdPlayer
         private readonly Dictionary<string, AvatarActionReceiptTracker> actionReceiptTrackers =
             new Dictionary<string, AvatarActionReceiptTracker>(StringComparer.Ordinal);
         private readonly Queue<string> actionReceiptOrder = new Queue<string>();
+        private readonly HashSet<string> wholeBodyActionTurns =
+            new HashSet<string>(StringComparer.Ordinal);
+        private readonly Queue<string> wholeBodyActionTurnOrder = new Queue<string>();
         private const int MaxTrackedActionReceipts = 64;
         [SerializeField] private bool allowAutomaticMockTransport;
         [SerializeField] private bool sendInteractionEvents = true;
@@ -527,6 +530,9 @@ namespace QuestMmdPlayer
                         message.TurnId,
                         message.ActionId,
                         message.Gesture,
+                        message.ActionParameters,
+                        message.ActionTransition,
+                        message.ActionSource,
                         out executionContext))
                 {
                     actionReceiptTrackers.Add(message.ActionId, tracker);
@@ -538,15 +544,48 @@ namespace QuestMmdPlayer
                 }
             }
 
+            if (IsWholeBodyAction(message.Gesture) &&
+                !string.IsNullOrEmpty(message.TurnId) &&
+                wholeBodyActionTurns.Contains(message.TurnId))
+            {
+                HandleActionExecutionChanged(new AvatarActionExecutionUpdate
+                {
+                    Context = executionContext,
+                    Phase = AvatarActionReceiptPhase.Rejected,
+                    Source = "runtime",
+                    ReasonCode = "superseded"
+                });
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "blocked",
+                    "whole_body_action_already_selected",
+                    traceId: RuntimeDebugLog.TraceLabel(message.TurnId));
+                return false;
+            }
+
             if (presenter != null)
             {
-                return presenter.ApplyIntent(
+                var applied = presenter.ApplyIntent(
                     message.Emotion,
                     message.Gesture,
                     message.LookAt,
                     message.Intensity,
                     message.DurationMs,
-                    executionContext);
+                    executionContext,
+                    message.ActionParameters,
+                    message.ActionTransition,
+                    message.ActionSource);
+                if (applied && IsWholeBodyAction(message.Gesture) &&
+                    !string.IsNullOrEmpty(message.TurnId))
+                {
+                    wholeBodyActionTurns.Add(message.TurnId);
+                    wholeBodyActionTurnOrder.Enqueue(message.TurnId);
+                    while (wholeBodyActionTurnOrder.Count > MaxTrackedActionReceipts)
+                    {
+                        wholeBodyActionTurns.Remove(wholeBodyActionTurnOrder.Dequeue());
+                    }
+                }
+                return applied;
             }
 
             if (executionContext != null)
@@ -560,6 +599,12 @@ namespace QuestMmdPlayer
                 });
             }
             return false;
+        }
+
+        private static bool IsWholeBodyAction(string action)
+        {
+            var normalized = AstrBotProtocol.SanitizeGesture(action);
+            return normalized != "idle" && normalized != "talk";
         }
 
         private void HandleActionExecutionChanged(AvatarActionExecutionUpdate update)

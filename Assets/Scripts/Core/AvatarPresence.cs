@@ -66,6 +66,10 @@ namespace QuestMmdPlayer
 
         public void Bind(AvatarController targetAvatar)
         {
+            if (avatar != null)
+            {
+                avatar.ActionChanged -= HandleAvatarActionChanged;
+            }
             Restore();
             avatar = targetAvatar;
             humanInteraction = avatar == null ? null : avatar.GetComponentInParent<AvatarHumanInteraction>();
@@ -79,6 +83,11 @@ namespace QuestMmdPlayer
             {
                 Status = "Waiting for avatar";
                 return;
+            }
+
+            if (isActiveAndEnabled)
+            {
+                avatar.ActionChanged += HandleAvatarActionChanged;
             }
 
             var bones = avatar.GetComponentsInChildren<MMDBoneTransform>(true);
@@ -116,12 +125,18 @@ namespace QuestMmdPlayer
 
         private void ApplyBodyTurn()
         {
-            var blocked = !bodyTurnEnabled || avatar == null || Camera.main == null ||
-                (humanInteraction != null && humanInteraction.HasSemanticContact) ||
-                IsActionTurnBlocked(avatar.CurrentAction);
-            if (blocked)
+            if (!bodyTurnEnabled || avatar == null || Camera.main == null ||
+                (humanInteraction != null && humanInteraction.HasSemanticContact))
             {
                 CancelBodyTurnPose();
+                return;
+            }
+            if (IsActionTurnBlocked(avatar.CurrentAction))
+            {
+                // The action owner writes its own root/bone motion later in the
+                // frame. Only clear our state here; restoring the idle pose would
+                // overwrite turn_half or imported VMD tracks.
+                CancelBodyTurnPose(false);
                 return;
             }
 
@@ -222,7 +237,7 @@ namespace QuestMmdPlayer
                     Quaternion.Euler(-bodyTurnDirection * 2.5f * weight, 0f, 0f);
             }
         }
-        private static bool IsActionTurnBlocked(string action)
+        public static bool IsActionTurnBlocked(string action)
         {
             switch (action)
             {
@@ -230,6 +245,7 @@ namespace QuestMmdPlayer
                 case "bow":
                 case "nod":
                 case "sway":
+                case "turn_half":
                 case "vmd":
                     return true;
                 default:
@@ -353,8 +369,17 @@ namespace QuestMmdPlayer
 
         private void CancelBodyTurnPose()
         {
+            CancelBodyTurnPose(true);
+        }
+
+        private void CancelBodyTurnPose(bool restorePose)
+        {
             bodyTurnActive = false;
             bodyTurnClock = 0f;
+            if (!restorePose)
+            {
+                return;
+            }
             if (lowerBody != null) lowerBody.localRotation = lowerBodyRestRotation;
             if (leftLeg != null) leftLeg.localRotation = leftLegRestRotation;
             if (rightLeg != null) rightLeg.localRotation = rightLegRestRotation;
@@ -371,7 +396,39 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void OnDisable() => Restore();
+        private void OnEnable()
+        {
+            if (avatar != null)
+            {
+                avatar.ActionChanged -= HandleAvatarActionChanged;
+                avatar.ActionChanged += HandleAvatarActionChanged;
+            }
+        }
+
+        private void OnDisable()
+        {
+            if (avatar != null)
+            {
+                avatar.ActionChanged -= HandleAvatarActionChanged;
+            }
+            Restore();
+        }
+
+        private void OnDestroy()
+        {
+            if (avatar != null)
+            {
+                avatar.ActionChanged -= HandleAvatarActionChanged;
+            }
+        }
+
+        private void HandleAvatarActionChanged(string action)
+        {
+            if (IsActionTurnBlocked(action))
+            {
+                CancelBodyTurnPose();
+            }
+        }
 
         private static string Normalize(string value)
         {

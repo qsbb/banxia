@@ -132,6 +132,17 @@ namespace QuestMmdPlayer
     public static class AstrBotProtocol
     {
         public const string Version = "1.0";
+        private static readonly string[] ExecutableActions =
+        {
+            "wave", "bow", "dance", "dance_next", "raise_hand", "turn_half",
+            "crouch", "sit", "lie", "nod", "sway", "handshake", "head_pat",
+            "cheek_pinch", "refuse", "step_back"
+        };
+
+        public static string[] SupportedActions()
+        {
+            return (string[])ExecutableActions.Clone();
+        }
 
         public static bool TryValidateSettings(AstrBotBridgeSettings settings, out string reason)
         {
@@ -284,7 +295,11 @@ namespace QuestMmdPlayer
                         : string.Empty;
                     message.InReplyToEventId = payload.in_reply_to_event_id;
                     message.Emotion = SanitizeEmotion(payload.emotion);
-                    message.Gesture = SanitizeGesture(payload.gesture);
+                    message.ActionMethod = SanitizeActionMethod(payload.method, payload.gesture);
+                    message.Gesture = message.ActionMethod;
+                    message.ActionParameters = SanitizeActionParameters(payload.parameters);
+                    message.ActionTransition = SanitizeActionTransition(payload.transition);
+                    message.ActionSource = SanitizeActionSource(payload.source);
                     message.LookAt = SanitizeLookAt(payload.look_at);
                     message.Intensity = Mathf.Clamp01(payload.intensity);
                     message.DurationMs = Mathf.Clamp(payload.duration_ms, 0, 30000);
@@ -345,12 +360,87 @@ namespace QuestMmdPlayer
                 case "sway":
                 case "raise_hand":
                 case "turn_half":
+                case "crouch":
                 case "sit":
                 case "lie":
                 case "lie_down":
                     return value;
                 default:
                     return "idle";
+            }
+        }
+
+        public static string SanitizeActionMethod(string method, string legacyGesture)
+        {
+            if (string.IsNullOrWhiteSpace(method))
+            {
+                return SanitizeGesture(legacyGesture);
+            }
+            return SanitizeGesture(method.Trim().ToLowerInvariant());
+        }
+
+        public static AvatarActionParameters SanitizeActionParameters(AvatarActionParametersPayload value)
+        {
+            if (value == null)
+            {
+                return new AvatarActionParameters();
+            }
+            return new AvatarActionParameters
+            {
+                AngleDegrees = Mathf.Clamp(value.angle_degrees, -180f, 180f),
+                Depth = value.depth <= 0f ? 0f : Mathf.Clamp(value.depth, .2f, 1f),
+                HoldMs = Mathf.Clamp(value.hold_ms, 0, 5000),
+                Style = SanitizeActionStyle(value.style)
+            };
+        }
+
+        public static AvatarActionTransition SanitizeActionTransition(AvatarActionTransitionPayload value)
+        {
+            if (value == null)
+            {
+                return new AvatarActionTransition();
+            }
+            return new AvatarActionTransition
+            {
+                EnterMs = Mathf.Clamp(value.enter_ms, 0, 5000),
+                ExitMs = Mathf.Clamp(value.exit_ms, 0, 5000),
+                Easing = SanitizeActionEasing(value.easing)
+            };
+        }
+
+        public static string SanitizeActionEasing(string value)
+        {
+            return string.Equals(value, "ease_in_out", StringComparison.Ordinal)
+                ? "ease_in_out"
+                : "smoothstep";
+        }
+
+        public static string SanitizeActionStyle(string value)
+        {
+            switch (string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant())
+            {
+                case "gentle":
+                case "natural":
+                case "energetic":
+                    return value.Trim().ToLowerInvariant();
+                default:
+                    return "natural";
+            }
+        }
+
+        public static string SanitizeActionSource(string value)
+        {
+            switch (string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant())
+            {
+                case "explicit_request":
+                case "fast_provider":
+                case "eventbus_tool":
+                case "direct_model":
+                case "interaction_policy":
+                case "fallback":
+                    return value.Trim().ToLowerInvariant();
+                default:
+                    return "backend";
             }
         }
 
@@ -523,6 +613,10 @@ namespace QuestMmdPlayer
             public string turn_id;
             public string in_reply_to_event_id;
             public string action_id;
+            public string method;
+            public AvatarActionParametersPayload parameters;
+            public AvatarActionTransitionPayload transition;
+            public string source;
             public string text;
             public string emotion;
             public string gesture;
@@ -576,6 +670,24 @@ namespace QuestMmdPlayer
         public string bot_id;
         public string group_id;
         public string relationship_profile_id;
+        public string[] supported_actions;
+    }
+
+    [Serializable]
+    public sealed class AvatarActionParametersPayload
+    {
+        public float angle_degrees;
+        public float depth;
+        public int hold_ms;
+        public string style;
+    }
+
+    [Serializable]
+    public sealed class AvatarActionTransitionPayload
+    {
+        public int enter_ms;
+        public int exit_ms;
+        public string easing;
     }
 
     [Serializable]

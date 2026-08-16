@@ -3,6 +3,67 @@ using UnityEngine;
 
 namespace QuestMmdPlayer
 {
+    public readonly struct AvatarNaturalTurnSample
+    {
+        public AvatarNaturalTurnSample(
+            float yawProgress,
+            Vector3 localRootOffset,
+            float pelvisYaw,
+            float pelvisRoll,
+            float torsoYaw,
+            float torsoRoll,
+            float headYaw,
+            float leftStep,
+            float rightStep)
+        {
+            YawProgress = yawProgress;
+            LocalRootOffset = localRootOffset;
+            PelvisYaw = pelvisYaw;
+            PelvisRoll = pelvisRoll;
+            TorsoYaw = torsoYaw;
+            TorsoRoll = torsoRoll;
+            HeadYaw = headYaw;
+            LeftStep = leftStep;
+            RightStep = rightStep;
+        }
+
+        public float YawProgress { get; }
+        public Vector3 LocalRootOffset { get; }
+        public float PelvisYaw { get; }
+        public float PelvisRoll { get; }
+        public float TorsoYaw { get; }
+        public float TorsoRoll { get; }
+        public float HeadYaw { get; }
+        public float LeftStep { get; }
+        public float RightStep { get; }
+    }
+
+    public readonly struct AvatarCrouchSample
+    {
+        public AvatarCrouchSample(
+            float poseAmount,
+            float pelvisDrop,
+            float hipPitch,
+            float kneePitch,
+            float anklePitch,
+            float torsoPitch)
+        {
+            PoseAmount = poseAmount;
+            PelvisDrop = pelvisDrop;
+            HipPitch = hipPitch;
+            KneePitch = kneePitch;
+            AnklePitch = anklePitch;
+            TorsoPitch = torsoPitch;
+        }
+
+        public float PoseAmount { get; }
+        public float PelvisDrop { get; }
+        public float HipPitch { get; }
+        public float KneePitch { get; }
+        public float AnklePitch { get; }
+        public float TorsoPitch { get; }
+    }
+
     /// <summary>
     /// Prototype avatar controller. It deliberately exposes provider-neutral
     /// methods so Meta Interaction SDK events can be connected later without
@@ -34,6 +95,8 @@ namespace QuestMmdPlayer
         private Transform rightUpperLeg;
         private Transform leftLowerLeg;
         private Transform rightLowerLeg;
+        private Transform leftFoot;
+        private Transform rightFoot;
         private Quaternion upperBodyBase;
         private Quaternion headBase;
         private Quaternion rightUpperArmBase;
@@ -44,6 +107,9 @@ namespace QuestMmdPlayer
         private Quaternion rightUpperLegBase;
         private Quaternion leftLowerLegBase;
         private Quaternion rightLowerLegBase;
+        private Quaternion leftFootBase;
+        private Quaternion rightFootBase;
+        private Vector3 lowerBodyBasePosition;
         private bool actionPoseCaptured;
         private bool actionTransitionActive;
         private float actionTransitionClock;
@@ -58,6 +124,9 @@ namespace QuestMmdPlayer
         private Quaternion transitionRightUpperLeg;
         private Quaternion transitionLeftLowerLeg;
         private Quaternion transitionRightLowerLeg;
+        private Quaternion transitionLeftFoot;
+        private Quaternion transitionRightFoot;
+        private Vector3 transitionLowerBodyPosition;
 
         private const float WaveDuration = 3.6f;
         private const float BowDuration = 2.2f;
@@ -65,13 +134,25 @@ namespace QuestMmdPlayer
         private const float SwayDuration = 3.4f;
         private const float DanceDuration = 6.4f;
         private const float RaiseHandDuration = 3.0f;
-        private const float TurnHalfDuration = 2.4f;
+        private const float TurnHalfDuration = 3.2f;
         private const float RefuseDuration = 2.2f;
         private const float StepBackDuration = 2.0f;
+        private const float CrouchEnterSeconds = .55f;
+        private const float CrouchHoldSeconds = .9f;
+        private const float CrouchExitSeconds = .65f;
         private Vector3 actionWorldStartPosition;
         private Vector3 actionWorldTargetPosition;
         private Quaternion actionWorldStartRotation = Quaternion.identity;
-        private Quaternion actionWorldTargetRotation = Quaternion.identity;
+        private float actionTurnDirection = 1f;
+        private float actionTurnDegrees = 180f;
+        private float crouchDepth = .65f;
+        private float crouchEnterSeconds = CrouchEnterSeconds;
+        private float crouchHoldSeconds = CrouchHoldSeconds;
+        private float crouchExitSeconds = CrouchExitSeconds;
+        private Vector3 leftFootWorldAnchor;
+        private Vector3 rightFootWorldAnchor;
+        private string actionRequestSource = "local";
+        private string actionStyle = "natural";
 
         public event Action<string> ActionChanged;
 
@@ -81,6 +162,10 @@ namespace QuestMmdPlayer
         public AvatarActionSource CurrentActionSource => currentActionSource;
         public string CurrentEmotion => currentEmotion;
         public bool IsPlaying => isPlaying;
+        public bool SupportsCrouch => actionPoseCaptured && lowerBody != null &&
+            leftUpperLeg != null && rightUpperLeg != null &&
+            leftLowerLeg != null && rightLowerLeg != null &&
+            leftFoot != null && rightFoot != null;
 
         public void Initialize(Transform modelRoot)
         {
@@ -189,6 +274,14 @@ namespace QuestMmdPlayer
                     PlayActionFromSource("idle", AvatarActionSource.System);
                 }
             }
+            else if (currentAction == "crouch")
+            {
+                ApplyCrouch();
+                if (actionClock >= CrouchDuration)
+                {
+                    PlayActionFromSource("idle", AvatarActionSource.System);
+                }
+            }
             else if (currentAction == "sit")
             {
                 ApplySit();
@@ -225,6 +318,7 @@ namespace QuestMmdPlayer
             actionPoseCaptured = false;
             upperBody = head = rightUpperArm = rightLowerArm = rightHand = null;
             lowerBody = leftUpperLeg = rightUpperLeg = leftLowerLeg = rightLowerLeg = null;
+            leftFoot = rightFoot = null;
             if (visualRoot == null)
             {
                 return;
@@ -241,6 +335,8 @@ namespace QuestMmdPlayer
             rightUpperLeg = FindBone(bones, "rightupperleg", "upperlegr", "\u53f3\u8db3", "\u53f3\u5927\u817f");
             leftLowerLeg = FindBone(bones, "leftlowerleg", "lowerlegl", "\u5de6\u3072\u3056", "\u5de6\u819d");
             rightLowerLeg = FindBone(bones, "rightlowerleg", "lowerlegr", "\u53f3\u3072\u3056", "\u53f3\u819d");
+            leftFoot = FindBone(bones, "leftfoot", "footl", "anklel", "\u5de6\u8db3\u9996");
+            rightFoot = FindBone(bones, "rightfoot", "footr", "ankler", "\u53f3\u8db3\u9996");
 
             upperBodyBase = RotationOf(upperBody);
             headBase = RotationOf(head);
@@ -248,10 +344,13 @@ namespace QuestMmdPlayer
             rightLowerArmBase = RotationOf(rightLowerArm);
             rightHandBase = RotationOf(rightHand);
             lowerBodyBase = RotationOf(lowerBody);
+            lowerBodyBasePosition = lowerBody == null ? Vector3.zero : lowerBody.localPosition;
             leftUpperLegBase = RotationOf(leftUpperLeg);
             rightUpperLegBase = RotationOf(rightUpperLeg);
             leftLowerLegBase = RotationOf(leftLowerLeg);
             rightLowerLegBase = RotationOf(rightLowerLeg);
+            leftFootBase = RotationOf(leftFoot);
+            rightFootBase = RotationOf(rightFoot);
             actionPoseCaptured = true;
         }
 
@@ -409,15 +508,138 @@ namespace QuestMmdPlayer
 
         private void ApplyTurnHalf()
         {
-            var progress = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(actionClock / TurnHalfDuration));
-            transform.rotation = Quaternion.Slerp(actionWorldStartRotation, actionWorldTargetRotation, progress);
             if (!actionPoseCaptured)
             {
                 CaptureActionPose();
             }
-            var step = Mathf.Sin(Mathf.Clamp01(actionClock / TurnHalfDuration) * Mathf.PI * 2f);
-            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(0f, step * 4f, step * 2f), 1f);
-            SetRotation(head, headBase, Quaternion.Euler(0f, -step * 3f, -step), 1f);
+
+            var normalized = Mathf.Clamp01(actionClock / TurnHalfDuration);
+            var turnDirection = actionTurnDirection;
+            var sample = SampleNaturalTurn(normalized, turnDirection);
+            var position = actionWorldStartPosition +
+                actionWorldStartRotation * sample.LocalRootOffset;
+            var rotation = NaturalTurnRotation(
+                actionWorldStartRotation,
+                turnDirection,
+                sample.YawProgress,
+                actionTurnDegrees);
+            transform.SetPositionAndRotation(position, rotation);
+
+            SetRotation(lowerBody, lowerBodyBase,
+                Quaternion.Euler(0f, sample.PelvisYaw, sample.PelvisRoll), 1f);
+            SetRotation(upperBody, upperBodyBase,
+                Quaternion.Euler(0f, sample.TorsoYaw, sample.TorsoRoll), 1f);
+            SetRotation(head, headBase, Quaternion.Euler(0f, sample.HeadYaw, 0f), 1f);
+            ApplyTurnLegPose(
+                leftUpperLeg,
+                leftLowerLeg,
+                leftFoot,
+                leftUpperLegBase,
+                leftLowerLegBase,
+                leftFootBase,
+                sample.LeftStep,
+                -turnDirection);
+            ApplyTurnLegPose(
+                rightUpperLeg,
+                rightLowerLeg,
+                rightFoot,
+                rightUpperLegBase,
+                rightLowerLegBase,
+                rightFootBase,
+                sample.RightStep,
+                turnDirection);
+        }
+
+        public static AvatarNaturalTurnSample SampleNaturalTurn(
+            float normalizedTime,
+            float turnDirection)
+        {
+            var time = Mathf.Clamp01(normalizedTime);
+            var direction = turnDirection < 0f ? -1f : 1f;
+            float yawProgress;
+            if (time < .08f)
+            {
+                yawProgress = 0f;
+            }
+            else if (time < .40f)
+            {
+                yawProgress = .46f * SmoothSegment(time, .08f, .40f);
+            }
+            else if (time < .57f)
+            {
+                yawProgress = Mathf.Lerp(.46f, .52f, SmoothSegment(time, .40f, .57f));
+            }
+            else if (time < .92f)
+            {
+                yawProgress = Mathf.Lerp(.52f, 1f, SmoothSegment(time, .57f, .92f));
+            }
+            else
+            {
+                yawProgress = 1f;
+            }
+
+            var firstStep = WindowPulse(time, .035f, .57f);
+            var secondStep = WindowPulse(time, .45f, .985f);
+            var leftStep = direction > 0f ? firstStep : secondStep;
+            var rightStep = direction > 0f ? secondStep : firstStep;
+            var localRootOffset = new Vector3(
+                direction * (firstStep * .095f - secondStep * .080f),
+                -(firstStep + secondStep) * .012f,
+                firstStep * .060f + secondStep * .075f);
+            var settle = WindowPulse(time, .76f, 1f);
+            return new AvatarNaturalTurnSample(
+                yawProgress,
+                localRootOffset,
+                direction * (firstStep * 12f + secondStep * 9f),
+                direction * (-firstStep * 3.8f + secondStep * 3.0f),
+                direction * (-firstStep * 8f + secondStep * 6f),
+                direction * (firstStep * 2.4f - secondStep * 2f),
+                direction * (firstStep * 12f - secondStep * 9f - settle * 2f),
+                leftStep,
+                rightStep);
+        }
+
+        public static Quaternion NaturalTurnRotation(
+            Quaternion startRotation,
+            float turnDirection,
+            float yawProgress,
+            float turnDegrees = 180f)
+        {
+            var direction = turnDirection < 0f ? -1f : 1f;
+            return Quaternion.AngleAxis(
+                direction * Mathf.Clamp(Mathf.Abs(turnDegrees), 15f, 180f) * Mathf.Clamp01(yawProgress),
+                Vector3.up) * startRotation;
+        }
+
+        private static void ApplyTurnLegPose(
+            Transform upperLeg,
+            Transform lowerLeg,
+            Transform foot,
+            Quaternion upperBase,
+            Quaternion lowerBase,
+            Quaternion footBase,
+            float step,
+            float side)
+        {
+            SetRotation(upperLeg, upperBase,
+                Quaternion.Euler(-step * 17f, side * step * 8f, side * step * 3f), 1f);
+            SetRotation(lowerLeg, lowerBase, Quaternion.Euler(step * 27f, 0f, 0f), 1f);
+            SetRotation(foot, footBase,
+                Quaternion.Euler(-step * 11f, -side * step * 6f, 0f), 1f);
+        }
+
+        private static float SmoothSegment(float value, float start, float end)
+        {
+            return NaturalMotionTransition.Smooth01(Mathf.InverseLerp(start, end, value));
+        }
+
+        private static float WindowPulse(float value, float start, float end)
+        {
+            if (value <= start || value >= end)
+            {
+                return 0f;
+            }
+            return Mathf.Sin(Mathf.InverseLerp(start, end, value) * Mathf.PI);
         }
 
         private void ApplyRefuse()
@@ -436,6 +658,93 @@ namespace QuestMmdPlayer
             var progress = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(actionClock / StepBackDuration));
             transform.position = Vector3.Lerp(actionWorldStartPosition, actionWorldTargetPosition, progress);
             ApplyRefuse();
+        }
+
+        private float CrouchDuration => crouchEnterSeconds + crouchHoldSeconds + crouchExitSeconds;
+
+        private void ApplyCrouch()
+        {
+            if (!SupportsCrouch)
+            {
+                PlayActionFromSource("idle", AvatarActionSource.System);
+                return;
+            }
+
+            var sample = SampleCrouch(
+                actionClock,
+                crouchEnterSeconds,
+                crouchHoldSeconds,
+                crouchExitSeconds,
+                crouchDepth,
+                EstimateVisualHeight());
+            lowerBody.localPosition = lowerBodyBasePosition + Vector3.down * sample.PelvisDrop;
+            SetRotation(lowerBody, lowerBodyBase, Quaternion.Euler(-sample.HipPitch * .14f, 0f, 0f), 1f);
+            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(sample.TorsoPitch, 0f, 0f), 1f);
+            SetRotation(head, headBase, Quaternion.Euler(-sample.TorsoPitch * .35f, 0f, 0f), 1f);
+            SetRotation(leftUpperLeg, leftUpperLegBase,
+                Quaternion.Euler(-sample.HipPitch, 1.5f * sample.PoseAmount, -1.5f * sample.PoseAmount), 1f);
+            SetRotation(rightUpperLeg, rightUpperLegBase,
+                Quaternion.Euler(-sample.HipPitch, -1.5f * sample.PoseAmount, 1.5f * sample.PoseAmount), 1f);
+            SetRotation(leftLowerLeg, leftLowerLegBase, Quaternion.Euler(sample.KneePitch, 0f, 0f), 1f);
+            SetRotation(rightLowerLeg, rightLowerLegBase, Quaternion.Euler(sample.KneePitch, 0f, 0f), 1f);
+            SetRotation(leftFoot, leftFootBase, Quaternion.Euler(sample.AnklePitch, 0f, 0f), 1f);
+            SetRotation(rightFoot, rightFootBase, Quaternion.Euler(sample.AnklePitch, 0f, 0f), 1f);
+
+            var leftPole = leftLowerLeg.position + transform.forward * .25f - transform.right * .04f;
+            var rightPole = rightLowerLeg.position + transform.forward * .25f + transform.right * .04f;
+            AvatarHumanInteraction.SolveTwoBoneIk(
+                leftUpperLeg,
+                leftLowerLeg,
+                leftFoot,
+                leftFootWorldAnchor,
+                leftPole,
+                .995f,
+                sample.PoseAmount);
+            AvatarHumanInteraction.SolveTwoBoneIk(
+                rightUpperLeg,
+                rightLowerLeg,
+                rightFoot,
+                rightFootWorldAnchor,
+                rightPole,
+                .995f,
+                sample.PoseAmount);
+        }
+
+        public static AvatarCrouchSample SampleCrouch(
+            float elapsedSeconds,
+            float enterSeconds = CrouchEnterSeconds,
+            float holdSeconds = CrouchHoldSeconds,
+            float exitSeconds = CrouchExitSeconds,
+            float depth = .65f,
+            float avatarHeight = 1.6f)
+        {
+            var enter = Mathf.Max(.25f, enterSeconds);
+            var hold = Mathf.Max(.1f, holdSeconds);
+            var exit = Mathf.Max(.25f, exitSeconds);
+            var elapsed = Mathf.Max(0f, elapsedSeconds);
+            float amount;
+            if (elapsed < enter)
+            {
+                amount = NaturalMotionTransition.Smooth01(elapsed / enter);
+            }
+            else if (elapsed < enter + hold)
+            {
+                amount = 1f;
+            }
+            else
+            {
+                amount = 1f - NaturalMotionTransition.Smooth01(
+                    (elapsed - enter - hold) / exit);
+            }
+            amount = Mathf.Clamp01(amount);
+            var strength = Mathf.Clamp(depth <= 0f ? .65f : depth, .2f, 1f);
+            return new AvatarCrouchSample(
+                amount,
+                Mathf.Clamp(avatarHeight, .8f, 2.4f) * .075f * strength * amount,
+                31f * strength * amount,
+                54f * strength * amount,
+                -19f * strength * amount,
+                7f * strength * amount);
         }
 
         private void ApplySit()
@@ -482,10 +791,13 @@ namespace QuestMmdPlayer
             transitionRightLowerArm = RotationOf(rightLowerArm);
             transitionRightHand = RotationOf(rightHand);
             transitionLowerBody = RotationOf(lowerBody);
+            transitionLowerBodyPosition = lowerBody == null ? Vector3.zero : lowerBody.localPosition;
             transitionLeftUpperLeg = RotationOf(leftUpperLeg);
             transitionRightUpperLeg = RotationOf(rightUpperLeg);
             transitionLeftLowerLeg = RotationOf(leftLowerLeg);
             transitionRightLowerLeg = RotationOf(rightLowerLeg);
+            transitionLeftFoot = RotationOf(leftFoot);
+            transitionRightFoot = RotationOf(rightFoot);
             actionTransitionClock = 0f;
             actionTransitionActive = true;
         }
@@ -503,10 +815,19 @@ namespace QuestMmdPlayer
             BlendRotation(rightLowerArm, transitionRightLowerArm, amount);
             BlendRotation(rightHand, transitionRightHand, amount);
             BlendRotation(lowerBody, transitionLowerBody, amount);
+            if (lowerBody != null)
+            {
+                lowerBody.localPosition = Vector3.Lerp(
+                    transitionLowerBodyPosition,
+                    lowerBody.localPosition,
+                    amount);
+            }
             BlendRotation(leftUpperLeg, transitionLeftUpperLeg, amount);
             BlendRotation(rightUpperLeg, transitionRightUpperLeg, amount);
             BlendRotation(leftLowerLeg, transitionLeftLowerLeg, amount);
             BlendRotation(rightLowerLeg, transitionRightLowerLeg, amount);
+            BlendRotation(leftFoot, transitionLeftFoot, amount);
+            BlendRotation(rightFoot, transitionRightFoot, amount);
             if (actionTransitionClock >= ActionTransitionSeconds)
             {
                 actionTransitionActive = false;
@@ -551,10 +872,13 @@ namespace QuestMmdPlayer
             if (rightLowerArm != null) rightLowerArm.localRotation = rightLowerArmBase;
             if (rightHand != null) rightHand.localRotation = rightHandBase;
             if (lowerBody != null) lowerBody.localRotation = lowerBodyBase;
+            if (lowerBody != null) lowerBody.localPosition = lowerBodyBasePosition;
             if (leftUpperLeg != null) leftUpperLeg.localRotation = leftUpperLegBase;
             if (rightUpperLeg != null) rightUpperLeg.localRotation = rightUpperLegBase;
             if (leftLowerLeg != null) leftLowerLeg.localRotation = leftLowerLegBase;
             if (rightLowerLeg != null) rightLowerLeg.localRotation = rightLowerLegBase;
+            if (leftFoot != null) leftFoot.localRotation = leftFootBase;
+            if (rightFoot != null) rightFoot.localRotation = rightFootBase;
         }
 
         public float EstimateVisualHeight()
@@ -711,7 +1035,12 @@ namespace QuestMmdPlayer
             PlayActionFromSource(actionName, AvatarActionSource.Manual);
         }
 
-        public bool PlayActionFromSource(string actionName, AvatarActionSource source)
+        public bool PlayActionFromSource(
+            string actionName,
+            AvatarActionSource source,
+            AvatarActionParameters parameters = null,
+            AvatarActionTransition transition = null,
+            string requestSource = "local")
         {
             var previous = currentAction;
             var normalized = AvatarMotionArbiter.Normalize(actionName);
@@ -729,6 +1058,12 @@ namespace QuestMmdPlayer
                     " current=" + currentAction + " reason=" + decision.Reason, this);
                 return false;
             }
+            if (normalized == "crouch" && !SupportsCrouch)
+            {
+                Debug.Log("[AvatarAction] rejected=crouch source=" + source +
+                    " current=" + currentAction + " reason=asset_missing", this);
+                return false;
+            }
             CaptureTransitionPose();
             currentAction = string.IsNullOrWhiteSpace(normalized) ? "idle" : normalized;
             currentActionSource = currentAction == "idle" ? AvatarActionSource.Idle : source;
@@ -738,14 +1073,53 @@ namespace QuestMmdPlayer
                 ? transform.position - transform.forward * .12f
                 : transform.position;
             actionWorldStartRotation = transform.rotation;
-            actionWorldTargetRotation = currentAction == "turn_half"
-                ? transform.rotation * Quaternion.Euler(0f, 180f, 0f)
-                : transform.rotation;
+            ConfigureActionRequest(parameters, transition, requestSource);
+            if (currentAction == "crouch")
+            {
+                leftFootWorldAnchor = leftFoot.position;
+                rightFootWorldAnchor = rightFoot.position;
+            }
             isPlaying = true;
             ActionChanged?.Invoke(currentAction);
             Debug.Log("[AvatarAction] transition=" + previous + "->" + currentAction +
-                " source=" + source + " blend_ms=" + Mathf.RoundToInt(ActionTransitionSeconds * 1000f), this);
+                " source=" + source + " request_source=" + actionRequestSource +
+                " style=" + actionStyle +
+                " blend_ms=" + Mathf.RoundToInt(ActionTransitionSeconds * 1000f), this);
             return true;
+        }
+
+        private void ConfigureActionRequest(
+            AvatarActionParameters parameters,
+            AvatarActionTransition transition,
+            string requestSource)
+        {
+            actionRequestSource = string.IsNullOrWhiteSpace(requestSource)
+                ? "local"
+                : requestSource.Trim().ToLowerInvariant();
+            actionStyle = parameters == null
+                ? "natural"
+                : AstrBotProtocol.SanitizeActionStyle(parameters.Style);
+            var requestedAngle = parameters == null ? 0f : parameters.AngleDegrees;
+            actionTurnDirection = requestedAngle < 0f ? -1f : 1f;
+            actionTurnDegrees = Mathf.Abs(requestedAngle) < 15f
+                ? 180f
+                : Mathf.Clamp(Mathf.Abs(requestedAngle), 15f, 180f);
+            crouchDepth = parameters == null || parameters.Depth <= 0f
+                ? .65f
+                : Mathf.Clamp(parameters.Depth, .2f, 1f);
+            crouchEnterSeconds = transition == null || transition.EnterMs <= 0
+                ? CrouchEnterSeconds
+                : Mathf.Clamp(transition.EnterMs / 1000f, .25f, 1.5f);
+            var requestedHoldMs = parameters == null ? 0 : parameters.HoldMs;
+            crouchHoldSeconds = requestedHoldMs <= 0
+                ? CrouchHoldSeconds
+                : Mathf.Clamp(requestedHoldMs / 1000f, .1f, 5f);
+            crouchExitSeconds = transition == null || transition.ExitMs <= 0
+                ? CrouchExitSeconds
+                : Mathf.Clamp(transition.ExitMs / 1000f, .25f, 1.5f);
+            var tempo = actionStyle == "gentle" ? 1.15f : actionStyle == "energetic" ? .82f : 1f;
+            crouchEnterSeconds = Mathf.Clamp(crouchEnterSeconds * tempo, .25f, 1.5f);
+            crouchExitSeconds = Mathf.Clamp(crouchExitSeconds * tempo, .25f, 1.5f);
         }
 
         public void SetEmotion(string emotion)

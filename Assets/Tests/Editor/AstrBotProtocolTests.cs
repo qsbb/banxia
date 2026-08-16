@@ -118,6 +118,38 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void StructuredAvatarActionMapsBoundedMethodParametersAndTransition()
+        {
+            const string json = "{\"type\":\"avatar.intent\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"action_id\":\"action-crouch-1\",\"method\":\"crouch\",\"parameters\":{\"depth\":1.4,\"hold_ms\":9000,\"style\":\"gentle\"},\"transition\":{\"enter_ms\":550,\"exit_ms\":650,\"easing\":\"ease_in_out\"},\"source\":\"explicit_request\",\"emotion\":\"happy\",\"gesture\":\"idle\",\"look_at\":\"user\",\"intensity\":0.5,\"duration_ms\":2100}";
+
+            Assert.That(AstrBotProtocol.TryMapSseEvent(
+                "s1", "avatar.intent", json, out var message, out var error),
+                Is.True,
+                error);
+            Assert.That(message.Gesture, Is.EqualTo("crouch"));
+            Assert.That(message.ActionMethod, Is.EqualTo("crouch"));
+            Assert.That(message.ActionParameters.Depth, Is.EqualTo(1f));
+            Assert.That(message.ActionParameters.HoldMs, Is.EqualTo(5000));
+            Assert.That(message.ActionParameters.Style, Is.EqualTo("gentle"));
+            Assert.That(message.ActionTransition.EnterMs, Is.EqualTo(550));
+            Assert.That(message.ActionTransition.ExitMs, Is.EqualTo(650));
+            Assert.That(message.ActionTransition.Easing, Is.EqualTo("ease_in_out"));
+            Assert.That(message.ActionSource, Is.EqualTo("explicit_request"));
+        }
+
+        [Test]
+        public void ClientAdvertisesOnlyExecutableActionMethods()
+        {
+            var actions = AstrBotProtocol.SupportedActions();
+
+            Assert.That(actions, Does.Contain("crouch"));
+            Assert.That(actions, Does.Contain("dance_next"));
+            Assert.That(actions, Does.Not.Contain("idle"));
+            Assert.That(actions, Does.Not.Contain("talk"));
+            Assert.That(actions, Is.Unique);
+        }
+
+        [Test]
         public void SpeechTimelineMapsBoundedSortedVisemeCues()
         {
             const string json = "{\"type\":\"reply.speech.timeline\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"t1\",\"visemes\":[{\"symbol\":\"A\",\"start_ms\":0,\"end_ms\":120,\"weight\":0.75},{\"symbol\":\"I\",\"start_ms\":100,\"end_ms\":220,\"weight\":1.0}]}";
@@ -213,6 +245,7 @@ namespace QuestMmdPlayer.Tests
         [TestCase("dance_next")]
         [TestCase("raise_hand")]
         [TestCase("turn_half")]
+        [TestCase("crouch")]
         [TestCase("sit")]
         [TestCase("lie")]
         [TestCase("lie_down")]

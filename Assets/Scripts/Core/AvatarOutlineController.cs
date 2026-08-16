@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Rendering;
 
 namespace QuestMmdPlayer
 {
@@ -11,34 +10,40 @@ namespace QuestMmdPlayer
     {
         private const string EnabledPreference = "quest_avatar_outline_enabled_v1";
         private const string WidthPreference = "quest_avatar_outline_width_v1";
-        private const string ShaderName = "QuestMmdPlayer/Avatar Outline";
         private const float MinimumWidth = .00035f;
         private const float MaximumWidth = .003f;
         private const float WidthStep = .00025f;
+        private const float ReferenceWidth = .0011f;
+        private static readonly int OutlineWidthProperty = Shader.PropertyToID("_OutlineWidth");
+        private static readonly int OutlineColorProperty = Shader.PropertyToID("_OutlineColor");
+        private static readonly int UseOutlineProperty = Shader.PropertyToID("_UseOutline");
 
         [SerializeField] private bool enabledByDefault = true;
-        [SerializeField, Range(MinimumWidth, MaximumWidth)] private float outlineWidth = .0011f;
+        [SerializeField, Range(MinimumWidth, MaximumWidth)] private float outlineWidth = ReferenceWidth;
         [SerializeField] private Color outlineColor = new Color(.025f, .03f, .035f, .88f);
 
-        private readonly List<SkinnedShell> skinnedShells = new List<SkinnedShell>();
-        private readonly List<GameObject> shellObjects = new List<GameObject>();
+        private readonly List<MaterialBinding> materials = new List<MaterialBinding>();
         private AvatarController avatar;
-        private Material outlineMaterial;
+
+        private sealed class MaterialBinding
+        {
+            internal Material material;
+            internal float originalWidth;
+            internal Color originalColor;
+            internal float originalUseOutline;
+            internal bool supportsUseOutline;
+        }
 
         public event Action SettingsChanged;
 
         public bool OutlineEnabled { get; private set; }
         public float OutlineWidth => outlineWidth;
-        public int ShellCount => shellObjects.Count;
+        // Kept for compatibility with diagnostics. It now counts native
+        // outline materials rather than duplicated shell renderers.
+        public int ShellCount => materials.Count;
         public string Status => ShellCount == 0
-            ? "\u5f53\u524d\u6a21\u578b\u6ca1\u6709\u53ef\u63cf\u8fb9\u7f51\u683c"
-            : $"\u63cf\u8fb9 {(OutlineEnabled ? "\u5f00\u542f" : "\u5173\u95ed")} | {outlineWidth * 1000f:F2} mm";
-
-        private sealed class SkinnedShell
-        {
-            internal SkinnedMeshRenderer source;
-            internal SkinnedMeshRenderer shell;
-        }
+            ? "当前模型没有可调节的原生描边材质"
+            : $"描边 {(OutlineEnabled ? "开启" : "关闭")} | {outlineWidth * 1000f:F2} mm · 单渲染器";
 
         private void Awake()
         {
@@ -48,11 +53,11 @@ namespace QuestMmdPlayer
 
         public void Bind(AvatarController target)
         {
-            if (avatar == target && (target == null || shellObjects.Count > 0))
+            if (avatar == target && (target == null || materials.Count > 0))
             {
                 return;
             }
-            ClearShells();
+            RestoreAndClearMaterials();
             avatar = target;
             if (avatar == null || avatar.VisualRoot == null)
             {
@@ -60,17 +65,36 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            EnsureMaterial();
-            BuildSkinnedShells(avatar.VisualRoot);
-            BuildStaticShells(avatar.VisualRoot);
+            var seen = new HashSet<Material>();
+            var renderers = avatar.VisualRoot.GetComponentsInChildren<Renderer>(true);
+            for (var rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+            {
+                var shared = renderers[rendererIndex].sharedMaterials;
+                for (var materialIndex = 0; materialIndex < shared.Length; materialIndex++)
+                {
+                    var material = shared[materialIndex];
+                    if (material == null || !seen.Add(material) ||
+                        !material.HasProperty(OutlineWidthProperty) ||
+                        !material.HasProperty(OutlineColorProperty))
+                    {
+                        continue;
+                    }
+                    var supportsUseOutline = material.HasProperty(UseOutlineProperty);
+                    materials.Add(new MaterialBinding
+                    {
+                        material = material,
+                        originalWidth = material.GetFloat(OutlineWidthProperty),
+                        originalColor = material.GetColor(OutlineColorProperty),
+                        originalUseOutline = supportsUseOutline ? material.GetFloat(UseOutlineProperty) : 1f,
+                        supportsUseOutline = supportsUseOutline
+                    });
+                }
+            }
             ApplySettings(false);
-            Debug.Log($"[AvatarOutline] Bound {ShellCount} outline shells.", this);
+            Debug.Log($"[AvatarOutline] Bound {ShellCount} native outline materials without duplicate renderers.", this);
         }
 
-        public void Toggle()
-        {
-            SetEnabled(!OutlineEnabled);
-        }
+        public void Toggle() => SetEnabled(!OutlineEnabled);
 
         public void SetEnabled(bool value)
         {
@@ -82,15 +106,9 @@ namespace QuestMmdPlayer
             ApplySettings(true);
         }
 
-        public void IncreaseWidth()
-        {
-            SetWidth(outlineWidth + WidthStep);
-        }
+        public void IncreaseWidth() => SetWidth(outlineWidth + WidthStep);
 
-        public void DecreaseWidth()
-        {
-            SetWidth(outlineWidth - WidthStep);
-        }
+        public void DecreaseWidth() => SetWidth(outlineWidth - WidthStep);
 
         public void SetWidth(float value)
         {
@@ -103,124 +121,23 @@ namespace QuestMmdPlayer
             ApplySettings(true);
         }
 
-        private void EnsureMaterial()
-        {
-            if (outlineMaterial != null)
-            {
-                return;
-            }
-            var shader = Shader.Find(ShaderName);
-            if (shader == null)
-            {
-                Debug.LogError("[AvatarOutline] Required outline shader was not found.", this);
-                return;
-            }
-            outlineMaterial = new Material(shader)
-            {
-                name = "Quest Avatar Outline Runtime",
-                hideFlags = HideFlags.DontSave
-            };
-        }
-
-        private void BuildSkinnedShells(Transform root)
-        {
-            if (outlineMaterial == null)
-            {
-                return;
-            }
-            var renderers = root.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-            for (var index = 0; index < renderers.Length; index++)
-            {
-                var source = renderers[index];
-                if (source == null || source.sharedMesh == null || source.name.EndsWith(" Outline Shell", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var shellObject = new GameObject(source.name + " Outline Shell");
-                shellObject.transform.SetParent(source.transform, false);
-                var shell = shellObject.AddComponent<SkinnedMeshRenderer>();
-                shell.sharedMesh = source.sharedMesh;
-                shell.bones = source.bones;
-                shell.rootBone = source.rootBone;
-                shell.localBounds = source.localBounds;
-                shell.quality = source.quality;
-                shell.updateWhenOffscreen = source.updateWhenOffscreen;
-                shell.skinnedMotionVectors = false;
-                shell.shadowCastingMode = ShadowCastingMode.Off;
-                shell.receiveShadows = false;
-                shell.sortingLayerID = source.sortingLayerID;
-                shell.sortingOrder = source.sortingOrder;
-                shell.sharedMaterials = RepeatMaterial(outlineMaterial, Mathf.Max(1, source.sharedMesh.subMeshCount));
-                skinnedShells.Add(new SkinnedShell { source = source, shell = shell });
-                shellObjects.Add(shellObject);
-            }
-        }
-
-        private void BuildStaticShells(Transform root)
-        {
-            if (outlineMaterial == null)
-            {
-                return;
-            }
-            var filters = root.GetComponentsInChildren<MeshFilter>(true);
-            for (var index = 0; index < filters.Length; index++)
-            {
-                var sourceFilter = filters[index];
-                var sourceRenderer = sourceFilter == null ? null : sourceFilter.GetComponent<MeshRenderer>();
-                if (sourceFilter == null || sourceFilter.sharedMesh == null || sourceRenderer == null)
-                {
-                    continue;
-                }
-
-                var shellObject = new GameObject(sourceRenderer.name + " Outline Shell");
-                shellObject.transform.SetParent(sourceFilter.transform, false);
-                var filter = shellObject.AddComponent<MeshFilter>();
-                filter.sharedMesh = sourceFilter.sharedMesh;
-                var shell = shellObject.AddComponent<MeshRenderer>();
-                shell.shadowCastingMode = ShadowCastingMode.Off;
-                shell.receiveShadows = false;
-                shell.sortingLayerID = sourceRenderer.sortingLayerID;
-                shell.sortingOrder = sourceRenderer.sortingOrder;
-                shell.sharedMaterials = RepeatMaterial(outlineMaterial, Mathf.Max(1, sourceFilter.sharedMesh.subMeshCount));
-                shellObjects.Add(shellObject);
-            }
-        }
-
-        private void LateUpdate()
-        {
-            for (var rendererIndex = 0; rendererIndex < skinnedShells.Count; rendererIndex++)
-            {
-                var pair = skinnedShells[rendererIndex];
-                if (pair.source == null || pair.shell == null || pair.source.sharedMesh == null)
-                {
-                    continue;
-                }
-                pair.shell.enabled = OutlineEnabled && pair.source.enabled && pair.source.gameObject.activeInHierarchy;
-                var count = pair.source.sharedMesh.blendShapeCount;
-                for (var blendShape = 0; blendShape < count; blendShape++)
-                {
-                    var weight = pair.source.GetBlendShapeWeight(blendShape);
-                    if (!Mathf.Approximately(weight, pair.shell.GetBlendShapeWeight(blendShape)))
-                    {
-                        pair.shell.SetBlendShapeWeight(blendShape, weight);
-                    }
-                }
-            }
-        }
-
         private void ApplySettings(bool save)
         {
-            if (outlineMaterial != null)
+            var widthScale = outlineWidth / ReferenceWidth;
+            for (var index = 0; index < materials.Count; index++)
             {
-                outlineMaterial.SetFloat("_OutlineWidth", outlineWidth);
-                outlineMaterial.SetColor("_OutlineColor", outlineColor);
-            }
-            for (var index = 0; index < shellObjects.Count; index++)
-            {
-                if (shellObjects[index] != null)
+                var binding = materials[index];
+                if (binding.material == null)
                 {
-                    shellObjects[index].SetActive(OutlineEnabled);
+                    continue;
+                }
+                binding.material.SetFloat(
+                    OutlineWidthProperty,
+                    OutlineEnabled ? Mathf.Max(0f, binding.originalWidth) * widthScale : 0f);
+                binding.material.SetColor(OutlineColorProperty, outlineColor);
+                if (binding.supportsUseOutline)
+                {
+                    binding.material.SetFloat(UseOutlineProperty, OutlineEnabled ? 1f : 0f);
                 }
             }
             if (save)
@@ -232,37 +149,28 @@ namespace QuestMmdPlayer
             SettingsChanged?.Invoke();
         }
 
-        private static Material[] RepeatMaterial(Material material, int count)
+        private void RestoreAndClearMaterials()
         {
-            var result = new Material[Mathf.Max(1, count)];
-            for (var index = 0; index < result.Length; index++)
+            for (var index = 0; index < materials.Count; index++)
             {
-                result[index] = material;
-            }
-            return result;
-        }
-
-        private void ClearShells()
-        {
-            skinnedShells.Clear();
-            for (var index = 0; index < shellObjects.Count; index++)
-            {
-                if (shellObjects[index] != null)
+                var binding = materials[index];
+                if (binding.material == null)
                 {
-                    Destroy(shellObjects[index]);
+                    continue;
+                }
+                binding.material.SetFloat(OutlineWidthProperty, binding.originalWidth);
+                binding.material.SetColor(OutlineColorProperty, binding.originalColor);
+                if (binding.supportsUseOutline)
+                {
+                    binding.material.SetFloat(UseOutlineProperty, binding.originalUseOutline);
                 }
             }
-            shellObjects.Clear();
+            materials.Clear();
         }
 
         private void OnDestroy()
         {
-            ClearShells();
-            if (outlineMaterial != null)
-            {
-                Destroy(outlineMaterial);
-                outlineMaterial = null;
-            }
+            RestoreAndClearMaterials();
         }
     }
-}
+}

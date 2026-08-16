@@ -43,6 +43,10 @@ namespace QuestMmdPlayer
         public int SampleRate;
         public SpeechVisemeCue[] VisemeTimeline;
         public string ActionId;
+        public string ActionMethod;
+        public AvatarActionParameters ActionParameters;
+        public AvatarActionTransition ActionTransition;
+        public string ActionSource;
         public bool TextSent;
         public bool AudioSent;
         /// <summary>True for a local transport acknowledgement, not a backend SSE event.</summary>
@@ -55,6 +59,21 @@ namespace QuestMmdPlayer
         public long TransportDispatchedAtTicks;
         /// <summary>Optional aggregate timings supplied by the bridge server.</summary>
         public BackendTimingSnapshot BackendTiming;
+    }
+
+    public sealed class AvatarActionParameters
+    {
+        public float AngleDegrees;
+        public float Depth;
+        public int HoldMs;
+        public string Style = "natural";
+    }
+
+    public sealed class AvatarActionTransition
+    {
+        public int EnterMs;
+        public int ExitMs;
+        public string Easing = "smoothstep";
     }
 
     public enum AvatarActionReceiptPhase
@@ -81,16 +100,28 @@ namespace QuestMmdPlayer
 
     public sealed class AvatarActionExecutionContext
     {
-        public AvatarActionExecutionContext(string turnId, string actionId, string gesture)
+        public AvatarActionExecutionContext(
+            string turnId,
+            string actionId,
+            string gesture,
+            AvatarActionParameters parameters = null,
+            AvatarActionTransition transition = null,
+            string source = "backend")
         {
             TurnId = turnId ?? string.Empty;
             ActionId = actionId ?? string.Empty;
             Gesture = gesture ?? string.Empty;
+            Parameters = parameters ?? new AvatarActionParameters();
+            Transition = transition ?? new AvatarActionTransition();
+            Source = string.IsNullOrWhiteSpace(source) ? "backend" : source;
         }
 
         public string TurnId { get; }
         public string ActionId { get; }
         public string Gesture { get; }
+        public AvatarActionParameters Parameters { get; }
+        public AvatarActionTransition Transition { get; }
+        public string Source { get; }
     }
 
     public sealed class AvatarActionExecutionUpdate
@@ -118,6 +149,9 @@ namespace QuestMmdPlayer
         private string turnId = string.Empty;
         private string actionId = string.Empty;
         private string gesture = string.Empty;
+        private AvatarActionParameters parameters = new AvatarActionParameters();
+        private AvatarActionTransition transition = new AvatarActionTransition();
+        private string source = "backend";
         private AvatarActionReceiptPhase phase;
         private bool planned;
         private bool terminal;
@@ -132,6 +166,9 @@ namespace QuestMmdPlayer
             turnId = nextTurnId ?? string.Empty;
             actionId = string.Empty;
             gesture = string.Empty;
+            parameters = new AvatarActionParameters();
+            transition = new AvatarActionTransition();
+            source = "backend";
             phase = AvatarActionReceiptPhase.Planned;
             planned = false;
             terminal = false;
@@ -142,6 +179,25 @@ namespace QuestMmdPlayer
             string eventTurnId,
             string suppliedActionId,
             string requestedGesture,
+            out AvatarActionExecutionContext context)
+        {
+            return TryPlan(
+                eventTurnId,
+                suppliedActionId,
+                requestedGesture,
+                null,
+                null,
+                "backend",
+                out context);
+        }
+
+        public bool TryPlan(
+            string eventTurnId,
+            string suppliedActionId,
+            string requestedGesture,
+            AvatarActionParameters requestedParameters,
+            AvatarActionTransition requestedTransition,
+            string requestedSource,
             out AvatarActionExecutionContext context)
         {
             context = null;
@@ -161,8 +217,17 @@ namespace QuestMmdPlayer
 
             actionId = suppliedActionId;
             gesture = normalizedGesture;
+            parameters = requestedParameters ?? new AvatarActionParameters();
+            transition = requestedTransition ?? new AvatarActionTransition();
+            source = string.IsNullOrWhiteSpace(requestedSource) ? "backend" : requestedSource;
             planned = true;
-            context = new AvatarActionExecutionContext(turnId, actionId, gesture);
+            context = new AvatarActionExecutionContext(
+                turnId,
+                actionId,
+                gesture,
+                parameters,
+                transition,
+                source);
             return true;
         }
 
@@ -188,7 +253,9 @@ namespace QuestMmdPlayer
 
         public AvatarActionExecutionContext CurrentContext()
         {
-            return planned ? new AvatarActionExecutionContext(turnId, actionId, gesture) : null;
+            return planned
+                ? new AvatarActionExecutionContext(turnId, actionId, gesture, parameters, transition, source)
+                : null;
         }
 
         private AvatarActionReceipt BuildReceipt(

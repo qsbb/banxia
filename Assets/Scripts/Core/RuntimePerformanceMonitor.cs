@@ -1,0 +1,804 @@
+using System;
+using System.Collections.Generic;
+using UMT;
+using UnityEngine;
+using UnityEngine.Profiling;
+using UnityEngine.XR;
+using ProviderXRStats = UnityEngine.XR.Provider.XRStats;
+
+namespace QuestMmdPlayer
+{
+    public enum DeviceThermalState
+    {
+        Unavailable = -1,
+        Normal = 0,
+        Light = 1,
+        Moderate = 2,
+        Severe = 3,
+        Critical = 4,
+        Emergency = 5,
+        Shutdown = 6,
+        Unknown = 7
+    }
+
+    /// <summary>
+    /// Low-overhead runtime telemetry for the in-headset performance panel.
+    /// Frame data is sampled every frame; platform and model data are refreshed
+    /// at a lower frequency so opening the panel does not distort the result.
+    /// </summary>
+    [DisallowMultipleComponent]
+    public sealed class RuntimePerformanceMonitor : MonoBehaviour
+    {
+        private const int FrameWindowCapacity = 240;
+        private const float SlowSampleIntervalSeconds = 1f;
+        private const long BytesPerKilobyte = 1024L;
+        private readonly float[] frameTimeWindow = new float[FrameWindowCapacity];
+        private readonly float[] sortedFrameTimeWindow = new float[FrameWindowCapacity];
+        private readonly FrameTiming[] frameTimings = new FrameTiming[1];
+        private readonly List<XRDisplaySubsystem> xrDisplays = new List<XRDisplaySubsystem>(2);
+        private readonly Queue<TimedFrameSample> activeFrameSamples = new Queue<TimedFrameSample>(2400);
+        private readonly Queue<PhysicsDropSample> activePhysicsDrops = new Queue<PhysicsDropSample>(2400);
+        private int frameTimeCount;
+        private int frameTimeWriteIndex;
+        private float nextSlowSampleAt;
+        private int currentModelInstanceId;
+        private MMDPhysicsManager currentPhysicsManager;
+        private bool applicationFocused = true;
+        private bool activeSamplingState;
+        private float activeSessionStartedAt;
+        private float physicsSessionBaselineSeconds;
+        private int physicsSessionBaselineFrames;
+        private float compositorDroppedBaseline;
+
+        private readonly struct TimedFrameSample
+        {
+            internal readonly float time;
+            internal readonly float milliseconds;
+
+            internal TimedFrameSample(float time, float milliseconds)
+            {
+                this.time = time;
+                this.milliseconds = milliseconds;
+            }
+        }
+
+        private readonly struct PhysicsDropSample
+        {
+            internal readonly float time;
+            internal readonly float seconds;
+            internal readonly bool dropped;
+
+            internal PhysicsDropSample(float time, float seconds, bool dropped)
+            {
+                this.time = time;
+                this.seconds = seconds;
+                this.dropped = dropped;
+            }
+        }
+
+        public bool detailedSamplingEnabled { get; private set; }
+        public bool headsetPresenceAvailable { get; private set; }
+        public bool headsetWorn { get; private set; }
+        public bool targetFpsAvailable { get; private set; }
+        public float targetFps { get; private set; }
+        public float currentFps { get; private set; }
+        public int frameSampleCount { get; private set; }
+        public float frameTimeP50Ms { get; private set; }
+        public float frameTimeP95Ms { get; private set; }
+        public float frameTimeMaxMs { get; private set; }
+        public float fps5Seconds { get; private set; }
+        public float fps30Seconds { get; private set; }
+        public float activeSessionSeconds { get; private set; }
+        public bool cpuFrameTimeAvailable { get; private set; }
+        public float cpuFrameTimeMs { get; private set; }
+        public bool gpuFrameTimeAvailable { get; private set; }
+        public float gpuFrameTimeMs { get; private set; }
+        public bool xrPerformanceMetricsAvailable { get; private set; }
+        public float xrAppCpuTimeMs { get; private set; }
+        public float xrAppGpuTimeMs { get; private set; }
+        public float xrCpuUtilization { get; private set; }
+        public float xrGpuUtilization { get; private set; }
+        public float compositorDroppedFrames { get; private set; }
+        public float compositorDroppedFramesSession { get; private set; }
+        public long totalAllocatedMemoryBytes { get; private set; }
+        public long totalReservedMemoryBytes { get; private set; }
+        public long managedUsedMemoryBytes { get; private set; }
+        public bool androidPssAvailable { get; private set; }
+        public long androidPssBytes { get; private set; }
+        public int gcGeneration0Collections { get; private set; }
+        public int gcGeneration1Collections { get; private set; }
+        public int gcGeneration2Collections { get; private set; }
+        public bool thermalStatusAvailable { get; private set; }
+        public DeviceThermalState thermalState { get; private set; } = DeviceThermalState.Unavailable;
+
+        public bool modelLoaded { get; private set; }
+        public int modelRendererCount { get; private set; }
+        public int modelMaterialCount { get; private set; }
+        public int modelTextureCount { get; private set; }
+        public long modelEstimatedTextureBytes { get; private set; }
+        public int modelVertexCount { get; private set; }
+        public long modelTriangleCount { get; private set; }
+        public int modelBlendShapeCount { get; private set; }
+        public int modelBoneCount { get; private set; }
+        public int modelRigidBodyCount { get; private set; }
+        public int modelJointCount { get; private set; }
+
+        public bool physicsMetricsAvailable { get; private set; }
+        public int physicsFrequencyHz { get; private set; }
+        public int physicsMaximumSubstepsPerFrame { get; private set; }
+        public int physicsLastSubsteps { get; private set; }
+        public float physicsLastDroppedSeconds { get; private set; }
+        public float physicsTotalDroppedSeconds { get; private set; }
+        public int physicsDroppedFrameCount { get; private set; }
+        public float physicsSessionDroppedSeconds { get; private set; }
+        public int physicsSessionDroppedFrameCount { get; private set; }
+        public float physicsDroppedMillisecondsPerSecond5s { get; private set; }
+        public float physicsDroppedMillisecondsPerSecond30s { get; private set; }
+        public float physicsDroppedFramePercent5s { get; private set; }
+        public float physicsDroppedFramePercent30s { get; private set; }
+        public float mmdSamplingMilliseconds { get; private set; }
+        public float mmdSolverMilliseconds { get; private set; }
+        public float mmdFlushMilliseconds { get; private set; }
+        public float mmdSdefMilliseconds { get; private set; }
+        public float handContactMilliseconds { get; private set; }
+
+        private void OnEnable()
+        {
+            nextSlowSampleAt = 0f;
+            currentModelInstanceId = int.MinValue;
+            applicationFocused = true;
+            CaptureHeadsetState();
+            ResetActiveSessionMetrics();
+        }
+
+        private void Update()
+        {
+            var activeSample = IsActivePerformanceSample();
+            if (activeSample != activeSamplingState)
+            {
+                activeSamplingState = activeSample;
+                ResetActiveSessionMetrics();
+            }
+            if (activeSample)
+            {
+                RecordActiveFrame(Time.unscaledDeltaTime * 1000f, Time.unscaledTime);
+            }
+            if (detailedSamplingEnabled)
+            {
+                FrameTimingManager.CaptureFrameTimings();
+                CaptureFrameTiming();
+                CapturePhysicsMetrics();
+                CaptureXrPerformanceMetrics();
+            }
+
+            if (Time.unscaledTime < nextSlowSampleAt)
+            {
+                return;
+            }
+
+            nextSlowSampleAt = Time.unscaledTime + SlowSampleIntervalSeconds;
+            CaptureHeadsetState();
+            CaptureTargetFrameRate();
+            CaptureModelComplexityIfChanged();
+            if (detailedSamplingEnabled)
+            {
+                CaptureMemoryAndGc();
+                CaptureAndroidMetrics();
+            }
+        }
+
+        private void OnApplicationFocus(bool focused)
+        {
+            applicationFocused = focused;
+            ApplyPhysicsSuspension();
+            ResetActiveSessionMetrics();
+        }
+
+        private void OnApplicationPause(bool paused)
+        {
+            applicationFocused = !paused;
+            ApplyPhysicsSuspension();
+            ResetActiveSessionMetrics();
+        }
+
+        public void SetDetailedSamplingEnabled(bool enabled)
+        {
+            if (detailedSamplingEnabled == enabled)
+            {
+                return;
+            }
+
+            detailedSamplingEnabled = enabled;
+            nextSlowSampleAt = 0f;
+            if (enabled)
+            {
+                currentModelInstanceId = int.MinValue;
+                ResetActiveSessionMetrics();
+            }
+        }
+
+        public void RecordFrameDurationMilliseconds(float frameMilliseconds)
+        {
+            if (!IsFinitePositive(frameMilliseconds))
+            {
+                return;
+            }
+
+            // Treat lifecycle gaps as non-rendering time, not as a multi-second
+            // frame. The headset-presence field separately explains off-head
+            // throttling when the runtime still supplies slow frames.
+            frameMilliseconds = Mathf.Min(frameMilliseconds, 1000f);
+            frameTimeWindow[frameTimeWriteIndex] = frameMilliseconds;
+            frameTimeWriteIndex = (frameTimeWriteIndex + 1) % frameTimeWindow.Length;
+            frameTimeCount = Mathf.Min(frameTimeCount + 1, frameTimeWindow.Length);
+            CalculateRollingFrameStatistics(
+                out var average,
+                out var p50,
+                out var p95,
+                out var maximum);
+            frameSampleCount = frameTimeCount;
+            currentFps = average <= 0f ? 0f : 1000f / average;
+            frameTimeP50Ms = p50;
+            frameTimeP95Ms = p95;
+            frameTimeMaxMs = maximum;
+        }
+
+        private void RecordActiveFrame(float frameMilliseconds, float now)
+        {
+            RecordFrameDurationMilliseconds(frameMilliseconds);
+            activeFrameSamples.Enqueue(new TimedFrameSample(now, Mathf.Min(frameMilliseconds, 1000f)));
+            PruneFrameSamples(now - 30f);
+            fps5Seconds = CalculateTimedFps(now - 5f);
+            fps30Seconds = CalculateTimedFps(now - 30f);
+            currentFps = fps5Seconds;
+            activeSessionSeconds = Mathf.Max(0f, now - activeSessionStartedAt);
+        }
+
+        public static void CalculateFrameStatistics(
+            float[] samples,
+            int count,
+            out float average,
+            out float p50,
+            out float p95,
+            out float maximum)
+        {
+            average = 0f;
+            p50 = 0f;
+            p95 = 0f;
+            maximum = 0f;
+            if (samples == null || samples.Length == 0 || count <= 0)
+            {
+                return;
+            }
+
+            count = Mathf.Min(count, samples.Length);
+            var valid = new List<float>(count);
+            for (var index = 0; index < count; index++)
+            {
+                var value = samples[index];
+                if (IsFinitePositive(value))
+                {
+                    valid.Add(value);
+                    average += value;
+                }
+            }
+            if (valid.Count == 0)
+            {
+                average = 0f;
+                return;
+            }
+
+            valid.Sort();
+            average /= valid.Count;
+            p50 = Percentile(valid, .5f);
+            p95 = Percentile(valid, .95f);
+            maximum = valid[valid.Count - 1];
+        }
+
+        private void CalculateRollingFrameStatistics(
+            out float average,
+            out float p50,
+            out float p95,
+            out float maximum)
+        {
+            average = 0f;
+            p50 = 0f;
+            p95 = 0f;
+            maximum = 0f;
+            var validCount = 0;
+            for (var index = 0; index < frameTimeCount; index++)
+            {
+                var value = frameTimeWindow[index];
+                if (!IsFinitePositive(value))
+                {
+                    continue;
+                }
+                sortedFrameTimeWindow[validCount++] = value;
+                average += value;
+            }
+            if (validCount == 0)
+            {
+                return;
+            }
+
+            Array.Sort(sortedFrameTimeWindow, 0, validCount);
+            average /= validCount;
+            p50 = Percentile(sortedFrameTimeWindow, validCount, .5f);
+            p95 = Percentile(sortedFrameTimeWindow, validCount, .95f);
+            maximum = sortedFrameTimeWindow[validCount - 1];
+        }
+
+        private bool IsActivePerformanceSample()
+        {
+            return applicationFocused && (!headsetPresenceAvailable || headsetWorn);
+        }
+
+        private void ResetActiveSessionMetrics()
+        {
+            Array.Clear(frameTimeWindow, 0, frameTimeWindow.Length);
+            frameTimeCount = 0;
+            frameTimeWriteIndex = 0;
+            frameSampleCount = 0;
+            currentFps = 0f;
+            fps5Seconds = 0f;
+            fps30Seconds = 0f;
+            frameTimeP50Ms = 0f;
+            frameTimeP95Ms = 0f;
+            frameTimeMaxMs = 0f;
+            activeFrameSamples.Clear();
+            activePhysicsDrops.Clear();
+            activeSessionStartedAt = Time.unscaledTime;
+            activeSessionSeconds = 0f;
+            physicsSessionBaselineSeconds = currentPhysicsManager == null
+                ? 0f
+                : Mathf.Max(0f, currentPhysicsManager.totalDroppedSimulationSeconds);
+            physicsSessionBaselineFrames = currentPhysicsManager == null
+                ? 0
+                : Mathf.Max(0, currentPhysicsManager.droppedSimulationFrameCount);
+            compositorDroppedBaseline = Mathf.Max(0f, compositorDroppedFrames);
+            physicsSessionDroppedSeconds = 0f;
+            physicsSessionDroppedFrameCount = 0;
+            physicsDroppedMillisecondsPerSecond5s = 0f;
+            physicsDroppedMillisecondsPerSecond30s = 0f;
+            physicsDroppedFramePercent5s = 0f;
+            physicsDroppedFramePercent30s = 0f;
+            compositorDroppedFramesSession = 0f;
+        }
+
+        private void PruneFrameSamples(float minimumTime)
+        {
+            while (activeFrameSamples.Count > 0 && activeFrameSamples.Peek().time < minimumTime)
+            {
+                activeFrameSamples.Dequeue();
+            }
+        }
+
+        private float CalculateTimedFps(float minimumTime)
+        {
+            var count = 0;
+            var totalMilliseconds = 0f;
+            foreach (var sample in activeFrameSamples)
+            {
+                if (sample.time < minimumTime || !IsFinitePositive(sample.milliseconds))
+                {
+                    continue;
+                }
+                count++;
+                totalMilliseconds += sample.milliseconds;
+            }
+            return count == 0 || totalMilliseconds <= 0f
+                ? 0f
+                : count * 1000f / totalMilliseconds;
+        }
+
+        private void UpdateRecentPhysicsRates(float now)
+        {
+            while (activePhysicsDrops.Count > 0 && activePhysicsDrops.Peek().time < now - 30f)
+            {
+                activePhysicsDrops.Dequeue();
+            }
+            CalculatePhysicsWindow(now - 5f,
+                out var dropped5, out var frames5, out var samples5);
+            CalculatePhysicsWindow(now - 30f,
+                out var dropped30, out var frames30, out var samples30);
+            physicsDroppedMillisecondsPerSecond5s = dropped5 * 1000f / Mathf.Max(.001f, Mathf.Min(5f, activeSessionSeconds));
+            physicsDroppedMillisecondsPerSecond30s = dropped30 * 1000f / Mathf.Max(.001f, Mathf.Min(30f, activeSessionSeconds));
+            physicsDroppedFramePercent5s = samples5 == 0 ? 0f : frames5 * 100f / samples5;
+            physicsDroppedFramePercent30s = samples30 == 0 ? 0f : frames30 * 100f / samples30;
+        }
+
+        private void CalculatePhysicsWindow(
+            float minimumTime,
+            out float droppedSeconds,
+            out int droppedFrames,
+            out int sampleCount)
+        {
+            droppedSeconds = 0f;
+            droppedFrames = 0;
+            sampleCount = 0;
+            foreach (var sample in activePhysicsDrops)
+            {
+                if (sample.time < minimumTime)
+                {
+                    continue;
+                }
+                sampleCount++;
+                droppedSeconds += sample.seconds;
+                if (sample.dropped)
+                {
+                    droppedFrames++;
+                }
+            }
+        }
+
+        public static long EstimateRgbaTextureBytes(int width, int height)
+        {
+            if (width <= 0 || height <= 0)
+            {
+                return 0L;
+            }
+            var pixels = (long)width * height;
+            return pixels > long.MaxValue / 4L ? long.MaxValue : pixels * 4L;
+        }
+
+        public static DeviceThermalState MapAndroidThermalStatus(int value)
+        {
+            return value >= 0 && value <= 6
+                ? (DeviceThermalState)value
+                : DeviceThermalState.Unknown;
+        }
+
+        private static float Percentile(List<float> sorted, float percentile)
+        {
+            if (sorted == null || sorted.Count == 0)
+            {
+                return 0f;
+            }
+            var position = Mathf.Clamp01(percentile) * (sorted.Count - 1);
+            var lower = Mathf.FloorToInt(position);
+            var upper = Mathf.CeilToInt(position);
+            return Mathf.Lerp(sorted[lower], sorted[upper], position - lower);
+        }
+
+        private static float Percentile(float[] sorted, int count, float percentile)
+        {
+            if (sorted == null || count <= 0)
+            {
+                return 0f;
+            }
+            var position = Mathf.Clamp01(percentile) * (count - 1);
+            var lower = Mathf.FloorToInt(position);
+            var upper = Mathf.CeilToInt(position);
+            return Mathf.Lerp(sorted[lower], sorted[upper], position - lower);
+        }
+
+        private static bool IsFinitePositive(float value)
+        {
+            return value > 0f && !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private void CaptureFrameTiming()
+        {
+            var count = FrameTimingManager.GetLatestTimings(1u, frameTimings);
+            if (count == 0)
+            {
+                cpuFrameTimeAvailable = false;
+                gpuFrameTimeAvailable = false;
+                return;
+            }
+
+            var cpu = (float)frameTimings[0].cpuFrameTime;
+            var gpu = (float)frameTimings[0].gpuFrameTime;
+            cpuFrameTimeAvailable = IsFinitePositive(cpu);
+            gpuFrameTimeAvailable = IsFinitePositive(gpu);
+            cpuFrameTimeMs = cpuFrameTimeAvailable ? cpu : 0f;
+            gpuFrameTimeMs = gpuFrameTimeAvailable ? gpu : 0f;
+        }
+
+        private void CaptureXrPerformanceMetrics()
+        {
+            xrPerformanceMetricsAvailable = false;
+            xrDisplays.Clear();
+            SubsystemManager.GetInstances(xrDisplays);
+            for (var index = 0; index < xrDisplays.Count; index++)
+            {
+                var display = xrDisplays[index];
+                if (display == null || !display.running)
+                {
+                    continue;
+                }
+                var hasCpu = ProviderXRStats.TryGetStat(display, "perfmetrics.appcputime", out var cpu);
+                var hasGpu = ProviderXRStats.TryGetStat(display, "perfmetrics.appgputime", out var gpu);
+                var hasCpuUtil = ProviderXRStats.TryGetStat(display, "perfmetrics.cpuutilavg", out var cpuUtil);
+                var hasGpuUtil = ProviderXRStats.TryGetStat(display, "perfmetrics.gpuutil", out var gpuUtil);
+                var hasDrops = ProviderXRStats.TryGetStat(display, "appstats.compositordroppedframes", out var drops);
+                xrPerformanceMetricsAvailable = hasCpu || hasGpu || hasCpuUtil || hasGpuUtil || hasDrops;
+                xrAppCpuTimeMs = hasCpu && cpu >= 0f ? cpu : 0f;
+                xrAppGpuTimeMs = hasGpu && gpu >= 0f ? gpu : 0f;
+                xrCpuUtilization = hasCpuUtil && cpuUtil >= 0f ? cpuUtil : 0f;
+                xrGpuUtilization = hasGpuUtil && gpuUtil >= 0f ? gpuUtil : 0f;
+                if (hasDrops && drops >= 0f)
+                {
+                    compositorDroppedFrames = drops;
+                    compositorDroppedFramesSession = Mathf.Max(0f, drops - compositorDroppedBaseline);
+                }
+                return;
+            }
+        }
+
+        private void CaptureHeadsetState()
+        {
+            var previousAvailable = headsetPresenceAvailable;
+            var previousWorn = headsetWorn;
+            var headset = InputDevices.GetDeviceAtXRNode(XRNode.Head);
+            var present = false;
+            headsetPresenceAvailable = headset.isValid &&
+                headset.TryGetFeatureValue(CommonUsages.userPresence, out present);
+            headsetWorn = headsetPresenceAvailable && present;
+            if (previousAvailable != headsetPresenceAvailable || previousWorn != headsetWorn)
+            {
+                ApplyPhysicsSuspension();
+                ResetActiveSessionMetrics();
+            }
+        }
+
+        private void ApplyPhysicsSuspension()
+        {
+            if (currentPhysicsManager == null)
+            {
+                return;
+            }
+            var shouldSuspend = !applicationFocused || (headsetPresenceAvailable && !headsetWorn);
+            currentPhysicsManager.SetSimulationSuspended(shouldSuspend);
+        }
+
+        private void CaptureTargetFrameRate()
+        {
+            targetFpsAvailable = false;
+            targetFps = 0f;
+            xrDisplays.Clear();
+            SubsystemManager.GetInstances(xrDisplays);
+            for (var index = 0; index < xrDisplays.Count; index++)
+            {
+                var display = xrDisplays[index];
+                if (display != null && display.running &&
+                    display.TryGetDisplayRefreshRate(out var refreshRate) &&
+                    IsFinitePositive(refreshRate))
+                {
+                    targetFpsAvailable = true;
+                    targetFps = refreshRate;
+                    return;
+                }
+            }
+
+            if (Application.targetFrameRate > 0)
+            {
+                targetFpsAvailable = true;
+                targetFps = Application.targetFrameRate;
+            }
+        }
+
+        private void CaptureMemoryAndGc()
+        {
+            totalAllocatedMemoryBytes = Math.Max(0L, Profiler.GetTotalAllocatedMemoryLong());
+            totalReservedMemoryBytes = Math.Max(0L, Profiler.GetTotalReservedMemoryLong());
+            managedUsedMemoryBytes = Math.Max(0L, Profiler.GetMonoUsedSizeLong());
+            gcGeneration0Collections = Math.Max(0, GC.CollectionCount(0));
+            gcGeneration1Collections = Math.Max(0, GC.CollectionCount(1));
+            gcGeneration2Collections = Math.Max(0, GC.CollectionCount(2));
+        }
+
+        private void CaptureAndroidMetrics()
+        {
+            androidPssAvailable = false;
+            androidPssBytes = 0L;
+            thermalStatusAvailable = false;
+            thermalState = DeviceThermalState.Unavailable;
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var debug = new AndroidJavaClass("android.os.Debug"))
+                {
+                    var pssKilobytes = debug.CallStatic<long>("getPss");
+                    if (pssKilobytes >= 0L && pssKilobytes <= long.MaxValue / BytesPerKilobyte)
+                    {
+                        androidPssAvailable = true;
+                        androidPssBytes = pssKilobytes * BytesPerKilobyte;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                androidPssAvailable = false;
+                androidPssBytes = 0L;
+            }
+
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var power = activity.Call<AndroidJavaObject>("getSystemService", "power"))
+                {
+                    var status = power.Call<int>("getCurrentThermalStatus");
+                    thermalStatusAvailable = true;
+                    thermalState = MapAndroidThermalStatus(status);
+                }
+            }
+            catch (Exception)
+            {
+                thermalStatusAvailable = false;
+                thermalState = DeviceThermalState.Unavailable;
+            }
+#endif
+        }
+
+        private void CaptureModelComplexityIfChanged()
+        {
+            var loader = GetComponent<QuestMmdPlayerBootstrap>()?.ModelLoader;
+            var root = loader == null ? null : loader.CurrentModel;
+            var instanceId = root == null ? 0 : root.GetInstanceID();
+            if (instanceId == currentModelInstanceId)
+            {
+                return;
+            }
+
+            currentModelInstanceId = instanceId;
+            ResetModelComplexity();
+            currentPhysicsManager = null;
+            ResetActiveSessionMetrics();
+            if (root == null)
+            {
+                return;
+            }
+
+            modelLoaded = true;
+            var meshes = new HashSet<Mesh>();
+            var materials = new HashSet<Material>();
+            var textures = new HashSet<Texture>();
+            var renderers = root.GetComponentsInChildren<Renderer>(true);
+            modelRendererCount = renderers.Length;
+            for (var rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+            {
+                var renderer = renderers[rendererIndex];
+                if (renderer == null)
+                {
+                    continue;
+                }
+                var sharedMaterials = renderer.sharedMaterials;
+                for (var materialIndex = 0; materialIndex < sharedMaterials.Length; materialIndex++)
+                {
+                    var material = sharedMaterials[materialIndex];
+                    if (material == null || !materials.Add(material))
+                    {
+                        continue;
+                    }
+                    var textureNames = material.GetTexturePropertyNames();
+                    for (var textureIndex = 0; textureIndex < textureNames.Length; textureIndex++)
+                    {
+                        var texture = material.GetTexture(textureNames[textureIndex]);
+                        if (texture != null && textures.Add(texture))
+                        {
+                            modelEstimatedTextureBytes = SaturatingAdd(
+                                modelEstimatedTextureBytes,
+                                EstimateRgbaTextureBytes(texture.width, texture.height));
+                        }
+                    }
+                }
+
+                Mesh mesh = null;
+                if (renderer is SkinnedMeshRenderer skinned)
+                {
+                    mesh = skinned.sharedMesh;
+                }
+                else
+                {
+                    var filter = renderer.GetComponent<MeshFilter>();
+                    mesh = filter == null ? null : filter.sharedMesh;
+                }
+                if (mesh == null || !meshes.Add(mesh))
+                {
+                    continue;
+                }
+                modelVertexCount = SaturatingAdd(modelVertexCount, mesh.vertexCount);
+                modelBlendShapeCount = SaturatingAdd(modelBlendShapeCount, mesh.blendShapeCount);
+                for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
+                {
+                    modelTriangleCount = SaturatingAdd(modelTriangleCount, mesh.GetIndexCount(submesh) / 3L);
+                }
+            }
+            modelMaterialCount = materials.Count;
+            modelTextureCount = textures.Count;
+
+            var transformManager = root.GetComponentInChildren<MMDTransformManager>(true);
+            modelBoneCount = transformManager == null || transformManager.bones == null
+                ? 0
+                : transformManager.bones.Length;
+            var physics = root.GetComponentInChildren<MMDPhysicsManager>(true);
+            currentPhysicsManager = physics;
+            ApplyPhysicsSuspension();
+            physicsSessionBaselineSeconds = physics == null ? 0f : physics.totalDroppedSimulationSeconds;
+            physicsSessionBaselineFrames = physics == null ? 0 : physics.droppedSimulationFrameCount;
+            modelRigidBodyCount = physics == null || physics.rigidBodies == null ? 0 : physics.rigidBodies.Length;
+            modelJointCount = physics == null || physics.joints == null ? 0 : physics.joints.Length;
+        }
+
+        private void CapturePhysicsMetrics()
+        {
+            var physics = currentPhysicsManager;
+            physicsMetricsAvailable = physics != null;
+            if (!physicsMetricsAvailable)
+            {
+                physicsFrequencyHz = 0;
+                physicsMaximumSubstepsPerFrame = 0;
+                physicsLastSubsteps = 0;
+                physicsLastDroppedSeconds = 0f;
+                physicsTotalDroppedSeconds = 0f;
+                physicsDroppedFrameCount = 0;
+                physicsSessionDroppedSeconds = 0f;
+                physicsSessionDroppedFrameCount = 0;
+                physicsDroppedMillisecondsPerSecond5s = 0f;
+                physicsDroppedMillisecondsPerSecond30s = 0f;
+                physicsDroppedFramePercent5s = 0f;
+                physicsDroppedFramePercent30s = 0f;
+                mmdSamplingMilliseconds = 0f;
+                mmdSolverMilliseconds = 0f;
+                mmdFlushMilliseconds = 0f;
+                mmdSdefMilliseconds = 0f;
+                handContactMilliseconds = 0f;
+                return;
+            }
+
+            physicsFrequencyHz = MMDPhysicsManager.simulationFrequencyHz;
+            physicsMaximumSubstepsPerFrame = MMDPhysicsManager.maximumSubstepsPerFrame;
+            physicsLastSubsteps = Mathf.Max(0, physics.lastSimulationSubstepCount);
+            physicsLastDroppedSeconds = Mathf.Max(0f, physics.lastDroppedSimulationSeconds);
+            physicsTotalDroppedSeconds = Mathf.Max(0f, physics.totalDroppedSimulationSeconds);
+            physicsDroppedFrameCount = Mathf.Max(0, physics.droppedSimulationFrameCount);
+            var transformManager = physics.GetComponent<MMDTransformManager>();
+            mmdSamplingMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSamplingMilliseconds);
+            mmdSolverMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSolverMilliseconds);
+            mmdFlushMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastFlushMilliseconds);
+            mmdSdefMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSdefMilliseconds);
+            var trackedHands = GetComponent<QuestTrackedHandVisualizer>();
+            handContactMilliseconds = trackedHands == null
+                ? 0f
+                : Mathf.Max(0f, trackedHands.LastContactEvaluationMilliseconds);
+            physicsSessionDroppedSeconds = Mathf.Max(0f, physicsTotalDroppedSeconds - physicsSessionBaselineSeconds);
+            physicsSessionDroppedFrameCount = Mathf.Max(0, physicsDroppedFrameCount - physicsSessionBaselineFrames);
+            if (IsActivePerformanceSample())
+            {
+                activePhysicsDrops.Enqueue(new PhysicsDropSample(
+                    Time.unscaledTime,
+                    physicsLastDroppedSeconds,
+                    physicsLastDroppedSeconds > 0f));
+                UpdateRecentPhysicsRates(Time.unscaledTime);
+            }
+        }
+
+        private void ResetModelComplexity()
+        {
+            modelLoaded = false;
+            modelRendererCount = 0;
+            modelMaterialCount = 0;
+            modelTextureCount = 0;
+            modelEstimatedTextureBytes = 0L;
+            modelVertexCount = 0;
+            modelTriangleCount = 0L;
+            modelBlendShapeCount = 0;
+            modelBoneCount = 0;
+            modelRigidBodyCount = 0;
+            modelJointCount = 0;
+            currentPhysicsManager = null;
+        }
+
+        private static int SaturatingAdd(int left, int right)
+        {
+            return right > 0 && left > int.MaxValue - right ? int.MaxValue : left + right;
+        }
+
+        private static long SaturatingAdd(long left, long right)
+        {
+            return right > 0L && left > long.MaxValue - right ? long.MaxValue : left + right;
+        }
+    }
+}

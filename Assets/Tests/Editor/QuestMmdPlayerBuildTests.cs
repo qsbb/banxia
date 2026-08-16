@@ -465,6 +465,73 @@ namespace QuestMmdPlayer.Tests
                 Is.Null);
         }
 
+        [Test]
+        public void AndroidStorageAliasesAreAcceptedOnlyInsideTheModelRoot()
+        {
+            Assert.That(
+                IsPathWithin(
+                    "/storage/emulated/0/Android/data/com.lingxi.banxia/files/MmdModels",
+                    "/sdcard/Android/data/com.lingxi.banxia/files/MmdModels/Imported/Forest/model.pmx"),
+                Is.True);
+            Assert.That(
+                IsPathWithin(
+                    "/storage/emulated/0/Android/data/com.lingxi.banxia/files/MmdModels",
+                    "/sdcard/Android/data/com.lingxi.banxia/files/Other/model.pmx"),
+                Is.False);
+        }
+
+        [Test]
+        public void MissingSavedModelReportsRestoreFailureWithoutClearingSelection()
+        {
+            const string preferenceKey = "Banxia.RuntimeMmdModel.SelectedPath";
+            const string relativePreferenceKey = "Banxia.RuntimeMmdModel.SelectedRelativePath";
+            var previousPath = PlayerPrefs.GetString(preferenceKey, string.Empty);
+            var previousRelativePath = PlayerPrefs.GetString(relativePreferenceKey, string.Empty);
+            var missingPath = Path.Combine(
+                Application.persistentDataPath,
+                "MmdModels",
+                "Imported",
+                "missing-model-package",
+                "missing.pmx");
+            var root = new GameObject("Missing model restore test");
+            try
+            {
+                PlayerPrefs.SetString(preferenceKey, missingPath);
+                PlayerPrefs.SetString(
+                    relativePreferenceKey,
+                    "Imported/missing-model-package/missing.pmx");
+                PlayerPrefs.Save();
+                var loader = root.AddComponent<RuntimeMmdModelLoader>();
+                bool? reportedResult = null;
+                loader.LastModelRestoreCompleted += restored => reportedResult = restored;
+
+                var restored = loader.RestoreLastModelAsync().GetAwaiter().GetResult();
+
+                Assert.That(restored, Is.False);
+                Assert.That(reportedResult, Is.False);
+                Assert.That(loader.CurrentModel, Is.Null);
+                Assert.That(PlayerPrefs.GetString(preferenceKey), Is.EqualTo(missingPath));
+                Assert.That(
+                    PlayerPrefs.GetString(relativePreferenceKey),
+                    Is.EqualTo("Imported/missing-model-package/missing.pmx"));
+            }
+            finally
+            {
+                if (string.IsNullOrEmpty(previousPath)) PlayerPrefs.DeleteKey(preferenceKey);
+                else PlayerPrefs.SetString(preferenceKey, previousPath);
+                if (string.IsNullOrEmpty(previousRelativePath))
+                {
+                    PlayerPrefs.DeleteKey(relativePreferenceKey);
+                }
+                else
+                {
+                    PlayerPrefs.SetString(relativePreferenceKey, previousRelativePath);
+                }
+                PlayerPrefs.Save();
+                Object.DestroyImmediate(root);
+            }
+        }
+
         private static IReadOnlyList<RuntimeMmdModelInfo> DiscoverInstalledModels(string root)
         {
             var method = typeof(RuntimeMmdModelLoader).GetMethod(
@@ -487,6 +554,15 @@ namespace QuestMmdPlayer.Tests
             return (RuntimeMmdModelInfo)method.Invoke(
                 null,
                 new object[] { root, models, absolutePath, relativePath });
+        }
+
+        private static bool IsPathWithin(string root, string path)
+        {
+            var method = typeof(RuntimeMmdModelLoader).GetMethod(
+                "IsPathWithin",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            return (bool)method.Invoke(null, new object[] { root, path });
         }
 
         private static bool ShouldRetainParsedModelCacheEntry(

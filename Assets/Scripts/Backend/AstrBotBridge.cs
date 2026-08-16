@@ -796,7 +796,8 @@ namespace QuestMmdPlayer
                 user_id = settings.user_id,
                 bot_id = settings.bot_id,
                 group_id = settings.group_id ?? string.Empty,
-                relationship_profile_id = settings.relationship_profile_id ?? string.Empty
+                relationship_profile_id = settings.relationship_profile_id ?? string.Empty,
+                supported_actions = AstrBotProtocol.SupportedActions()
             };
 
             eventStreamReady = false;

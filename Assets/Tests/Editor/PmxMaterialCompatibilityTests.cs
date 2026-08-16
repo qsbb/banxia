@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -6,6 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using UMT;
+using Unity.Collections;
+using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.TestTools;
 
@@ -40,6 +43,52 @@ namespace QuestMmdPlayer.Tests
             var material = new PMXMaterial { originalName = "衣服" };
             Assert.That(IsEyeMaterial(material), Is.False);
             Assert.That(IsFaceMaterial(material), Is.False);
+        }
+
+        [TestCase("eye shadow")]
+        [TestCase("eyeshadow")]
+        [TestCase("目影")]
+        [TestCase("眼影")]
+        [TestCase("目陰")]
+        public void EyeShadowOverlayRecognitionSupportsCommonMmdNames(string name)
+        {
+            var material = new PMXMaterial
+            {
+                originalName = name,
+                diffuse = new Color(0f, 0f, 0f, .5f),
+                textureIndex = -1
+            };
+
+            Assert.That(IsEyeShadowOverlay(material), Is.True);
+        }
+
+        [Test]
+        public void EyeShadowOverlayRecognitionDoesNotHideTexturedMakeupOrOpaqueEyeParts()
+        {
+            Assert.That(
+                IsEyeShadowOverlay(new PMXMaterial
+                {
+                    originalName = "eye shadow",
+                    diffuse = new Color(0f, 0f, 0f, .5f),
+                    textureIndex = 0
+                }),
+                Is.False);
+            Assert.That(
+                IsEyeShadowOverlay(new PMXMaterial
+                {
+                    originalName = "目影",
+                    diffuse = Color.black,
+                    textureIndex = -1
+                }),
+                Is.False);
+            Assert.That(
+                IsEyeShadowOverlay(new PMXMaterial
+                {
+                    originalName = "眼白",
+                    diffuse = new Color(1f, 1f, 1f, .5f),
+                    textureIndex = -1
+                }),
+                Is.False);
         }
 
         [Test]
@@ -185,6 +234,151 @@ namespace QuestMmdPlayer.Tests
                 "A cancelled PMX read must not retain its partial ScriptableObject.");
         }
 
+        [UnityTest]
+        public IEnumerator AsyncSingleGroupMeshBuildUsesFineGrainedFrameBudgetCheckpoints()
+        {
+            var model = ScriptableObject.CreateInstance<PMXModel>();
+            var group = new PMXMorphLinkedMaterialGroup();
+            group.materialIndices.Add(0);
+            var budget = new UMTFrameBudget(0d);
+            List<PMXImportedMesh> meshes = null;
+            try
+            {
+                model.vertices = new[]
+                {
+                    new PMXVertex { position = new float3(0f, 0f, 0f), normal = new float3(0f, 1f, 0f), uv = new float2(0f, 0f) },
+                    new PMXVertex { position = new float3(1f, 0f, 0f), normal = new float3(0f, 1f, 0f), uv = new float2(1f, 0f) },
+                    new PMXVertex { position = new float3(0f, 1f, 0f), normal = new float3(0f, 1f, 0f), uv = new float2(0f, 1f) }
+                };
+                model.indices = new uint[] { 0, 1, 2 };
+                model.materials = new[]
+                {
+                    new PMXMaterial
+                    {
+                        originalName = "single-group",
+                        renamedName = "single-group",
+                        faceIndexCount = 3
+                    }
+                };
+                model.bones = System.Array.Empty<PMXBone>();
+                model.morphs = System.Array.Empty<PMXMorph>();
+
+                Task<List<PMXImportedMesh>> build = PMXMeshBuilder.BuildAsync(
+                    budget,
+                    model,
+                    "budgeted-single-group",
+                    new[] { group },
+                    System.Array.Empty<Matrix4x4>());
+                while (!build.IsCompleted)
+                {
+                    yield return null;
+                }
+                if (build.IsFaulted)
+                {
+                    throw build.Exception?.GetBaseException();
+                }
+
+                meshes = build.Result;
+                Assert.That(meshes, Has.Count.EqualTo(1));
+                Assert.That(
+                    budget.YieldCount,
+                    Is.GreaterThanOrEqualTo(6),
+                    "One morph-linked material group still needs checkpoints inside triangle remapping, vertex upload, indices, morphs, and bounds.");
+            }
+            finally
+            {
+                if (meshes != null)
+                {
+                    foreach (var mesh in meshes)
+                    {
+                        if (mesh?.mesh != null) Object.DestroyImmediate(mesh.mesh);
+                    }
+                }
+                Object.DestroyImmediate(model);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AsyncMaterialBuildUsesPredecodedPixelsForUnreadableSharedTexture()
+        {
+            var model = ScriptableObject.CreateInstance<PMXModel>();
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            List<Material> materials = null;
+            try
+            {
+                texture.SetPixels32(new[]
+                {
+                    new Color32(255, 255, 255, 0),
+                    new Color32(255, 255, 255, 0),
+                    new Color32(255, 255, 255, 0),
+                    new Color32(255, 255, 255, 0)
+                });
+                texture.Apply(false, true);
+                Assert.That(texture.isReadable, Is.False);
+
+                model.vertices = new[]
+                {
+                    new PMXVertex { uv = new float2(0f, 0f) },
+                    new PMXVertex { uv = new float2(1f, 0f) },
+                    new PMXVertex { uv = new float2(0f, 1f) }
+                };
+                model.indices = new uint[] { 0, 1, 2, 0, 1, 2 };
+                model.texturePaths = new FixedString128Bytes[] { "shared.tga" };
+                model.materials = new[]
+                {
+                    TransparentTestMaterial("shared-a"),
+                    TransparentTestMaterial("shared-b")
+                };
+                var decoded = new Dictionary<int, PMXMaterialBuilder.SourcePixels>
+                {
+                    [0] = new PMXMaterialBuilder.SourcePixels(
+                        new[]
+                        {
+                            new Color32(255, 255, 255, 0),
+                            new Color32(255, 255, 255, 0),
+                            new Color32(255, 255, 255, 0),
+                            new Color32(255, 255, 255, 0)
+                        },
+                        2,
+                        2)
+                };
+
+                Task<List<Material>> build = PMXMaterialBuilder.BuildAsync(
+                    new UMTFrameBudget(0d),
+                    model,
+                    new PMXImportOptions { textureBaseDirectory = "missing" },
+                    "predecoded-source-pixels",
+                    new[] { texture },
+                    default,
+                    decoded);
+                while (!build.IsCompleted)
+                {
+                    yield return null;
+                }
+                if (build.IsFaulted)
+                {
+                    throw build.Exception?.GetBaseException();
+                }
+
+                materials = build.Result;
+                Assert.That(materials, Has.Count.EqualTo(2));
+                Assert.That(materials[0].renderQueue, Is.EqualTo(3000));
+                Assert.That(materials[1].renderQueue, Is.EqualTo(3001));
+            }
+            finally
+            {
+                if (materials != null)
+                {
+                    foreach (var material in materials)
+                    {
+                        if (material != null) Object.DestroyImmediate(material);
+                    }
+                }
+                if (texture != null) Object.DestroyImmediate(texture);
+                Object.DestroyImmediate(model);
+            }
+        }
+
         [Test]
         public void InvalidSynchronousReadDestroysPartialModel()
         {
@@ -231,6 +425,19 @@ namespace QuestMmdPlayer.Tests
             return stream.ToArray();
         }
 
+        private static PMXMaterial TransparentTestMaterial(string name)
+        {
+            return new PMXMaterial
+            {
+                originalName = name,
+                renamedName = name,
+                diffuse = Color.white,
+                textureIndex = 0,
+                sphereTextureIndex = -1,
+                faceIndexCount = 3
+            };
+        }
+
         [TestCase(.5f, 0f)]
         [TestCase(.95f, 1f)]
         public void UrpFallbackPreservesUntexturedTransparentPmxColorAndDepthSemantics(
@@ -245,8 +452,8 @@ namespace QuestMmdPlayer.Tests
                 {
                     new PMXMaterial
                     {
-                        originalName = "目影",
-                        renamedName = "目影",
+                        originalName = "translucent-overlay",
+                        renamedName = "translucent-overlay",
                         diffuse = new Color(0f, 0f, 0f, alpha),
                         textureIndex = -1,
                         sphereTextureIndex = -1,
@@ -278,6 +485,47 @@ namespace QuestMmdPlayer.Tests
             }
         }
 
+        [Test]
+        public void UntexturedEyeShadowOverlayNeverWritesDepthOrDrawsAnOutline()
+        {
+            var model = ScriptableObject.CreateInstance<PMXModel>();
+            Material material = null;
+            try
+            {
+                model.materials = new[]
+                {
+                    new PMXMaterial
+                    {
+                        originalName = "目影",
+                        renamedName = "目影",
+                        diffuse = new Color(0f, 0f, 0f, .95f),
+                        drawingFlags = PMXMaterial.DrawingFlags.DrawEdge,
+                        textureIndex = -1,
+                        sphereTextureIndex = -1,
+                        faceIndexCount = 0
+                    }
+                };
+
+                var built = PMXMaterialBuilder.Build(
+                    model,
+                    new PMXImportOptions(),
+                    "eye-shadow-overlay-test",
+                    System.Array.Empty<Texture2D>());
+                material = built[0];
+
+                Assert.That(material.shader.name, Is.EqualTo("Universal Render Pipeline/Unlit"));
+                Assert.That(material.GetFloat("_Surface"), Is.EqualTo(1f));
+                Assert.That(material.GetFloat("_ZWrite"), Is.EqualTo(0f));
+                Assert.That(material.renderQueue, Is.EqualTo(3000));
+                Assert.That(material.GetColor("_BaseColor").a, Is.EqualTo(.95f).Within(.001f));
+            }
+            finally
+            {
+                if (material != null) Object.DestroyImmediate(material);
+                Object.DestroyImmediate(model);
+            }
+        }
+
         private static bool IsEyeMaterial(PMXMaterial material)
         {
             return Invoke("IsEyeMaterial", material);
@@ -286,6 +534,11 @@ namespace QuestMmdPlayer.Tests
         private static bool IsFaceMaterial(PMXMaterial material)
         {
             return Invoke("IsFaceMaterial", material);
+        }
+
+        private static bool IsEyeShadowOverlay(PMXMaterial material)
+        {
+            return Invoke("IsEyeShadowOverlay", material);
         }
 
         private static bool Invoke(string methodName, PMXMaterial material)

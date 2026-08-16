@@ -167,6 +167,13 @@ namespace UMT
         private readonly Stopwatch m_Stopwatch = new();
 
         /// <summary>
+        /// Number of times this budget has yielded to a later Unity update.
+        /// Useful for runtime diagnostics and for proving that a large import
+        /// stage contains checkpoints below its outer operation boundary.
+        /// </summary>
+        public int YieldCount { get; private set; }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="UMTFrameBudget"/> class with the specified time budget in milliseconds.
         /// </summary>
         /// <param name="budgetMs">The time budget in milliseconds. If the elapsed time exceeds this value, the next call to <see cref="YieldIfNeeded"/> will yield control back to the Unity main thread.</param>
@@ -190,6 +197,7 @@ namespace UMT
 #else
             await Task.Yield();
 #endif
+            ++YieldCount;
             m_Stopwatch.Restart();
         }
     }

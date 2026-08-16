@@ -285,6 +285,9 @@ namespace UMT
                 await frameBudget.YieldIfNeeded();
                 cancellationToken.ThrowIfCancellationRequested();
 
+                Dictionary<int, PMXMaterialBuilder.SourcePixels> predecodedSourcePixels =
+                    new Dictionary<int, PMXMaterialBuilder.SourcePixels>();
+
                 using (UMTTiming.Measure(options.timingCallback, "Load Textures"))
                 {
                     result.texturesByIndex = options.loadTextures != null
@@ -294,7 +297,8 @@ namespace UMT
                             model,
                             options,
                             result,
-                            cancellationToken);
+                            cancellationToken,
+                            predecodedSourcePixels);
                     foreach (Texture2D texture in result.texturesByIndex)
                     {
                         if (texture != null && !result.textures.Contains(texture))
@@ -314,7 +318,9 @@ namespace UMT
                         options,
                         modelName,
                         result.texturesByIndex,
-                        cancellationToken));
+                        cancellationToken,
+                        predecodedSourcePixels));
+                    predecodedSourcePixels.Clear();
                 }
                 await frameBudget.YieldIfNeeded();
                 cancellationToken.ThrowIfCancellationRequested();

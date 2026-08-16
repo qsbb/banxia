@@ -682,6 +682,10 @@ namespace QuestMmdPlayer
                 {
                     continue;
                 }
+                if (collider.bounds.SqrDistance(point) > safeRadius * safeRadius)
+                {
+                    continue;
+                }
                 var closest = collider.ClosestPoint(point);
                 if ((closest - point).sqrMagnitude > safeRadius * safeRadius)
                 {
@@ -728,6 +732,10 @@ namespace QuestMmdPlayer
                 }
                 var collider = proxy.Collider;
                 if (collider == null || !collider.enabled)
+                {
+                    continue;
+                }
+                if (collider.bounds.SqrDistance(probePoint) > safeRadius * safeRadius)
                 {
                     continue;
                 }
@@ -814,6 +822,10 @@ namespace QuestMmdPlayer
                 var proxy = contactProxies[index];
                 var other = proxy == null ? null : proxy.Collider;
                 if (other == null || !other.enabled || other == handCollider)
+                {
+                    continue;
+                }
+                if (!handCollider.bounds.Intersects(other.bounds))
                 {
                     continue;
                 }

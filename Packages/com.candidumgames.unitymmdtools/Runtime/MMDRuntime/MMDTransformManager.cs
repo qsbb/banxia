@@ -9,6 +9,7 @@ using UnityEngine.Rendering;
 using System.Runtime.InteropServices;
 using static UMT.PMXUtilities;
 using System.Collections.Generic;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace UMT
 {
@@ -63,6 +64,14 @@ namespace UMT
         public Animator animator;
         /// <summary>Whether the solver also runs in edit mode.</summary>
         public bool solveInEditMode = false;
+        /// <summary>Latest main-thread sampling/reset cost in milliseconds.</summary>
+        public float lastSamplingMilliseconds { get; private set; }
+        /// <summary>Latest constraints, IK and Bullet solve cost in milliseconds.</summary>
+        public float lastSolverMilliseconds { get; private set; }
+        /// <summary>Latest solved transform flush cost in milliseconds.</summary>
+        public float lastFlushMilliseconds { get; private set; }
+        /// <summary>Latest SDEF reconciliation cost in milliseconds.</summary>
+        public float lastSdefMilliseconds { get; private set; }
 
         /// <summary>GPU SDEF skinners, one per SDEF renderer, dispatched after each bone solve.</summary>
         public MMDSDEFSkinner[] sdefSkinners = Array.Empty<MMDSDEFSkinner>();
@@ -267,11 +276,23 @@ namespace UMT
                 return;
             }
 
-            if (ShouldRunLivePhysics())
-            {
-                Application.targetFrameRate = 60;
-            }
             TransformAll(0.0f, true, false);
+        }
+
+        private void OnApplicationPause(bool paused)
+        {
+            if (!paused)
+            {
+                physicsManager?.DiscardAccumulatedSimulationTime();
+            }
+        }
+
+        private void OnApplicationFocus(bool focused)
+        {
+            if (focused)
+            {
+                physicsManager?.DiscardAccumulatedSimulationTime();
+            }
         }
 
         private void LateUpdate()
@@ -296,7 +317,9 @@ namespace UMT
             }
 
             // Reconcile CPU SDEF skinning every play-mode frame (even when the transform solve is disabled) so it tracks live bone poses like the GPU path, and so turning SDEF off or leaving CPU mode restores the renderer's original mesh.
+            var sdefStarted = Stopwatch.GetTimestamp();
             ReconcileSDEFSkinners();
+            lastSdefMilliseconds = ElapsedMilliseconds(sdefStarted);
         }
 
         /// <summary>
@@ -392,23 +415,29 @@ namespace UMT
 
         private void TransformAll(float physicsElapsedTime, bool accessTransforms, bool runPhysics)
         {
+            var sampleStarted = Stopwatch.GetTimestamp();
             if (accessTransforms)
             {
                 SyncIKHandles();
                 SampleBoneTransforms();
                 ResetTransforms();
             }
+            lastSamplingMilliseconds = ElapsedMilliseconds(sampleStarted);
 
+            var solveStarted = Stopwatch.GetTimestamp();
             m_RuntimeContext.rootParentWorldMatrix = transform.localToWorldMatrix;
             if (runPhysics)
             {
-                TransformBonesWithPhysics(ref m_RuntimeContext, ref physicsManager.Context, physicsElapsedTime);
+                var elapsed = physicsManager.simulationSuspended ? 0.0f : physicsElapsedTime;
+                TransformBonesWithPhysics(ref m_RuntimeContext, ref physicsManager.Context, elapsed);
             }
             else
             {
                 TransformBones(ref m_RuntimeContext);
             }
+            lastSolverMilliseconds = ElapsedMilliseconds(solveStarted);
 
+            var flushStarted = Stopwatch.GetTimestamp();
             if (accessTransforms)
             {
                 FlushBoneTransforms();
@@ -417,6 +446,12 @@ namespace UMT
                     physicsManager.UpdateTransforms(ref m_RuntimeContext, runPhysics);
                 }
             }
+            lastFlushMilliseconds = ElapsedMilliseconds(flushStarted);
+        }
+
+        private static float ElapsedMilliseconds(long startedAt)
+        {
+            return (float)((Stopwatch.GetTimestamp() - startedAt) * 1000d / Stopwatch.Frequency);
         }
 
         /// <summary>

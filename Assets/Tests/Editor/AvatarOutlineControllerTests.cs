@@ -19,12 +19,15 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void BindBuildsAdjustableOutlineShellForRuntimeMesh()
+        public void BindUsesNativeOutlineMaterialWithoutDuplicatingRenderer()
         {
             avatarObject = new GameObject("Outline Avatar");
             var meshObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
             meshObject.name = "Body";
             meshObject.transform.SetParent(avatarObject.transform, false);
+            var outlineShader = Shader.Find("QuestMmdPlayer/Avatar Outline");
+            Assert.That(outlineShader, Is.Not.Null);
+            meshObject.GetComponent<Renderer>().sharedMaterial = new Material(outlineShader);
             var avatar = avatarObject.AddComponent<AvatarController>();
             avatar.Initialize(avatarObject.transform);
 
@@ -36,14 +39,14 @@ namespace QuestMmdPlayer.Tests
             Assert.That(outline.ShellCount, Is.EqualTo(1));
             Assert.That(outline.Status, Does.Contain("描边 开启"));
             var renderers = avatarObject.GetComponentsInChildren<MeshRenderer>(true);
-            Assert.That(renderers.Length, Is.EqualTo(2));
+            Assert.That(renderers.Length, Is.EqualTo(1));
 
             outline.SetWidth(99f);
             Assert.That(outline.OutlineWidth, Is.EqualTo(.003f).Within(.00001f));
             outline.Toggle();
             Assert.That(outline.OutlineEnabled, Is.False);
-            Assert.That(renderers[1].gameObject.activeSelf, Is.False);
+            Assert.That(renderers[0].sharedMaterial.GetFloat("_OutlineWidth"), Is.Zero);
         }
     }
 }
-#endif
+#endif

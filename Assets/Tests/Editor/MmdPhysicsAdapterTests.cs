@@ -1,5 +1,7 @@
 #if UNITY_EDITOR
 using NUnit.Framework;
+using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using UMT;
 using Unity.Collections;
@@ -10,6 +12,18 @@ namespace QuestMmdPlayer.Tests
 {
     public sealed class MmdPhysicsAdapterTests
     {
+        [SetUp]
+        public void SetUp()
+        {
+            MMDPhysicsManager.ConfigureRuntimeQuality(120, 4, 2);
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            MMDPhysicsManager.ConfigureRuntimeQuality(120, 4, 2);
+        }
+
         [Test]
         public void ExternalSphereDataIsKinematicAndCollidesWithModelGroups()
         {
@@ -26,6 +40,153 @@ namespace QuestMmdPlayer.Tests
             Assert.AreEqual(15, data.groupIndex);
             Assert.AreEqual(-1, data.collisionGroupMask);
             Assert.IsFalse(data.hasRelatedBone);
+        }
+
+        [Test]
+        public void ExternalSphereUsesRequestedCollisionGroup()
+        {
+            var data = MMDPhysicsManager.CreateExternalKinematicSphereData(
+                3,
+                .02f,
+                Vector3.zero,
+                6);
+
+            Assert.AreEqual(6, data.groupIndex);
+            Assert.AreEqual(-1, data.collisionGroupMask);
+        }
+
+        [Test]
+        public void RuntimeSubstepBudgetDropsStaleCatchUpInsteadOfSpiraling()
+        {
+            var steps = MMDPhysicsManager.ResolveRuntimeSubstepBudget(
+                .5f,
+                out var retained,
+                out var dropped);
+
+            Assert.That(steps, Is.EqualTo(MMDPhysicsManager.maximumSubstepsPerFrame));
+            Assert.That(steps, Is.EqualTo(4));
+            Assert.That(retained, Is.LessThanOrEqualTo(5f / MMDPhysicsManager.simulationFrequencyHz));
+            Assert.That(dropped, Is.GreaterThan(.45f));
+        }
+
+        [Test]
+        public void RuntimeSubstepBudgetKeepsNormalQuestFrameRemainder()
+        {
+            var elapsed = 1f / 72f;
+            var steps = MMDPhysicsManager.ResolveRuntimeSubstepBudget(
+                elapsed,
+                out var retained,
+                out var dropped);
+
+            Assert.That(steps, Is.EqualTo(1));
+            Assert.That(retained, Is.EqualTo(elapsed).Within(.00001f));
+            Assert.That(dropped, Is.Zero.Within(.00001f));
+        }
+
+        [Test]
+        public void BalancedPolicyUsesBoundedSixtyHertzBudget()
+        {
+            var steps = MMDPhysicsManager.ResolveRuntimeSubstepBudget(
+                .06f,
+                60,
+                2,
+                out var retained,
+                out var dropped);
+
+            Assert.That(steps, Is.EqualTo(2));
+            Assert.That(retained, Is.LessThanOrEqualTo(3f / 60f));
+            Assert.That(dropped, Is.GreaterThan(.015f));
+        }
+
+        [Test]
+        public void RuntimeQualitySanitizesFrequencySubstepsAndReinforcement()
+        {
+            MMDPhysicsManager.ConfigureRuntimeQuality(1, 99, 9);
+
+            Assert.That(MMDPhysicsManager.simulationFrequencyHz, Is.EqualTo(30));
+            Assert.That(MMDPhysicsManager.maximumSubstepsPerFrame, Is.EqualTo(8));
+            Assert.That(MMDPhysicsManager.lockedTranslationReinforceCount, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void ReducedReinforcementOnlyAppliesToJointHeavyModels()
+        {
+            MMDPhysicsManager.ConfigureRuntimeQuality(60, 2, 1);
+
+            Assert.That(MMDPhysicsManager.ResolveLockedTranslationReinforcement(43), Is.EqualTo(2));
+            Assert.That(MMDPhysicsManager.ResolveLockedTranslationReinforcement(138), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ExternalCollisionGroupPrefersUnusedGroupWithoutChangingInternalPairs()
+        {
+            var root = new GameObject("ExternalCollisionGroupTest");
+            var firstObject = new GameObject("First");
+            var secondObject = new GameObject("Second");
+            try
+            {
+                firstObject.transform.SetParent(root.transform, false);
+                secondObject.transform.SetParent(root.transform, false);
+                var first = firstObject.AddComponent<MMDRigidBody>();
+                var second = secondObject.AddComponent<MMDRigidBody>();
+                first.groupIndex = 15;
+                first.collisionGroupMask = unchecked((short)(1 << 15));
+                second.groupIndex = 3;
+                second.collisionGroupMask = 1 << 3;
+
+                var group = MMDPhysicsManager.ResolveExternalKinematicCollisionGroup(
+                    new[] { first, second },
+                    out var mayExpandMasks);
+
+                Assert.AreEqual(14, group);
+                Assert.IsTrue(mayExpandMasks);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void LimitedModelMaskCollidesAfterSafeUnusedGroupExpansion()
+        {
+            var bodies = new NativeArray<MMDRigidBody.RigidBodySimulationData>(2, Allocator.Temp);
+            var transforms = new NativeArray<float4x4>(1, Allocator.Temp);
+            var indices = new NativeArray<int>(1, Allocator.Temp);
+            var result = new NativeArray<float4x4>(1, Allocator.Temp);
+            var physics = new MMDBulletPhysics(float3.zero, 8, 120, 1f / 120f);
+            try
+            {
+                var dynamicBody = CreateSphereBody(0, PMXRigidBody.Mode.Dynamic, 0, Vector3.zero);
+                dynamicBody.collisionGroupMask = 1 << 14;
+                bodies[0] = dynamicBody;
+                bodies[1] = MMDPhysicsManager.CreateExternalKinematicSphereData(
+                    1,
+                    .05f,
+                    new Vector3(-.15f, 0f, 0f),
+                    14);
+                physics.BuildRigidBodies(bodies);
+
+                indices[0] = 1;
+                for (var step = 0; step <= 60; step++)
+                {
+                    transforms[0] = float4x4.Translate(new float3(-.15f + step * .005f, 0f, 0f));
+                    physics.SetRigidBodyTransforms(1, transforms, indices, false);
+                    physics.StepSimulation(1f / 120f);
+                }
+
+                indices[0] = 0;
+                physics.GetRigidBodyMotionTransforms(1, indices, ref result);
+                Assert.Greater(result[0].c3.x, .02f);
+            }
+            finally
+            {
+                physics.Dispose();
+                if (result.IsCreated) result.Dispose();
+                if (indices.IsCreated) indices.Dispose();
+                if (transforms.IsCreated) transforms.Dispose();
+                if (bodies.IsCreated) bodies.Dispose();
+            }
         }
 
         [Test]
@@ -109,6 +270,82 @@ namespace QuestMmdPlayer.Tests
             }
             finally
             {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void OptionalRealPmxCanExposeEveryDynamicBodyToTrackedHands()
+        {
+            var pmxPath = System.Environment.GetEnvironmentVariable("BANXIA_TEST_PMX");
+            if (string.IsNullOrWhiteSpace(pmxPath) || !File.Exists(pmxPath))
+            {
+                Assert.Ignore("BANXIA_TEST_PMX is not configured for this run.");
+            }
+
+            PMXModel model = null;
+            var root = new GameObject("RealPmxHandCollisionGroups");
+            try
+            {
+                using (var stream = File.OpenRead(pmxPath))
+                {
+                    model = PMXReader.Read(stream, true);
+                }
+                Assert.That(model.rigidBodies.Length, Is.GreaterThan(0));
+
+                var bodies = new List<MMDRigidBody>(model.rigidBodies.Length);
+                var dynamicCount = 0;
+                for (var index = 0; index < model.rigidBodies.Length; index++)
+                {
+                    var source = model.rigidBodies[index];
+                    var bodyObject = new GameObject("Body_" + index);
+                    bodyObject.transform.SetParent(root.transform, false);
+                    var body = bodyObject.AddComponent<MMDRigidBody>();
+                    body.groupIndex = source.groupIndex;
+                    body.collisionGroupMask = source.collisionGroupMask;
+                    body.mode = source.mode;
+                    bodies.Add(body);
+                    if (source.mode != PMXRigidBody.Mode.Kinetic)
+                    {
+                        dynamicCount++;
+                    }
+                }
+                Assert.That(dynamicCount, Is.GreaterThan(0));
+
+                var group = MMDPhysicsManager.ResolveExternalKinematicCollisionGroup(
+                    bodies,
+                    out var mayExpandMasks);
+                var bit = 1 << group;
+                if (mayExpandMasks)
+                {
+                    Assert.That(
+                        bodies,
+                        Has.None.Matches<MMDRigidBody>(body => body.groupIndex == group),
+                        "Only an unused PMX group may be opened for tracked hands.");
+                }
+                else
+                {
+                    Assert.That(
+                        bodies,
+                        Has.All.Matches<MMDRigidBody>(body =>
+                            (((ushort)body.collisionGroupMask) & bit) != 0),
+                        "A reused group must already be accepted by every real PMX body.");
+                }
+
+                foreach (var body in bodies)
+                {
+                    var effectiveMask = mayExpandMasks
+                        ? ((ushort)body.collisionGroupMask) | bit
+                        : (ushort)body.collisionGroupMask;
+                    Assert.That(
+                        effectiveMask & bit,
+                        Is.Not.Zero,
+                        "Every real PMX body must accept the external hand group after safe expansion.");
+                }
+            }
+            finally
+            {
+                if (model != null) Object.DestroyImmediate(model);
                 Object.DestroyImmediate(root);
             }
         }

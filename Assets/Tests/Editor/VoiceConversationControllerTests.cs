@@ -756,6 +756,71 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void CrouchWithoutRequiredLegRigIsRejectedAsAssetMissing()
+        {
+            owner = new GameObject("Missing crouch rig receipt test");
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+            controller.StartConversation("下蹲");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = controller.TurnId,
+                ActionId = "action-crouch-missing-rig",
+                Gesture = "crouch",
+                ActionMethod = "crouch",
+                LookAt = "user"
+            });
+
+            Assert.That(transport.ActionReceipts, Has.Count.EqualTo(1));
+            Assert.That(transport.ActionReceipts[0].Phase, Is.EqualTo(AvatarActionReceiptPhase.Rejected));
+            Assert.That(transport.ActionReceipts[0].ReasonCode, Is.EqualTo("asset_missing"));
+            Assert.That(avatar.CurrentAction, Is.EqualTo("idle"));
+        }
+
+        [Test]
+        public void SameTurnCannotStartASecondWholeBodyAction()
+        {
+            owner = new GameObject("Single whole-body action per turn test");
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.Bind(avatar, null);
+            controller.StartConversation("挥手然后鞠躬");
+            var turnId = controller.TurnId;
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = turnId,
+                ActionId = "action-wave-first",
+                Gesture = "wave",
+                LookAt = "user"
+            });
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = turnId,
+                ActionId = "action-bow-second",
+                Gesture = "bow",
+                LookAt = "user"
+            });
+
+            Assert.That(avatar.CurrentAction, Is.EqualTo("wave"));
+            Assert.That(transport.ActionReceipts, Has.Count.EqualTo(3));
+            Assert.That(transport.ActionReceipts[2].Action, Is.EqualTo("bow"));
+            Assert.That(transport.ActionReceipts[2].Phase, Is.EqualTo(AvatarActionReceiptPhase.Rejected));
+            Assert.That(transport.ActionReceipts[2].ReasonCode, Is.EqualTo("superseded"));
+        }
+
+        [Test]
         public void LegacyAvatarIntentStillExecutesWithoutActionReceipt()
         {
             owner = new GameObject("Legacy avatar intent test");

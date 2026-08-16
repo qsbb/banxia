@@ -84,6 +84,7 @@ namespace QuestMmdPlayer
         public event Action ModelWillUnload;
         public event Action<string> LoadFailed;
         public event Action<string> ProgressChanged;
+        public event Action<bool> LastModelRestoreCompleted;
 
         public AvatarController CurrentAvatar => currentAvatar;
         public GameObject CurrentModel => currentResult == null ? null : currentResult.root;
@@ -169,39 +170,37 @@ namespace QuestMmdPlayer
 
         public async Task<bool> RestoreLastModelAsync()
         {
-            var savedPath = SavedModelPath;
-            var savedRelativePath = SavedModelRelativePath;
-            if (string.IsNullOrWhiteSpace(savedPath) &&
-                string.IsNullOrWhiteSpace(savedRelativePath))
-            {
-                Debug.Log("[ModelLoader] startup restore skipped: no saved model.");
-                return false;
-            }
-
-            var modelsRoot = Path.Combine(Application.persistentDataPath, "MmdModels");
-            var selected = FindSavedModel(
-                modelsRoot,
-                DiscoverInstalledModels(),
-                savedPath,
-                savedRelativePath);
-            if (selected == null)
-            {
-                // External storage can be temporarily unavailable while Android
-                // finishes mounting it. Keep the selection so a later restart can
-                // recover it instead of permanently forgetting the user's model.
-                Debug.LogWarning("[ModelLoader] startup restore skipped: saved model is not currently available.");
-                return false;
-            }
-
-            // Migrate legacy absolute-path selections to the mount-independent
-            // relative identifier before loading the model.
-            RememberSelectedModel(selected.Path);
-
+            var restored = false;
             try
             {
+                var savedPath = SavedModelPath;
+                var savedRelativePath = SavedModelRelativePath;
+                if (string.IsNullOrWhiteSpace(savedPath) &&
+                    string.IsNullOrWhiteSpace(savedRelativePath))
+                {
+                    Debug.Log("[ModelLoader] startup restore skipped: no saved model.");
+                    return false;
+                }
+
+                var modelsRoot = Path.Combine(Application.persistentDataPath, "MmdModels");
+                var selected = FindSavedModel(
+                    modelsRoot,
+                    DiscoverInstalledModels(),
+                    savedPath,
+                    savedRelativePath);
+                if (selected == null)
+                {
+                    // External storage can be temporarily unavailable while Android
+                    // finishes mounting it. Keep the selection so a later restart can
+                    // recover it instead of permanently forgetting the user's model.
+                    Debug.LogWarning("[ModelLoader] startup restore skipped: saved model is not currently available.");
+                    return false;
+                }
+
                 Debug.Log("[ModelLoader] startup restore begin name=" + selected.DisplayName);
                 await LoadInstalledModelAsync(selected);
                 Debug.Log("[ModelLoader] startup restore complete name=" + selected.DisplayName);
+                restored = true;
                 return true;
             }
             catch (Exception exception)
@@ -211,6 +210,10 @@ namespace QuestMmdPlayer
                 // user repairs/replaces the package.
                 Debug.LogWarning("[ModelLoader] startup restore failed: " + exception.GetType().Name);
                 return false;
+            }
+            finally
+            {
+                LastModelRestoreCompleted?.Invoke(restored);
             }
         }
 
@@ -950,10 +953,9 @@ namespace QuestMmdPlayer
             }
             try
             {
-                var rootFull = Path.GetFullPath(root)
-                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
-                    Path.DirectorySeparatorChar;
-                var pathFull = Path.GetFullPath(path);
+                var rootFull = CanonicalizeModelPath(root)
+                    .TrimEnd('/') + "/";
+                var pathFull = CanonicalizeModelPath(path);
                 return pathFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase);
             }
             catch (ArgumentException)
@@ -964,6 +966,32 @@ namespace QuestMmdPlayer
             {
                 return false;
             }
+        }
+
+        private static string NormalizeAndroidStorageAlias(string path)
+        {
+            var normalized = NormalizePathSeparators(path);
+            if (normalized.StartsWith("/sdcard/", StringComparison.OrdinalIgnoreCase))
+            {
+                return "/storage/emulated/0/" + normalized.Substring("/sdcard/".Length);
+            }
+            if (normalized.StartsWith("/mnt/sdcard/", StringComparison.OrdinalIgnoreCase))
+            {
+                return "/storage/emulated/0/" + normalized.Substring("/mnt/sdcard/".Length);
+            }
+            return normalized;
+        }
+
+        private static string CanonicalizeModelPath(string path)
+        {
+            var normalized = NormalizePathSeparators(path);
+            if (normalized.StartsWith("/sdcard/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.StartsWith("/mnt/sdcard/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.StartsWith("/storage/emulated/", StringComparison.OrdinalIgnoreCase))
+            {
+                return NormalizeAndroidStorageAlias(normalized);
+            }
+            return NormalizeAndroidStorageAlias(Path.GetFullPath(path));
         }
 
         private bool TryGetParsedModel(string pmxPath, out PMXModel model)

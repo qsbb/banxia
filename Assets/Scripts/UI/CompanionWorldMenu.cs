@@ -38,10 +38,13 @@ namespace QuestMmdPlayer
         private readonly List<GameObject> modelListEntries = new List<GameObject>();
         private Text modelListPageText;
         private GameObject qualityLayer;
+        private GameObject performanceLayer;
         private GameObject voiceLayer;
         private GameObject textInputLayer;
         private GameObject debugLayer;
         private Text qualityStatusText;
+        private Text performanceStatusText;
+        private float nextPerformanceRefreshAt;
         private Text voiceStatusText;
         private Text voiceToggleText;
         private Text voiceRecordText;
@@ -123,6 +126,14 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
+            owner?.Performance?.SetDetailedSamplingEnabled(
+                IsOpen && performanceLayer != null && performanceLayer.activeSelf);
+            if (IsOpen && performanceLayer != null && performanceLayer.activeSelf &&
+                Time.unscaledTime >= nextPerformanceRefreshAt)
+            {
+                nextPerformanceRefreshAt = Time.unscaledTime + 0.5f;
+                RefreshPerformancePanel();
+            }
 #if UNITY_ANDROID && !UNITY_EDITOR
             if (ConsumeAndroidDebugMenuCommand())
             {
@@ -441,11 +452,13 @@ namespace QuestMmdPlayer
             if (modelLayer != null) modelLayer.SetActive(false);
             if (modelListLayer != null) modelListLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
             if (debugLayer != null) debugLayer.SetActive(false);
             debugMode = false;
             owner?.DebugLog?.SetDisplayEnabled(false);
+            owner?.Performance?.SetDetailedSamplingEnabled(false);
             pairingCode = string.Empty;
             HidePairingKeyboard();
             CloseConversationKeyboard();
@@ -502,6 +515,7 @@ namespace QuestMmdPlayer
             CreateButton("绑定后端", x[2], y[1], buttonWidth, buttonHeight, ShowPairingPanel, mainLayer.transform);
             CreateButton("动作", x[0], y[2], buttonWidth, buttonHeight, ShowActionPanel, mainLayer.transform);
             CreateButton("外观", x[1], y[2], buttonWidth, buttonHeight, ShowAppearancePanel, mainLayer.transform);
+            CreateButton("设备性能", x[2], y[2], buttonWidth, buttonHeight, ShowPerformancePanel, mainLayer.transform);
 
             statusText = CreateText("", mainLayer.transform, new Vector2(0f, -177f), new Vector2(660f, 60f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
             CreateButton("诊断", 286f, -278f, 108f, 44f, ShowDebugPanel, mainLayer.transform);
@@ -514,6 +528,7 @@ namespace QuestMmdPlayer
             BuildAppearancePanel();
             BuildModelPanel();
             BuildQualityPanel();
+            BuildPerformancePanel();
             BuildVoicePanel();
             BuildTextInputPanel();
             BuildDebugPanel();
@@ -689,6 +704,7 @@ namespace QuestMmdPlayer
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             modelLayer.SetActive(true);
             if (modelListLayer != null) modelListLayer.SetActive(false);
             SetDirectButtonColliders(modelLayer, true);
@@ -1254,6 +1270,7 @@ namespace QuestMmdPlayer
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             actionLayer.SetActive(true);
             SetDirectButtonColliders(actionLayer, true);
             if (actionListLayer != null) actionListLayer.SetActive(false);
@@ -1286,6 +1303,7 @@ namespace QuestMmdPlayer
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             appearanceLayer.SetActive(true);
             FocusInputLayer(appearanceLayer);
             Physics.SyncTransforms();
@@ -1306,6 +1324,7 @@ namespace QuestMmdPlayer
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             pairingLayer.SetActive(true);
             HidePairingKeyboard();
             FocusInputLayer(pairingLayer);
@@ -1318,6 +1337,7 @@ namespace QuestMmdPlayer
         {
             HidePairingKeyboard();
             pairingCode = string.Empty;
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             if (actionLayer != null) actionLayer.SetActive(false);
             if (actionListLayer != null) actionListLayer.SetActive(false);
             if (pairingLayer != null) pairingLayer.SetActive(false);
@@ -1346,6 +1366,7 @@ namespace QuestMmdPlayer
             if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             voiceLayer.SetActive(true);
             FocusInputLayer(voiceLayer);
             Physics.SyncTransforms();
@@ -1431,6 +1452,7 @@ namespace QuestMmdPlayer
             if (modelLayer != null) modelLayer.SetActive(false);
             if (qualityLayer != null) qualityLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             textInputLayer.SetActive(true);
             FocusInputLayer(textInputLayer);
             Physics.SyncTransforms();
@@ -1606,6 +1628,55 @@ namespace QuestMmdPlayer
             qualityLayer.SetActive(false);
         }
 
+        private void BuildPerformancePanel()
+        {
+            performanceLayer = CreateUiObject("Device Performance Layer", menuRoot.transform, Vector2.zero, new Vector2(720f, 680f));
+            CreateImage("Accent", performanceLayer.transform, new Vector2(0f, 335f), new Vector2(720f, 10f), new Color(.25f, .86f, .66f, 1f));
+            CreateText("设备性能", performanceLayer.transform, new Vector2(0f, 288f), new Vector2(640f, 50f), 29, FontStyle.Bold, Color.white);
+            CreateText("打开页面后采样，关闭页面停止详细采集", performanceLayer.transform, new Vector2(0f, 250f), new Vector2(640f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
+            performanceStatusText = CreateText("正在等待采样…", performanceLayer.transform, new Vector2(0f, 8f), new Vector2(660f, 480f), 13, FontStyle.Normal, new Color(.74f, .92f, .82f, 1f));
+            performanceStatusText.alignment = TextAnchor.UpperLeft;
+            CreateButton("返回主菜单", -112f, -252f, 204f, 58f, ShowMainPanel, performanceLayer.transform);
+            CreateButton("关闭", 112f, -252f, 204f, 58f, Hide, performanceLayer.transform);
+            performanceLayer.SetActive(false);
+        }
+
+        private void ShowPerformancePanel()
+        {
+            if (performanceLayer == null)
+            {
+                BuildPerformancePanel();
+            }
+            if (mainLayer != null) mainLayer.SetActive(false);
+            if (actionLayer != null) actionLayer.SetActive(false);
+            if (actionListLayer != null) actionListLayer.SetActive(false);
+            if (pairingLayer != null) pairingLayer.SetActive(false);
+            if (appearanceLayer != null) appearanceLayer.SetActive(false);
+            if (modelLayer != null) modelLayer.SetActive(false);
+            if (modelListLayer != null) modelListLayer.SetActive(false);
+            if (qualityLayer != null) qualityLayer.SetActive(false);
+            if (voiceLayer != null) voiceLayer.SetActive(false);
+            if (textInputLayer != null) textInputLayer.SetActive(false);
+            if (debugLayer != null) debugLayer.SetActive(false);
+            performanceLayer.SetActive(true);
+            FocusInputLayer(performanceLayer);
+            owner?.Performance?.SetDetailedSamplingEnabled(true);
+            nextPerformanceRefreshAt = Time.unscaledTime + 0.5f;
+            Physics.SyncTransforms();
+            RefreshPerformancePanel();
+            Status = "设备性能面板已打开";
+        }
+
+        private void RefreshPerformancePanel()
+        {
+            if (performanceStatusText == null || performanceLayer == null || !performanceLayer.activeSelf)
+            {
+                return;
+            }
+            var snapshot = RuntimeDiagnosticsBuilder.Capture(owner);
+            performanceStatusText.text = RuntimeDiagnosticsFormatter.FormatPerformance(snapshot.Performance);
+        }
+
         private void ApplyQualityPreset(QuestQualityPreset preset)
         {
             owner?.Quality?.ApplyPreset(preset);
@@ -1632,6 +1703,7 @@ namespace QuestMmdPlayer
             if (modelLayer != null) modelLayer.SetActive(false);
             if (voiceLayer != null) voiceLayer.SetActive(false);
             if (textInputLayer != null) textInputLayer.SetActive(false);
+            if (performanceLayer != null) performanceLayer.SetActive(false);
             qualityLayer.SetActive(true);
             FocusInputLayer(qualityLayer);
             Physics.SyncTransforms();
@@ -2186,6 +2258,11 @@ namespace QuestMmdPlayer
                 RefreshModelStatusText();
                 return;
             }
+            if (performanceLayer != null && performanceLayer.activeSelf)
+            {
+                RefreshPerformancePanel();
+                return;
+            }
             if (voiceLayer != null && voiceLayer.activeSelf)
             {
                 RefreshVoicePanel();
@@ -2293,6 +2370,7 @@ namespace QuestMmdPlayer
                 case "Appearance Layer": return RuntimeMenuLayer.Appearance;
                 case "Model Library Layer": return RuntimeMenuLayer.Models;
                 case "Installed Model List": return RuntimeMenuLayer.ModelList;
+                case "Device Performance Layer": return RuntimeMenuLayer.Performance;
                 case "Backend Pairing Layer": return RuntimeMenuLayer.Pairing;
                 case "Action Presets Layer": return RuntimeMenuLayer.Actions;
                 case "Main Menu Layer": return RuntimeMenuLayer.Main;

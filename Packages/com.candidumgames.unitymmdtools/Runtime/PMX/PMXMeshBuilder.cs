@@ -76,12 +76,14 @@ namespace UMT
                         model,
                         modelName,
                         materialGroup.materialIndices);
-                    PMXImportedMesh importedMesh = BuildMesh(
+                    PMXImportedMesh importedMesh = await BuildMeshAsync(
+                        frameBudget,
                         model,
                         sourceVertices,
                         materialGroup.materialIndices,
                         materialIndexOffsets,
-                        bindposes);
+                        bindposes,
+                        cancellationToken);
                     importedMesh.mesh.name = meshName;
                     importedMesh.materialIndices = materialGroup.materialIndices.ToArray();
                     importedMesh.name = meshName;
@@ -106,6 +108,234 @@ namespace UMT
                 }
             }
             return meshes;
+        }
+
+        private static async Task<PMXImportedMesh> BuildMeshAsync(
+            UMTFrameBudget frameBudget,
+            PMXModel model,
+            NativeArray<PMXVertex> sourceVertices,
+            IReadOnlyList<int> materialIndices,
+            int[] materialIndexOffsets,
+            Matrix4x4[] bindposes,
+            CancellationToken cancellationToken)
+        {
+            Mesh mesh = new Mesh();
+            NativeArray<int>[] submeshTriangles = new NativeArray<int>[materialIndices.Count];
+            NativeArray<uint> sourceIndexMap = default;
+            NativeArray<Vector3> vertices = default;
+            NativeArray<Vector3> normals = default;
+            NativeArray<Vector2> uvs = default;
+            NativeArray<byte> bonesPerVertex = default;
+            NativeArray<BoneWeight1> boneWeights = default;
+            NativeArray<SDEFVertexData> sdefData = default;
+            try
+            {
+                Dictionary<uint, int> vertexMap = new Dictionary<uint, int>();
+                List<uint> sourceVertexIndices = new List<uint>();
+                for (int materialGroupIndex = 0; materialGroupIndex < materialIndices.Count; ++materialGroupIndex)
+                {
+                    int materialIndex = materialIndices[materialGroupIndex];
+                    int indexOffset = materialIndexOffsets[materialIndex];
+                    int faceIndexCount = model.materials[materialIndex].faceIndexCount;
+                    NativeArray<int> triangles = new NativeArray<int>(
+                        faceIndexCount,
+                        Allocator.Persistent,
+                        NativeArrayOptions.UninitializedMemory);
+                    submeshTriangles[materialGroupIndex] = triangles;
+                    for (int i = 0; i < faceIndexCount; ++i)
+                    {
+                        uint sourceIndex = model.indices[indexOffset + i];
+                        if (!vertexMap.TryGetValue(sourceIndex, out int remappedIndex))
+                        {
+                            remappedIndex = sourceVertexIndices.Count;
+                            vertexMap.Add(sourceIndex, remappedIndex);
+                            sourceVertexIndices.Add(sourceIndex);
+                        }
+                        triangles[i] = remappedIndex;
+                        if ((i & 2047) == 2047)
+                        {
+                            await frameBudget.YieldIfNeeded();
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+                    }
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                int vertexCount = sourceVertexIndices.Count;
+                sourceIndexMap = new NativeArray<uint>(
+                    vertexCount,
+                    Allocator.Persistent,
+                    NativeArrayOptions.UninitializedMemory);
+                for (int i = 0; i < vertexCount; ++i)
+                {
+                    sourceIndexMap[i] = sourceVertexIndices[i];
+                    if ((i & 4095) == 4095)
+                    {
+                        await frameBudget.YieldIfNeeded();
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                }
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                vertices = new NativeArray<Vector3>(
+                    vertexCount,
+                    Allocator.Persistent,
+                    NativeArrayOptions.UninitializedMemory);
+                normals = new NativeArray<Vector3>(
+                    vertexCount,
+                    Allocator.Persistent,
+                    NativeArrayOptions.UninitializedMemory);
+                uvs = new NativeArray<Vector2>(
+                    vertexCount,
+                    Allocator.Persistent,
+                    NativeArrayOptions.UninitializedMemory);
+                NativeArray<float3> positionsView = vertices.Reinterpret<float3>();
+                NativeArray<float3> normalsView = normals.Reinterpret<float3>();
+                NativeArray<float2> uvsView = uvs.Reinterpret<float2>();
+
+                bool hasBones = model.bones.Length > 0;
+                bool hasSDEF = false;
+                if (hasBones)
+                {
+                    bonesPerVertex = new NativeArray<byte>(
+                        vertexCount,
+                        Allocator.Persistent,
+                        NativeArrayOptions.UninitializedMemory);
+                    boneWeights = new NativeArray<BoneWeight1>(
+                        vertexCount * 4,
+                        Allocator.Persistent,
+                        NativeArrayOptions.UninitializedMemory);
+                    sdefData = new NativeArray<SDEFVertexData>(
+                        vertexCount,
+                        Allocator.Persistent,
+                        NativeArrayOptions.UninitializedMemory);
+                }
+
+                const int vertexChunkSize = 4096;
+                for (int start = 0; start < vertexCount; start += vertexChunkSize)
+                {
+                    int count = Math.Min(vertexChunkSize, vertexCount - start);
+                    if (hasBones)
+                    {
+                        MeshMath.BuildVertexDataRange(
+                            in sourceVertices,
+                            in sourceIndexMap,
+                            model.bones.Length,
+                            start,
+                            count,
+                            ref positionsView,
+                            ref normalsView,
+                            ref uvsView,
+                            ref bonesPerVertex,
+                            ref boneWeights,
+                            ref sdefData,
+                            out int chunkHasSDEF);
+                        hasSDEF |= chunkHasSDEF != 0;
+                    }
+                    else
+                    {
+                        MeshMath.BuildGeometryRange(
+                            in sourceVertices,
+                            in sourceIndexMap,
+                            start,
+                            count,
+                            ref positionsView,
+                            ref normalsView,
+                            ref uvsView);
+                    }
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (vertexCount > 65535)
+                {
+                    mesh.indexFormat = IndexFormat.UInt32;
+                }
+                mesh.SetVertices(vertices);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                mesh.SetNormals(normals);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+                mesh.SetUVs(0, uvs);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                mesh.subMeshCount = submeshTriangles.Length;
+                for (int i = 0; i < submeshTriangles.Length; ++i)
+                {
+                    mesh.SetIndices(submeshTriangles[i], MeshTopology.Triangles, i, false);
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                if (hasBones)
+                {
+                    mesh.SetBoneWeights(bonesPerVertex, boneWeights);
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    mesh.bindposes = bindposes;
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                string[] blendShapeNames = await AddVertexMorphBlendShapesAsync(
+                    frameBudget,
+                    mesh,
+                    model,
+                    vertexMap,
+                    cancellationToken);
+                mesh.RecalculateBounds();
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                PMXImportedMesh importedMesh = new PMXImportedMesh
+                {
+                    mesh = mesh,
+                    hasSDEF = hasSDEF,
+                    hasTangent = false,
+                };
+                if (hasSDEF)
+                {
+                    importedMesh.sdefVertexData = sdefData.ToArray();
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    importedMesh.morphTable = await BuildMorphTableAsync(
+                        frameBudget,
+                        model,
+                        vertexMap,
+                        vertexCount,
+                        blendShapeNames,
+                        cancellationToken);
+                }
+                return importedMesh;
+            }
+            catch
+            {
+                PMXUtilities.DestroyRuntimeObject(mesh);
+                throw;
+            }
+            finally
+            {
+                for (int i = 0; i < submeshTriangles.Length; ++i)
+                {
+                    if (submeshTriangles[i].IsCreated)
+                    {
+                        submeshTriangles[i].Dispose();
+                    }
+                }
+                if (sourceIndexMap.IsCreated) sourceIndexMap.Dispose();
+                if (vertices.IsCreated) vertices.Dispose();
+                if (normals.IsCreated) normals.Dispose();
+                if (uvs.IsCreated) uvs.Dispose();
+                if (bonesPerVertex.IsCreated) bonesPerVertex.Dispose();
+                if (boneWeights.IsCreated) boneWeights.Dispose();
+                if (sdefData.IsCreated) sdefData.Dispose();
+            }
         }
 
         private static int[] BuildMaterialIndexOffsets(PMXModel model)
@@ -322,6 +552,90 @@ namespace UMT
             return result;
         }
 
+        private static async Task<MMDMorphTable> BuildMorphTableAsync(
+            UMTFrameBudget frameBudget,
+            PMXModel model,
+            IReadOnlyDictionary<uint, int> vertexMap,
+            int meshVertexCount,
+            string[] blendShapeNames,
+            CancellationToken cancellationToken)
+        {
+            NativeList<int> contributionVertices = new NativeList<int>(Allocator.Persistent);
+            NativeList<uint4> contributionEntries = new NativeList<uint4>(Allocator.Persistent);
+            NativeArray<uint4> flatOffsets = default;
+            NativeArray<int2> perVertexRanges = default;
+            try
+            {
+                int morphSlot = 0;
+                foreach (PMXMorph morph in model.morphs)
+                {
+                    if (morph.type != PMXMorph.Type.Vertex)
+                    {
+                        continue;
+                    }
+
+                    bool contributed = false;
+                    for (int i = 0; i < morph.offsets.Length; ++i)
+                    {
+                        PMXVertexMorphData offset = morph.offsets[i] as PMXVertexMorphData;
+                        if (offset != null &&
+                            vertexMap.TryGetValue(offset.vertexIndex, out int meshVertexIndex))
+                        {
+                            contributionVertices.Add(meshVertexIndex);
+                            contributionEntries.Add(new uint4(
+                                math.asuint(offset.positionOffset),
+                                (uint)morphSlot));
+                            contributed = true;
+                        }
+                        if ((i & 2047) == 2047)
+                        {
+                            await frameBudget.YieldIfNeeded();
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+                    }
+                    if (contributed)
+                    {
+                        ++morphSlot;
+                    }
+                    await frameBudget.YieldIfNeeded();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                flatOffsets = new NativeArray<uint4>(
+                    contributionEntries.Length,
+                    Allocator.Persistent,
+                    NativeArrayOptions.UninitializedMemory);
+                perVertexRanges = new NativeArray<int2>(
+                    meshVertexCount,
+                    Allocator.Persistent,
+                    NativeArrayOptions.UninitializedMemory);
+                NativeArray<int> contributionVerticesArray = contributionVertices.AsArray();
+                NativeArray<uint4> contributionEntriesArray = contributionEntries.AsArray();
+                MeshMath.BucketMorphContributions(
+                    in contributionVerticesArray,
+                    in contributionEntriesArray,
+                    meshVertexCount,
+                    ref flatOffsets,
+                    ref perVertexRanges);
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return new MMDMorphTable
+                {
+                    blendShapeNames = blendShapeNames,
+                    flatOffsets = flatOffsets.ToArray(),
+                    perVertexRanges = perVertexRanges.ToArray(),
+                };
+            }
+            finally
+            {
+                if (contributionVertices.IsCreated) contributionVertices.Dispose();
+                if (contributionEntries.IsCreated) contributionEntries.Dispose();
+                if (flatOffsets.IsCreated) flatOffsets.Dispose();
+                if (perVertexRanges.IsCreated) perVertexRanges.Dispose();
+            }
+        }
+
         /// <summary>
         /// Adds vertex-morph blend shapes to the mesh and returns the blend-shape names in the order they were added. The returned order matches the morph-slot order used by the SDEF morph table so the compute pass can pull per-slot weights from the <see cref="SkinnedMeshRenderer"/> by name. A single dense delta buffer is reused across morphs; only touched entries are cleared between morphs.
         /// </summary>
@@ -371,6 +685,68 @@ namespace UMT
             return shapeNames.ToArray();
         }
 
+        private static async Task<string[]> AddVertexMorphBlendShapesAsync(
+            UMTFrameBudget frameBudget,
+            Mesh mesh,
+            PMXModel model,
+            IReadOnlyDictionary<uint, int> vertexMap,
+            CancellationToken cancellationToken)
+        {
+            HashSet<string> usedShapeNames = new HashSet<string>(StringComparer.Ordinal);
+            List<string> shapeNames = new List<string>();
+            Vector3[] deltaVertices = new Vector3[vertexMap.Count];
+            List<int> touchedIndices = new List<int>();
+            foreach (PMXMorph morph in model.morphs)
+            {
+                if (morph.type != PMXMorph.Type.Vertex)
+                {
+                    continue;
+                }
+
+                touchedIndices.Clear();
+                bool hasAnyOffset = false;
+                for (int i = 0; i < morph.offsets.Length; ++i)
+                {
+                    PMXVertexMorphData offset = morph.offsets[i] as PMXVertexMorphData;
+                    if (offset != null &&
+                        vertexMap.TryGetValue(offset.vertexIndex, out int remappedIndex))
+                    {
+                        deltaVertices[remappedIndex] += (Vector3)offset.positionOffset;
+                        touchedIndices.Add(remappedIndex);
+                        hasAnyOffset = true;
+                    }
+                    if ((i & 2047) == 2047)
+                    {
+                        await frameBudget.YieldIfNeeded();
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                }
+
+                if (hasAnyOffset)
+                {
+                    string shapeName = GetUniqueBlendShapeName(
+                        morph.renamedName.ToString(),
+                        usedShapeNames);
+                    mesh.AddBlendShapeFrame(
+                        shapeName,
+                        100.0f,
+                        deltaVertices,
+                        null,
+                        null);
+                    shapeNames.Add(shapeName);
+                    for (int i = 0; i < touchedIndices.Count; ++i)
+                    {
+                        deltaVertices[touchedIndices[i]] = Vector3.zero;
+                    }
+                }
+                await frameBudget.YieldIfNeeded();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            await frameBudget.YieldIfNeeded();
+            cancellationToken.ThrowIfCancellationRequested();
+            return shapeNames.ToArray();
+        }
+
         private static string GetUniqueBlendShapeName(string name, HashSet<string> usedShapeNames)
         {
             string baseName = string.IsNullOrWhiteSpace(name) ? "Morph" : name.Trim();
@@ -401,7 +777,28 @@ namespace UMT
             [BurstCompile]
             internal static void BuildGeometry(in NativeArray<PMXVertex> sourceVertices, in NativeArray<uint> sourceIndexMap, ref NativeArray<float3> positions, ref NativeArray<float3> normals, ref NativeArray<float2> uvs)
             {
-                for (int i = 0; i < sourceIndexMap.Length; ++i)
+                BuildGeometryRange(
+                    in sourceVertices,
+                    in sourceIndexMap,
+                    0,
+                    sourceIndexMap.Length,
+                    ref positions,
+                    ref normals,
+                    ref uvs);
+            }
+
+            [BurstCompile]
+            internal static void BuildGeometryRange(
+                in NativeArray<PMXVertex> sourceVertices,
+                in NativeArray<uint> sourceIndexMap,
+                int start,
+                int count,
+                ref NativeArray<float3> positions,
+                ref NativeArray<float3> normals,
+                ref NativeArray<float2> uvs)
+            {
+                int end = start + count;
+                for (int i = start; i < end; ++i)
                 {
                     PMXVertex sourceVertex = sourceVertices[(int)sourceIndexMap[i]];
                     positions[i] = sourceVertex.position;
@@ -416,8 +813,39 @@ namespace UMT
             [BurstCompile]
             internal static void BuildVertexData(in NativeArray<PMXVertex> sourceVertices, in NativeArray<uint> sourceIndexMap, int boneCount, ref NativeArray<float3> positions, ref NativeArray<float3> normals, ref NativeArray<float2> uvs, ref NativeArray<byte> bonesPerVertex, ref NativeArray<BoneWeight1> boneWeights, ref NativeArray<SDEFVertexData> sdefData, out int hasSDEF)
             {
+                BuildVertexDataRange(
+                    in sourceVertices,
+                    in sourceIndexMap,
+                    boneCount,
+                    0,
+                    sourceIndexMap.Length,
+                    ref positions,
+                    ref normals,
+                    ref uvs,
+                    ref bonesPerVertex,
+                    ref boneWeights,
+                    ref sdefData,
+                    out hasSDEF);
+            }
+
+            [BurstCompile]
+            internal static void BuildVertexDataRange(
+                in NativeArray<PMXVertex> sourceVertices,
+                in NativeArray<uint> sourceIndexMap,
+                int boneCount,
+                int start,
+                int count,
+                ref NativeArray<float3> positions,
+                ref NativeArray<float3> normals,
+                ref NativeArray<float2> uvs,
+                ref NativeArray<byte> bonesPerVertex,
+                ref NativeArray<BoneWeight1> boneWeights,
+                ref NativeArray<SDEFVertexData> sdefData,
+                out int hasSDEF)
+            {
                 hasSDEF = 0;
-                for (int i = 0; i < sourceIndexMap.Length; ++i)
+                int end = start + count;
+                for (int i = start; i < end; ++i)
                 {
                     PMXVertex sourceVertex = sourceVertices[(int)sourceIndexMap[i]];
                     positions[i] = sourceVertex.position;
@@ -425,7 +853,12 @@ namespace UMT
                     uvs[i] = new float2(sourceVertex.uv.x, 1.0f - sourceVertex.uv.y);
 
                     PMXWeight weight = sourceVertex.weight;
-                    ResolveLinearWeights(weight, boneCount, out int4 indices, out float4 weights, out int count);
+                    ResolveLinearWeights(
+                        weight,
+                        boneCount,
+                        out int4 indices,
+                        out float4 weights,
+                        out int influenceCount);
 
                     bonesPerVertex[i] = 4;
                     int baseOffset = i * 4;
@@ -433,7 +866,7 @@ namespace UMT
                     {
                         boneWeights[baseOffset + j] = new BoneWeight1
                         {
-                            boneIndex = j < count ? indices[j] : 0,
+                            boneIndex = j < influenceCount ? indices[j] : 0,
                             weight = weights[j],
                         };
                     }

@@ -85,23 +85,34 @@ namespace UMT
         /// <param name="modelName">Model name (used for context; not embedded in material names).</param>
         /// <param name="texturesByIndex">Loaded textures indexed by PMX texture index.</param>
         /// <returns>The generated materials in PMX material order.</returns>
-        public static List<Material> Build(PMXModel model, PMXImportOptions options, string modelName, Texture2D[] texturesByIndex)
+        public static List<Material> Build(
+            PMXModel model,
+            PMXImportOptions options,
+            string modelName,
+            Texture2D[] texturesByIndex,
+            IReadOnlyDictionary<int, SourcePixels> predecodedSourcePixels = null)
         {
             List<Material> materials = new List<Material>(model.materials.Length);
             // The imported texture assets in texturesByIndex may be compressed and/or non-readable (editor import settings), which corrupts CPU alpha sampling. Decode the original source files into raw Color32 pixels instead, cached per resolved path for the duration of this build.
-            SourcePixelCache sourcePixels = new SourcePixelCache(model, options, texturesByIndex);
-            int indicesOffset = 0;
-            for (int i = 0; i < model.materials.Length; ++i)
+            using (SourcePixelCache sourcePixels = new SourcePixelCache(
+                model,
+                options,
+                texturesByIndex,
+                predecodedSourcePixels))
             {
-                int faceIndexStart = indicesOffset;
-                indicesOffset += model.materials[i].faceIndexCount;
-                materials.Add(BuildMaterialEntry(
-                    model,
-                    options,
-                    texturesByIndex,
-                    sourcePixels,
-                    i,
-                    faceIndexStart));
+                int indicesOffset = 0;
+                for (int i = 0; i < model.materials.Length; ++i)
+                {
+                    int faceIndexStart = indicesOffset;
+                    indicesOffset += model.materials[i].faceIndexCount;
+                    materials.Add(BuildMaterialEntry(
+                        model,
+                        options,
+                        texturesByIndex,
+                        sourcePixels,
+                        i,
+                        faceIndexStart));
+                }
             }
             return materials;
         }
@@ -118,14 +129,19 @@ namespace UMT
             PMXImportOptions options,
             string modelName,
             Texture2D[] texturesByIndex,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            IReadOnlyDictionary<int, SourcePixels> predecodedSourcePixels = null)
         {
             if (frameBudget == null)
             {
                 throw new ArgumentNullException(nameof(frameBudget));
             }
             List<Material> materials = new List<Material>(model.materials.Length);
-            SourcePixelCache sourcePixels = new SourcePixelCache(model, options, texturesByIndex);
+            using SourcePixelCache sourcePixels = new SourcePixelCache(
+                model,
+                options,
+                texturesByIndex,
+                predecodedSourcePixels);
             int indicesOffset = 0;
             try
             {
@@ -134,13 +150,15 @@ namespace UMT
                     cancellationToken.ThrowIfCancellationRequested();
                     int faceIndexStart = indicesOffset;
                     indicesOffset += model.materials[i].faceIndexCount;
-                    materials.Add(BuildMaterialEntry(
+                    materials.Add(await BuildMaterialEntryAsync(
+                        frameBudget,
                         model,
                         options,
                         texturesByIndex,
                         sourcePixels,
                         i,
-                        faceIndexStart));
+                        faceIndexStart,
+                        cancellationToken));
                     await frameBudget.YieldIfNeeded();
                     cancellationToken.ThrowIfCancellationRequested();
                 }
@@ -179,20 +197,96 @@ namespace UMT
             }
 
             SourcePixels mainPixels = sourcePixels.Get(pmxMaterial.textureIndex);
+            NativeArray<Color32> mainNativePixels = faceIndexCount > 0
+                ? sourcePixels.GetNative(pmxMaterial.textureIndex)
+                : default;
             (bool isBelowAlphaCoverageThreshold, float alphaCoverage, bool anyPixelOpaque, bool anyPixelFullyTransparent) alphaDetection =
                 DetectAlphaCoverage(
                     mainPixels,
+                    mainNativePixels,
                     model,
                     faceIndexStart,
                     faceIndexCount,
                     options.alphaDetectionThreshold);
-            bool shouldBeTransparent = alphaDetection.isBelowAlphaCoverageThreshold ||
+            bool isEyeShadowOverlay = IsEyeShadowOverlay(pmxMaterial);
+            bool shouldBeTransparent = isEyeShadowOverlay ||
+                alphaDetection.isBelowAlphaCoverageThreshold ||
                 alphaDetection.anyPixelFullyTransparent || pmxMaterial.diffuse.a < 1.0f;
             float alphaCoverage = Mathf.Min(alphaDetection.alphaCoverage, pmxMaterial.diffuse.a);
             bool anyPixelOpaque = alphaDetection.anyPixelOpaque && !(pmxMaterial.diffuse.a < 1.0f);
-            bool transparentWithZWrite = anyPixelOpaque ||
-                alphaCoverage >= options.alphaCoverageZWriteThreshold;
-            bool keepEdge = !alphaDetection.isBelowAlphaCoverageThreshold &&
+            // MMD eye-shadow meshes are small, semitransparent decals that sit
+            // almost coplanar with the eyelids and eye whites. Letting one write
+            // depth or draw an outline causes the familiar white/dark eye strip
+            // on mobile GPUs even though the same PMX looks correct in MMD.
+            bool transparentWithZWrite = !isEyeShadowOverlay &&
+                (anyPixelOpaque || alphaCoverage >= options.alphaCoverageZWriteThreshold);
+            bool keepEdge = !isEyeShadowOverlay &&
+                !alphaDetection.isBelowAlphaCoverageThreshold &&
+                !(pmxMaterial.diffuse.a < 1.0f);
+            Debug.Log(materialName + " alpha coverage: " + alphaCoverage.ToString("F3") +
+                ", any opaque: " + anyPixelOpaque +
+                ", transparent with ZWrite: " + transparentWithZWrite);
+            Material material = BuildMaterial(
+                pmxMaterial,
+                mainTexture,
+                sphereTexture,
+                materialName,
+                shouldBeTransparent,
+                transparentWithZWrite,
+                keepEdge);
+            material.renderQueue = shouldBeTransparent ? 3000 + materialIndex : 2500 + materialIndex;
+            return material;
+        }
+
+        private static async Task<Material> BuildMaterialEntryAsync(
+            UMTFrameBudget frameBudget,
+            PMXModel model,
+            PMXImportOptions options,
+            Texture2D[] texturesByIndex,
+            SourcePixelCache sourcePixels,
+            int materialIndex,
+            int faceIndexStart,
+            CancellationToken cancellationToken)
+        {
+            PMXMaterial pmxMaterial = model.materials[materialIndex];
+            int faceIndexCount = pmxMaterial.faceIndexCount;
+            Texture2D mainTexture = GetTexture(texturesByIndex, pmxMaterial.textureIndex);
+            Texture2D sphereTexture = GetTexture(texturesByIndex, pmxMaterial.sphereTextureIndex);
+            string renamedName = pmxMaterial.renamedName.ToString();
+            string materialName = PMXUtilities.SanitizeFileName(renamedName, materialIndex);
+
+            if (options.materialOverrides != null &&
+                options.materialOverrides.TryGetValue(materialName, out Material overrideMaterial) &&
+                overrideMaterial != null)
+            {
+                return overrideMaterial;
+            }
+
+            SourcePixels mainPixels = sourcePixels.Get(pmxMaterial.textureIndex);
+            NativeArray<Color32> mainNativePixels = faceIndexCount > 0
+                ? sourcePixels.GetNative(pmxMaterial.textureIndex)
+                : default;
+            var alphaDetection = await DetectAlphaCoverageAsync(
+                frameBudget,
+                mainPixels,
+                mainNativePixels,
+                model,
+                faceIndexStart,
+                faceIndexCount,
+                options.alphaDetectionThreshold,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            bool isEyeShadowOverlay = IsEyeShadowOverlay(pmxMaterial);
+            bool shouldBeTransparent = isEyeShadowOverlay ||
+                alphaDetection.isBelowAlphaCoverageThreshold ||
+                alphaDetection.anyPixelFullyTransparent || pmxMaterial.diffuse.a < 1.0f;
+            float alphaCoverage = Mathf.Min(alphaDetection.alphaCoverage, pmxMaterial.diffuse.a);
+            bool anyPixelOpaque = alphaDetection.anyPixelOpaque && !(pmxMaterial.diffuse.a < 1.0f);
+            bool transparentWithZWrite = !isEyeShadowOverlay &&
+                (anyPixelOpaque || alphaCoverage >= options.alphaCoverageZWriteThreshold);
+            bool keepEdge = !isEyeShadowOverlay &&
+                !alphaDetection.isBelowAlphaCoverageThreshold &&
                 !(pmxMaterial.diffuse.a < 1.0f);
             Debug.Log(materialName + " alpha coverage: " + alphaCoverage.ToString("F3") +
                 ", any opaque: " + anyPixelOpaque +
@@ -246,6 +340,32 @@ namespace UMT
             return HeuristicDetect(pmxMaterial, faceHeuristicName);
         }
 
+        private static bool IsEyeShadowOverlay(PMXMaterial pmxMaterial)
+        {
+            if (pmxMaterial.textureIndex >= 0 ||
+                pmxMaterial.diffuse.a <= 0.0f ||
+                pmxMaterial.diffuse.a >= 1.0f)
+            {
+                return false;
+            }
+
+            string[] overlayHeuristicNames =
+            {
+                "eye shadow",
+                "eye-shadow",
+                "eye_shadow",
+                "eyeshadow",
+                "eyeshade",
+                "目影",
+                "目陰",
+                "眼影",
+                "眼陰",
+                "瞼影",
+                "まぶた影",
+            };
+            return HeuristicDetect(pmxMaterial, overlayHeuristicNames);
+        }
+
         private static bool HeuristicDetect(PMXMaterial material, string[] heuristics)
         {
             return HeuristicDetect(material.renamedName.ToString(), heuristics) ||
@@ -272,6 +392,7 @@ namespace UMT
             Color borderColor = new Color((pmxMaterial.diffuse.r + pmxMaterial.ambient.x) * 0.5f, (pmxMaterial.diffuse.g + pmxMaterial.ambient.y) * 0.5f, (pmxMaterial.diffuse.b + pmxMaterial.ambient.z) * 0.5f, 1.0f);
             bool isEyeMaterial = IsEyeMaterial(pmxMaterial);
             bool isFaceMaterial = IsFaceMaterial(pmxMaterial);
+            bool isEyeShadowOverlay = IsEyeShadowOverlay(pmxMaterial);
             SetColorIfPresent(material, s_ShadowColorProperty, ambientColor);
             SetFloatIfPresent(material, s_ShadowReceiveProperty, 1.0f);
             SetFloatIfPresent(material, s_lilShadowCasterBiasProperty, isFaceMaterial || isEyeMaterial ? 0.05f : 0.0f);
@@ -289,7 +410,7 @@ namespace UMT
             }
             SetColorIfPresent(material, s_Shadow2ndColorProperty, new Color(ambientColor.r, ambientColor.g, ambientColor.b, 0.0f));
             SetColorIfPresent(material, s_ShadowBorderColorProperty, borderColor);
-            SetFloatIfPresent(material, s_UseShadowProperty, 1.0f);
+            SetFloatIfPresent(material, s_UseShadowProperty, isEyeShadowOverlay ? 0.0f : 1.0f);
             SetFloatIfPresent(material, s_ShadingToonyProperty, 0.95f);
             SetFloatIfPresent(material, s_ShadingShiftProperty, -0.05f);
             SetFloatIfPresent(material, s_GiEqualizationProperty, 0.0f);
@@ -504,6 +625,36 @@ namespace UMT
         /// <exception cref="ArgumentOutOfRangeException">Thrown when the index range is invalid.</exception>
         public static (bool isBelowAlphaCoverageThreshold, float alphaCoverage, bool anyPixelOpaque, bool anyPixelFullyTransparent) DetectAlphaCoverage(SourcePixels sourcePixels, PMXModel model, int faceIndexStart, int faceIndexCount, float alphaThreshold)
         {
+            NativeArray<Color32> pixels = sourcePixels.IsValid
+                ? new NativeArray<Color32>(sourcePixels.pixels, Allocator.TempJob)
+                : default;
+            try
+            {
+                return DetectAlphaCoverage(
+                    sourcePixels,
+                    pixels,
+                    model,
+                    faceIndexStart,
+                    faceIndexCount,
+                    alphaThreshold);
+            }
+            finally
+            {
+                if (pixels.IsCreated)
+                {
+                    pixels.Dispose();
+                }
+            }
+        }
+
+        private static (bool isBelowAlphaCoverageThreshold, float alphaCoverage, bool anyPixelOpaque, bool anyPixelFullyTransparent) DetectAlphaCoverage(
+            SourcePixels sourcePixels,
+            NativeArray<Color32> sourcePixelBuffer,
+            PMXModel model,
+            int faceIndexStart,
+            int faceIndexCount,
+            float alphaThreshold)
+        {
             if (model == null)
             {
                 throw new ArgumentNullException(nameof(model));
@@ -538,8 +689,11 @@ namespace UMT
             }
 
             // The job's [ReadOnly] NativeArray field must always be assigned for the job-safety system, even when there is no texture; a one-element placeholder stands in and is ignored via hasTexture.
-            bool hasTexture = sourcePixels.IsValid;
-            NativeArray<Color32> pixels = hasTexture ? new NativeArray<Color32>(sourcePixels.pixels, Allocator.TempJob) : new NativeArray<Color32>(1, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+            bool hasTexture = sourcePixels.IsValid && sourcePixelBuffer.IsCreated;
+            NativeArray<Color32> placeholderPixels = hasTexture
+                ? default
+                : new NativeArray<Color32>(1, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+            NativeArray<Color32> pixels = hasTexture ? sourcePixelBuffer : placeholderPixels;
 
             NativeArray<int> result = new NativeArray<int>(k_ResultCount, Allocator.TempJob, NativeArrayOptions.ClearMemory);
 
@@ -565,9 +719,131 @@ namespace UMT
             uvs.Dispose();
             indices.Dispose();
             result.Dispose();
-            pixels.Dispose();
+            if (placeholderPixels.IsCreated)
+            {
+                placeholderPixels.Dispose();
+            }
 
             return (isBelowAlphaCoverageThreshold, alphaCoverage, anyPixelOpaque, anyPixelFullyTransparent);
+        }
+
+        private static async Task<(bool isBelowAlphaCoverageThreshold, float alphaCoverage, bool anyPixelOpaque, bool anyPixelFullyTransparent)> DetectAlphaCoverageAsync(
+            UMTFrameBudget frameBudget,
+            SourcePixels sourcePixels,
+            NativeArray<Color32> sourcePixelBuffer,
+            PMXModel model,
+            int faceIndexStart,
+            int faceIndexCount,
+            float alphaThreshold,
+            CancellationToken cancellationToken)
+        {
+            if (model == null)
+            {
+                throw new ArgumentNullException(nameof(model));
+            }
+            if (faceIndexStart < 0 || faceIndexCount < 0 ||
+                faceIndexStart + faceIndexCount > model.indices.Length)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(faceIndexStart),
+                    faceIndexStart,
+                    "Face index range is out of bounds.");
+            }
+
+            int triangleCount = faceIndexCount / 3;
+            if (triangleCount == 0)
+            {
+                return (false, 1.0f, true, false);
+            }
+
+            Dictionary<uint, int> remappedVertices = new Dictionary<uint, int>(faceIndexCount);
+            NativeArray<float2> uvs = new NativeArray<float2>(
+                faceIndexCount,
+                Allocator.Persistent,
+                NativeArrayOptions.UninitializedMemory);
+            NativeArray<int> indices = new NativeArray<int>(
+                faceIndexCount,
+                Allocator.Persistent,
+                NativeArrayOptions.UninitializedMemory);
+            NativeArray<Color32> placeholderPixels = default;
+            NativeArray<int> result = default;
+            JobHandle handle = default;
+            bool jobScheduled = false;
+            try
+            {
+                int vertexCount = 0;
+                for (int index = 0; index < faceIndexCount; ++index)
+                {
+                    uint vertexIndex = model.indices[faceIndexStart + index];
+                    if (!remappedVertices.TryGetValue(vertexIndex, out int remapped))
+                    {
+                        remapped = vertexCount++;
+                        remappedVertices[vertexIndex] = remapped;
+                        uvs[remapped] = model.vertices[(int)vertexIndex].uv;
+                    }
+                    indices[index] = remapped;
+                    if ((index & 511) == 511)
+                    {
+                        await frameBudget.YieldIfNeeded();
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                }
+
+                bool hasTexture = sourcePixels.IsValid && sourcePixelBuffer.IsCreated;
+                if (!hasTexture)
+                {
+                    placeholderPixels = new NativeArray<Color32>(
+                        1,
+                        Allocator.Persistent,
+                        NativeArrayOptions.ClearMemory);
+                }
+                NativeArray<Color32> pixels = hasTexture ? sourcePixelBuffer : placeholderPixels;
+                result = new NativeArray<int>(
+                    k_ResultCount,
+                    Allocator.Persistent,
+                    NativeArrayOptions.ClearMemory);
+                DetectAlphaJob job = new DetectAlphaJob
+                {
+                    uvs = uvs,
+                    indices = indices,
+                    vertexCount = vertexCount,
+                    pixels = pixels,
+                    textureWidth = sourcePixels.width,
+                    textureHeight = sourcePixels.height,
+                    hasTexture = hasTexture,
+                    result = result,
+                };
+                handle = job.Schedule(vertexCount + triangleCount, 64);
+                jobScheduled = true;
+                while (!handle.IsCompleted)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await Task.Yield();
+                }
+                handle.Complete();
+                jobScheduled = false;
+
+                int coveredSamples = result[k_ResultCoveredCount];
+                float alphaCoverage = coveredSamples > 0
+                    ? result[k_ResultAlphaSum] / (coveredSamples * k_AlphaCoverageScale)
+                    : 1.0f;
+                return (
+                    alphaCoverage < alphaThreshold,
+                    alphaCoverage,
+                    result[k_ResultAnyOpaque] != 0,
+                    result[k_ResultAnyFullyTransparent] != 0);
+            }
+            finally
+            {
+                if (jobScheduled)
+                {
+                    handle.Complete();
+                }
+                if (result.IsCreated) result.Dispose();
+                if (placeholderPixels.IsCreated) placeholderPixels.Dispose();
+                if (indices.IsCreated) indices.Dispose();
+                if (uvs.IsCreated) uvs.Dispose();
+            }
         }
 
         /// <summary>
@@ -596,21 +872,34 @@ namespace UMT
         /// <summary>
         /// Decodes a PMX model's texture files into raw <see cref="SourcePixels"/> on demand, caching each resolved file so it is decoded only once per build. Decoding reads the original source bytes rather than the imported texture asset, so it is unaffected by editor compression or read/write settings. BMP and TGA are decoded straight to <see cref="Color32"/> arrays; other formats go through a throwaway in-memory decode that never produces a compressed asset.
         /// </summary>
-        private sealed class SourcePixelCache
+        private sealed class SourcePixelCache : IDisposable
         {
             private readonly PMXModel m_Model;
             private readonly Texture2D[] m_TexturesByIndex;
             private readonly string m_BaseDirectory;
             private readonly Dictionary<int, SourcePixels> m_ByTextureIndex = new Dictionary<int, SourcePixels>();
+            private readonly Dictionary<int, NativeArray<Color32>> m_NativeByTextureIndex =
+                new Dictionary<int, NativeArray<Color32>>();
 
             public SourcePixelCache(
                 PMXModel model,
                 PMXImportOptions options,
-                Texture2D[] texturesByIndex)
+                Texture2D[] texturesByIndex,
+                IReadOnlyDictionary<int, SourcePixels> predecodedSourcePixels = null)
             {
                 m_Model = model;
                 m_TexturesByIndex = texturesByIndex ?? Array.Empty<Texture2D>();
                 m_BaseDirectory = !string.IsNullOrEmpty(options.textureBaseDirectory) ? options.textureBaseDirectory : Path.GetDirectoryName(options.sourcePath);
+                if (predecodedSourcePixels != null)
+                {
+                    foreach (KeyValuePair<int, SourcePixels> item in predecodedSourcePixels)
+                    {
+                        if (item.Value.IsValid)
+                        {
+                            m_ByTextureIndex[item.Key] = item.Value;
+                        }
+                    }
+                }
             }
 
             /// <summary>
@@ -635,6 +924,39 @@ namespace UMT
                     : Decode(m_Model.texturePaths[textureIndex].ToString());
                 m_ByTextureIndex[textureIndex] = decoded;
                 return decoded;
+            }
+
+            public NativeArray<Color32> GetNative(int textureIndex)
+            {
+                if (m_NativeByTextureIndex.TryGetValue(
+                    textureIndex,
+                    out NativeArray<Color32> cached))
+                {
+                    return cached;
+                }
+                SourcePixels source = Get(textureIndex);
+                if (!source.IsValid)
+                {
+                    return default;
+                }
+
+                NativeArray<Color32> pixels = new NativeArray<Color32>(
+                    source.pixels,
+                    Allocator.Persistent);
+                m_NativeByTextureIndex[textureIndex] = pixels;
+                return pixels;
+            }
+
+            public void Dispose()
+            {
+                foreach (NativeArray<Color32> pixels in m_NativeByTextureIndex.Values)
+                {
+                    if (pixels.IsCreated)
+                    {
+                        pixels.Dispose();
+                    }
+                }
+                m_NativeByTextureIndex.Clear();
             }
 
             private SourcePixels Decode(string texturePath)

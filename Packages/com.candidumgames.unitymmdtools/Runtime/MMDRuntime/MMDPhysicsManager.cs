@@ -21,8 +21,12 @@ namespace UMT
         private const byte k_MMDGroundCollisionGroup = 15;
         private const short k_MMDGroundCollisionMask = -1;
         private const int k_SolverIterations = 4;
-        private const int k_MaxSubSteps = 120;
-        private const float k_FixedTimeStep = 1.0f / 120.0f;
+        private const int k_DefaultSimulationFrequencyHz = 120;
+        private const int k_DefaultMaxSubStepsPerFrame = 4;
+        private const int k_DefaultLockedTranslationReinforceCount = 2;
+        private static int s_SimulationFrequencyHz = k_DefaultSimulationFrequencyHz;
+        private static int s_MaxSubStepsPerFrame = k_DefaultMaxSubStepsPerFrame;
+        private static int s_LockedTranslationReinforceCount = k_DefaultLockedTranslationReinforceCount;
         /// <summary>MMD's reference solver iteration count; the spring damping compensation below is expressed relative to it.</summary>
         private const int k_MMDReferenceSolverIterations = 4;
         /// <summary>Bullet's default convex collision margin, in MMD units; scaled into Unity units for the native config.</summary>
@@ -32,7 +36,7 @@ namespace UMT
         /// <summary>Bullet spring damping for Spring6DOF rotation rows: solverIterations / (referenceIterations * scale^2). Bullet's motor-based spring drives targetVelocity = fps * (damping / iterations) * stiffness * angle with impulse clamp stiffness * angle / fps; the clamp scales correctly with the scale^2 stiffness factor (inertia grows with scale^2 at fixed mass) but the velocity term carries no inertia, so without this compensation the meter-scale simulation leaves MMD's operating regime - historically Unity's rotation springs were much SOFTER than MMD because the tiny meter-scale inertias fell into the motor's velocity-limited regime. With it, target velocity, impulse clamp, and the regime boundary all match MMD's unit-scale reference exactly.</summary>
         private const float k_SpringRotationDamping = (float)k_SolverIterations / (k_MMDReferenceSolverIterations * MMDConstants.k_MMDUnitToUnityUnit * MMDConstants.k_MMDUnitToUnityUnit);
         /// <summary>Redundant point-to-point constraint copies per fully-locked-translation joint (tLim min == max == 0). Each copy re-solves those equality rows once more per solver iteration, so spring-less locked hair chains survive fast motion at MMD's 4 iterations without firming up rotation limits, springs, or contacts; the converged pose is unchanged. Empirically the chains need ~12-iteration-equivalent convergence, hence 2 copies at 4 iterations.</summary>
-        private const int k_LockedTranslationReinforceCount = 2;
+        private bool m_SimulationSuspended;
 
         /// <summary>Rigid-body components managed by this physics manager.</summary>
         public MMDRigidBody[] rigidBodies = Array.Empty<MMDRigidBody>();
@@ -70,6 +74,21 @@ namespace UMT
             internal NativeArray<float4x4> externalKinematicTargets;
             /// <summary>Unconsumed simulation time carried between frames so variable frame times map onto whole fixed substeps without drifting.</summary>
             internal float timeAccumulator;
+            /// <summary>Number of Bullet substeps executed by the latest transform pass.</summary>
+            internal int lastSubstepCount;
+            /// <summary>Catch-up time discarded by the latest transform pass.</summary>
+            internal float lastDroppedSimulationSeconds;
+            /// <summary>Total catch-up time discarded since this context was built.</summary>
+            internal float totalDroppedSimulationSeconds;
+            /// <summary>Number of frames where stale catch-up time was discarded.</summary>
+            internal int droppedSimulationFrameCount;
+            /// <summary>Fixed-step frequency captured when this native context was built.</summary>
+            internal int simulationFrequencyHz;
+            /// <summary>Per-frame substep cap captured when this native context was built.</summary>
+            internal int maximumSubstepsPerFrame;
+            /// <summary>Requests a velocity-clearing kinetic resync on the next physics pass.</summary>
+            [MarshalAs(UnmanagedType.U1)]
+            internal bool resetKineticInterpolation;
             /// <summary>Whether the initial bone-driven rigid-body pose has been applied.</summary>
             [MarshalAs(UnmanagedType.U1)]
             internal bool initialPoseApplied;
@@ -80,11 +99,107 @@ namespace UMT
         private TransformAccessArray m_RigidBodyTransformAccess;
         private float[] m_ExternalKinematicSphereRadii = Array.Empty<float>();
         private bool[] m_ExternalKinematicActive = Array.Empty<bool>();
+        private byte m_ExternalKinematicCollisionGroup = 15;
+        private bool m_ExternalKinematicFullCoverage;
         private NativeArray<float4x4> m_ExternalPoseScratchTransforms;
         private NativeArray<int> m_ExternalPoseScratchIndices;
 
         /// <summary>Number of runtime hand/contact spheres appended to the native Bullet world.</summary>
         public int externalKinematicSphereCount => m_ExternalKinematicSphereRadii.Length;
+        /// <summary>Collision group selected for externally tracked contact spheres.</summary>
+        public byte externalKinematicCollisionGroup => m_ExternalKinematicCollisionGroup;
+        /// <summary>Whether every authored model body can collide with the selected external group without changing model-to-model filtering.</summary>
+        public bool externalKinematicFullCoverage => m_ExternalKinematicFullCoverage;
+        /// <summary>Bullet substeps executed by the latest rendered frame.</summary>
+        public int lastSimulationSubstepCount => m_PhysicsSolverContext.lastSubstepCount;
+        /// <summary>Catch-up time discarded by the latest rendered frame, in seconds.</summary>
+        public float lastDroppedSimulationSeconds => m_PhysicsSolverContext.lastDroppedSimulationSeconds;
+        /// <summary>Total stale catch-up time discarded since initialization, in seconds.</summary>
+        public float totalDroppedSimulationSeconds => m_PhysicsSolverContext.totalDroppedSimulationSeconds;
+        /// <summary>Number of rendered frames that discarded stale catch-up work.</summary>
+        public int droppedSimulationFrameCount => m_PhysicsSolverContext.droppedSimulationFrameCount;
+        /// <summary>Fixed Bullet simulation frequency used for normal playback.</summary>
+        public static int simulationFrequencyHz => s_SimulationFrequencyHz;
+        /// <summary>Hard limit that prevents a slow rendered frame from entering a physics catch-up spiral.</summary>
+        public static int maximumSubstepsPerFrame => s_MaxSubStepsPerFrame;
+        /// <summary>Additional locked-translation constraints configured for newly built contexts.</summary>
+        public static int lockedTranslationReinforceCount => s_LockedTranslationReinforceCount;
+        /// <summary>Whether runtime stepping is paused while bone-driven bodies continue to synchronize.</summary>
+        public bool simulationSuspended => m_SimulationSuspended;
+
+        /// <summary>
+        /// Configures the fixed-step policy used by all subsequently rebuilt MMD physics contexts.
+        /// This is intentionally a fixed user-selected policy; it never changes in response to frame time.
+        /// </summary>
+        public static void ConfigureRuntimeQuality(int frequencyHz, int maximumSubsteps, int lockedTranslationReinforce)
+        {
+            s_SimulationFrequencyHz = math.clamp(frequencyHz, 30, 240);
+            s_MaxSubStepsPerFrame = math.clamp(maximumSubsteps, 1, 8);
+            s_LockedTranslationReinforceCount = math.clamp(lockedTranslationReinforce, 0, 2);
+        }
+
+        /// <summary>Rebuilds this manager so the current fixed-step policy takes effect immediately.</summary>
+        public void ApplyConfiguredRuntimeQuality()
+        {
+            if (!isActiveAndEnabled)
+            {
+                return;
+            }
+            Initialize();
+            DiscardAccumulatedSimulationTime();
+        }
+
+        /// <summary>Pauses or resumes time advancement without disabling bone synchronization.</summary>
+        public void SetSimulationSuspended(bool suspended)
+        {
+            if (m_SimulationSuspended == suspended)
+            {
+                return;
+            }
+            m_SimulationSuspended = suspended;
+            DiscardAccumulatedSimulationTime();
+        }
+
+        /// <summary>Pure helper used by diagnostics and regression tests.</summary>
+        public static int ResolveRuntimeSubstepBudget(
+            float accumulatedSeconds,
+            out float retainedAccumulator,
+            out float droppedSeconds)
+        {
+            return PhysicsMath.ResolveRuntimeSubstepBudget(
+                accumulatedSeconds,
+                s_SimulationFrequencyHz,
+                s_MaxSubStepsPerFrame,
+                out retainedAccumulator,
+                out droppedSeconds);
+        }
+
+        /// <summary>Pure overload used by quality-policy regression tests.</summary>
+        public static int ResolveRuntimeSubstepBudget(
+            float accumulatedSeconds,
+            int frequencyHz,
+            int maximumSubsteps,
+            out float retainedAccumulator,
+            out float droppedSeconds)
+        {
+            return PhysicsMath.ResolveRuntimeSubstepBudget(
+                accumulatedSeconds,
+                frequencyHz,
+                maximumSubsteps,
+                out retainedAccumulator,
+                out droppedSeconds);
+        }
+
+        /// <summary>
+        /// Drops pending catch-up time after pause/focus transitions. The next
+        /// physics pass also clears kinetic velocity so a stale target cannot
+        /// kick hair or clothing when XR rendering resumes.
+        /// </summary>
+        public void DiscardAccumulatedSimulationTime()
+        {
+            m_PhysicsSolverContext.timeAccumulator = 0.0f;
+            m_PhysicsSolverContext.resetKineticInterpolation = true;
+        }
 
         /// <summary>
         /// Writes each rigid body's world transform onto its owner object's Unity transform.
@@ -123,7 +238,9 @@ namespace UMT
         internal void Initialize()
         {
             DisposePhysics();
-            m_PhysicsSolverContext.bulletPhysicsContext = CreateConfiguredBulletPhysics();
+            m_PhysicsSolverContext.bulletPhysicsContext = CreateConfiguredBulletPhysics(
+                ResolveLockedTranslationReinforcement(joints == null ? 0 : joints.Length));
+            ApplyRuntimePolicy(ref m_PhysicsSolverContext);
 
             RebuildRuntimeData();
             BuildRigidBodies();
@@ -249,7 +366,9 @@ namespace UMT
             }
 
             DisposePhysicsContext(ref runtimeContext);
-            runtimeContext.bulletPhysicsContext = CreateConfiguredBulletPhysics();
+            runtimeContext.bulletPhysicsContext = CreateConfiguredBulletPhysics(
+                ResolveLockedTranslationReinforcement(model.joints == null ? 0 : model.joints.Length));
+            ApplyRuntimePolicy(ref runtimeContext);
             ResizePersistent(ref runtimeContext.rigidBodySimulationData, model.rigidBodies.Length);
             ResizePersistent(ref runtimeContext.worldTransforms, model.rigidBodies.Length);
             ResizePersistent(ref runtimeContext.rigidBodyIndices, model.rigidBodies.Length);
@@ -302,9 +421,10 @@ namespace UMT
         /// Creates the native Bullet context with MMD gravity/solver settings and applies the tunable configuration: spring damping compensation (so the motor-based 6DOF springs reproduce MMD's unit-scale reference at Unity's meter scale) and locked-translation reinforcement (so spring-less locked chains survive fast motion at MMD's 4 iterations). Ground plane, unit scale, and convex margin restate the historical defaults.
         /// </summary>
         /// <returns>The configured native physics context wrapper.</returns>
-        private static MMDBulletPhysics CreateConfiguredBulletPhysics()
+        private static MMDBulletPhysics CreateConfiguredBulletPhysics(int lockedTranslationReinforce)
         {
-            MMDBulletPhysics bulletPhysics = new MMDBulletPhysics(new float3(0.0f, -k_MMDPhysicsGravity * MMDConstants.k_MMDUnitToUnityUnit, 0.0f), k_SolverIterations, k_MaxSubSteps, k_FixedTimeStep);
+            float fixedTimeStep = 1.0f / s_SimulationFrequencyHz;
+            MMDBulletPhysics bulletPhysics = new MMDBulletPhysics(new float3(0.0f, -k_MMDPhysicsGravity * MMDConstants.k_MMDUnitToUnityUnit, 0.0f), k_SolverIterations, s_MaxSubStepsPerFrame, fixedTimeStep);
             try
             {
                 bulletPhysics.SetConfig(new MMDBulletPhysics.NativeConfig
@@ -315,7 +435,7 @@ namespace UMT
                     convexMargin = k_BulletConvexMargin * MMDConstants.k_MMDUnitToUnityUnit,
                     springTranslationDamping = k_SpringTranslationDamping,
                     springRotationDamping = k_SpringRotationDamping,
-                    lockedTranslationReinforce = k_LockedTranslationReinforceCount,
+                    lockedTranslationReinforce = lockedTranslationReinforce,
                 });
             }
             catch (EntryPointNotFoundException)
@@ -323,6 +443,24 @@ namespace UMT
                 Debug.LogWarning("UMTNativePlugin does not expose MMDBulletPhysicsSetConfig; using the native historical physics defaults.");
             }
             return bulletPhysics;
+        }
+
+        /// <summary>
+        /// Keeps authored light-model convergence intact. The reduced reinforcement
+        /// is reserved for joint-heavy models where duplicate constraints dominate
+        /// the Quest CPU budget.
+        /// </summary>
+        public static int ResolveLockedTranslationReinforcement(int jointCount)
+        {
+            return jointCount > 80
+                ? s_LockedTranslationReinforceCount
+                : k_DefaultLockedTranslationReinforceCount;
+        }
+
+        private static void ApplyRuntimePolicy(ref PhysicsSolverContext runtimeContext)
+        {
+            runtimeContext.simulationFrequencyHz = s_SimulationFrequencyHz;
+            runtimeContext.maximumSubstepsPerFrame = s_MaxSubStepsPerFrame;
         }
 
         /// <summary>
@@ -384,7 +522,8 @@ namespace UMT
         public static MMDRigidBody.RigidBodySimulationData CreateExternalKinematicSphereData(
             int rigidBodyIndex,
             float radius,
-            Vector3 worldPosition)
+            Vector3 worldPosition,
+            byte collisionGroup = 15)
         {
             float safeRadius = math.clamp(math.abs(radius), 0.004f, 0.08f);
             float3 safePosition = IsFinite(worldPosition) ? (float3)worldPosition : new float3(0.0f, -1000.0f, 0.0f);
@@ -392,7 +531,7 @@ namespace UMT
             {
                 rigidBodyIndex = math.max(0, rigidBodyIndex),
                 relatedBoneIndex = -1,
-                groupIndex = 15,
+                groupIndex = (byte)math.clamp(collisionGroup, 0, 15),
                 // UMT forwards this value directly to Bullet's collision mask.
                 // All bits must be enabled so tracked hands can contact PMX
                 // dynamic bodies regardless of their authored group.
@@ -480,6 +619,13 @@ namespace UMT
         {
             int modelBodyCount = rigidBodies.Length;
             int totalBodyCount = modelBodyCount + m_ExternalKinematicSphereRadii.Length;
+            m_ExternalKinematicCollisionGroup = ResolveExternalKinematicCollisionGroup(
+                rigidBodies,
+                out bool mayExpandModelMasks);
+            m_ExternalKinematicFullCoverage = m_ExternalKinematicSphereRadii.Length == 0 ||
+                mayExpandModelMasks ||
+                ModelMasksAcceptGroup(rigidBodies, m_ExternalKinematicCollisionGroup);
+            short externalGroupBit = unchecked((short)(1 << m_ExternalKinematicCollisionGroup));
             ResizePersistent(ref m_PhysicsSolverContext.rigidBodySimulationData, totalBodyCount);
             ResizePersistent(ref m_PhysicsSolverContext.externalKinematicFlags, totalBodyCount);
             ResizePersistent(ref m_PhysicsSolverContext.externalKinematicTargets, totalBodyCount);
@@ -493,7 +639,12 @@ namespace UMT
                 }
 
                 rigidBody.InitializeRuntimeData();
-                m_PhysicsSolverContext.rigidBodySimulationData[i] = rigidBody.runtimeData;
+                MMDRigidBody.RigidBodySimulationData runtimeData = rigidBody.runtimeData;
+                if (m_ExternalKinematicSphereRadii.Length > 0 && mayExpandModelMasks)
+                {
+                    runtimeData.collisionGroupMask = unchecked((short)(runtimeData.collisionGroupMask | externalGroupBit));
+                }
+                m_PhysicsSolverContext.rigidBodySimulationData[i] = runtimeData;
                 m_PhysicsSolverContext.externalKinematicFlags[i] = false;
                 m_PhysicsSolverContext.externalKinematicTargets[i] = float4x4.identity;
             }
@@ -503,7 +654,11 @@ namespace UMT
                 int bodyIndex = modelBodyCount + i;
                 float3 offscreenPosition = new float3(0.0f, -1000.0f - i, 0.0f);
                 m_PhysicsSolverContext.rigidBodySimulationData[bodyIndex] =
-                    CreateExternalKinematicSphereData(bodyIndex, m_ExternalKinematicSphereRadii[i], offscreenPosition);
+                    CreateExternalKinematicSphereData(
+                        bodyIndex,
+                        m_ExternalKinematicSphereRadii[i],
+                        offscreenPosition,
+                        m_ExternalKinematicCollisionGroup);
                 m_PhysicsSolverContext.externalKinematicFlags[bodyIndex] = true;
                 m_PhysicsSolverContext.externalKinematicTargets[bodyIndex] = float4x4.Translate(offscreenPosition);
             }
@@ -540,6 +695,62 @@ namespace UMT
             {
                 m_RigidBodyTransformAccess.Add(rigidBodies[i].transform);
             }
+        }
+
+        /// <summary>
+        /// Selects a hand-only collision group whenever the model leaves one
+        /// unused. Opening that bit on model masks then cannot create new
+        /// model-to-model contacts. Fully occupied models retain their authored
+        /// filters unless one group is already accepted by every body.
+        /// </summary>
+        public static byte ResolveExternalKinematicCollisionGroup(
+            IReadOnlyList<MMDRigidBody> modelBodies,
+            out bool mayExpandModelMasks)
+        {
+            ushort usedGroups = 0;
+            if (modelBodies != null)
+            {
+                for (int i = 0; i < modelBodies.Count; ++i)
+                {
+                    MMDRigidBody body = modelBodies[i];
+                    if (body == null) continue;
+                    usedGroups |= (ushort)(1 << math.clamp(body.groupIndex, 0, 15));
+                }
+            }
+
+            for (int group = 15; group >= 0; --group)
+            {
+                if ((usedGroups & (1 << group)) != 0) continue;
+                mayExpandModelMasks = true;
+                return (byte)group;
+            }
+
+            for (int group = 15; group >= 0; --group)
+            {
+                if (ModelMasksAcceptGroup(modelBodies, (byte)group))
+                {
+                    mayExpandModelMasks = false;
+                    return (byte)group;
+                }
+            }
+
+            mayExpandModelMasks = false;
+            return 15;
+        }
+
+        private static bool ModelMasksAcceptGroup(
+            IReadOnlyList<MMDRigidBody> modelBodies,
+            byte group)
+        {
+            if (modelBodies == null || modelBodies.Count == 0) return true;
+            int bit = 1 << math.clamp(group, 0, 15);
+            for (int i = 0; i < modelBodies.Count; ++i)
+            {
+                MMDRigidBody body = modelBodies[i];
+                if (body == null) continue;
+                if ((((ushort)body.collisionGroupMask) & bit) == 0) return false;
+            }
+            return true;
         }
 
         private void BuildRigidBodies()
@@ -796,15 +1007,37 @@ namespace UMT
             private static bool StepSimulationWithKineticInterpolation(float elapsedTime, in MMDTransformManager.SolverContext transformManagerContext, ref PhysicsSolverContext runtimeContext)
             {
                 ComputeKineticTargets(in transformManagerContext, ref runtimeContext, ref runtimeContext.currentKineticTargets);
-                runtimeContext.timeAccumulator += elapsedTime;
-                int substepCount = (int)(runtimeContext.timeAccumulator / k_FixedTimeStep);
+                runtimeContext.lastSubstepCount = 0;
+                runtimeContext.lastDroppedSimulationSeconds = 0.0f;
+                if (runtimeContext.resetKineticInterpolation)
+                {
+                    HardSyncCurrentKineticTargets(ref runtimeContext);
+                    runtimeContext.resetKineticInterpolation = false;
+                }
+
+                runtimeContext.timeAccumulator += math.max(0.0f, elapsedTime);
+                int substepCount = ResolveRuntimeSubstepBudget(
+                    runtimeContext.timeAccumulator,
+                    runtimeContext.simulationFrequencyHz,
+                    runtimeContext.maximumSubstepsPerFrame,
+                    out float retainedAccumulator,
+                    out float droppedSeconds);
+                runtimeContext.timeAccumulator = retainedAccumulator;
+                if (droppedSeconds > 0.0f)
+                {
+                    runtimeContext.lastDroppedSimulationSeconds = droppedSeconds;
+                    runtimeContext.totalDroppedSimulationSeconds += droppedSeconds;
+                    runtimeContext.droppedSimulationFrameCount++;
+                    HardSyncCurrentKineticTargets(ref runtimeContext);
+                }
                 if (substepCount <= 0)
                 {
                     return false;
                 }
 
-                substepCount = math.min(substepCount, k_MaxSubSteps);
-                runtimeContext.timeAccumulator = math.min(runtimeContext.timeAccumulator - substepCount * k_FixedTimeStep, k_FixedTimeStep);
+                runtimeContext.lastSubstepCount = substepCount;
+                float fixedTimeStep = 1.0f / math.clamp(runtimeContext.simulationFrequencyHz, 30, 240);
+                runtimeContext.timeAccumulator = math.min(runtimeContext.timeAccumulator - substepCount * fixedTimeStep, fixedTimeStep);
 
                 int kineticCount = runtimeContext.kineticRigidBodyIndices.Length;
                 for (int step = 0; step < substepCount; ++step)
@@ -819,13 +1052,52 @@ namespace UMT
                         runtimeContext.worldTransforms[i] = new float4x4(rotation, position);
                     }
                     runtimeContext.bulletPhysicsContext.SetRigidBodyTransforms(kineticCount, runtimeContext.worldTransforms, runtimeContext.kineticRigidBodyIndices, false);
-                    runtimeContext.bulletPhysicsContext.StepSimulation(k_FixedTimeStep);
+                    runtimeContext.bulletPhysicsContext.StepSimulation(fixedTimeStep);
                 }
 
                 NativeArray<float4x4> swap = runtimeContext.previousKineticTargets;
                 runtimeContext.previousKineticTargets = runtimeContext.currentKineticTargets;
                 runtimeContext.currentKineticTargets = swap;
                 return true;
+            }
+
+            private static void HardSyncCurrentKineticTargets(ref PhysicsSolverContext runtimeContext)
+            {
+                int kineticCount = runtimeContext.kineticRigidBodyIndices.Length;
+                for (int i = 0; i < kineticCount; ++i)
+                {
+                    float4x4 current = runtimeContext.currentKineticTargets[i];
+                    runtimeContext.previousKineticTargets[i] = current;
+                    runtimeContext.worldTransforms[i] = current;
+                }
+                runtimeContext.bulletPhysicsContext.SetRigidBodyTransforms(
+                    kineticCount,
+                    runtimeContext.worldTransforms,
+                    runtimeContext.kineticRigidBodyIndices,
+                    true);
+            }
+
+            /// <summary>
+            /// Resolves a bounded fixed-step budget. Whole steps beyond the
+            /// per-frame cap are discarded instead of being carried into later
+            /// frames, which prevents a self-sustaining catch-up spiral.
+            /// </summary>
+            internal static int ResolveRuntimeSubstepBudget(
+                float accumulatedSeconds,
+                int frequencyHz,
+                int maximumSubsteps,
+                out float retainedAccumulator,
+                out float droppedSeconds)
+            {
+                float normalized = math.max(0.0f, accumulatedSeconds);
+                float fixedTimeStep = 1.0f / math.clamp(frequencyHz, 30, 240);
+                int requestedSteps = (int)(normalized / fixedTimeStep);
+                int allowedSteps = math.min(requestedSteps, math.clamp(maximumSubsteps, 1, 8));
+                float fractionalRemainder = normalized - requestedSteps * fixedTimeStep;
+                retainedAccumulator = allowedSteps * fixedTimeStep +
+                    math.clamp(fractionalRemainder, 0.0f, fixedTimeStep);
+                droppedSeconds = math.max(0.0f, normalized - retainedAccumulator);
+                return allowedSteps;
             }
 
             /// <summary>

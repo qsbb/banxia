@@ -43,6 +43,7 @@ $requiredFiles = @(
     "Assets/Scripts/Core/QuestMmdPlayerBootstrap.cs",
     "Assets/Scripts/Core/QuestQualitySettings.cs",
     "Assets/Scripts/Core/RuntimeDiagnosticsSnapshot.cs",
+    "Assets/Scripts/Core/RuntimePerformanceMonitor.cs",
     "Assets/Scripts/Conversation/AvatarConversationPresenter.cs",
     "Assets/Scripts/Conversation/ConversationController.cs",
     "Assets/Scripts/Conversation/ConversationStateMachine.cs",
@@ -119,8 +120,9 @@ $sourceChecks = @{
     "Assets/Scripts/Backend/AstrBotProtocol.cs" = @("SpatialContextRequest", "floor_count", "bed_count", "scene_capture_available", "ContentSignature")
     "Assets/Scripts/MR/SpatialCapabilityAdapter.cs" = @("HasOptionalMruk", "TryRequestSceneCapture", "SpatialCapabilitySnapshot")
     "Assets/Scripts/MR/RoomUnderstandingService.cs" = @("TryFindNearestSeat", "TryFindNearestRestingSurface", "CountsAsSeat", "BedCount", "BuildSemanticSnapshot")
-    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("TouchScreenKeyboard", "RefreshExternalActions", "ImportFile", "StopCurrentAction", "CompanionMenuInputBlocker", "open_model_list", "load_first_model", "capture_first_model", "[ModelCatalog] UI page=")
-    "Assets/Scripts/UI/RuntimeDiagnosticsFormatter.cs" = @("BuildPanelText", "FormatMotion", "SourceName", "AppendTimeline")
+    "Assets/Scripts/UI/CompanionWorldMenu.cs" = @("TouchScreenKeyboard", "RefreshExternalActions", "ImportFile", "StopCurrentAction", "CompanionMenuInputBlocker", "open_model_list", "load_first_model", "capture_first_model", "[ModelCatalog] UI page=", "Device Performance Layer", "ShowPerformancePanel", "设备性能")
+    "Assets/Scripts/UI/RuntimeDiagnosticsFormatter.cs" = @("BuildPanelText", "FormatMotion", "FormatPerformance", "SourceName", "AppendTimeline")
+    "Assets/Scripts/Core/RuntimePerformanceMonitor.cs" = @("CalculateFrameStatistics", "SetDetailedSamplingEnabled", "userPresence", "FrameTimingManager", "getPss", "getCurrentThermalStatus", "MMDPhysicsManager")
     "Assets/Scripts/Core/QuestQualitySettings.cs" = @("XRSettings.eyeTextureResolutionScale", "XRSettings.renderViewportScale", "QuestQualityPreset.Clear", "PlayerPrefs.Save")
     "Assets/Scripts/MR/QuestFileImportService.cs" = @("OpenPicker", "OnAndroidFileImported", "ExtractArchiveSafely", "MaximumExpandedArchiveBytes", "VmdActionFilePolicy")
     "Assets/Plugins/Android/BanxiaFilePicker.androidlib/src/main/java/com/lingxi/banxia/filepicker/BanxiaFilePickerActivity.java" = @("Intent.ACTION_OPEN_DOCUMENT", "Imports/Batches", "replaceAll", "UnitySendMessage")
