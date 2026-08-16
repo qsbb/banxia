@@ -25,6 +25,7 @@ namespace UMT
         private const string k_URPUnlitFallbackShaderName = "Universal Render Pipeline/Unlit";
         private const string k_BuiltInUnlitShaderName = "Unlit/Texture";
         private const string k_BuiltInUnlitTransparentShaderName = "Unlit/Transparent";
+        private const string k_BanxiaOutlineTag = "BanxiaOutline";
 
         private static readonly int s_BaseColorProperty = Shader.PropertyToID("_Color");
         private static readonly int s_URPBaseColorProperty = Shader.PropertyToID("_BaseColor");
@@ -507,6 +508,7 @@ namespace UMT
             {
                 name = materialName,
             };
+            material.SetOverrideTag(k_BanxiaOutlineTag, drawsEdge ? "1" : "0");
 
             // Properties shared by every supported shader family.
             SetColorIfPresent(material, s_BaseColorProperty, pmxMaterial.diffuse);

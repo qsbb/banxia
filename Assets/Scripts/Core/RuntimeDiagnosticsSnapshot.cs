@@ -538,6 +538,8 @@ namespace QuestMmdPlayer
         public float PhysicsDroppedFramePercent30s { get; }
         public float MmdSamplingMilliseconds { get; }
         public float MmdSolverMilliseconds { get; }
+        public float MmdBoneAndIkMilliseconds { get; }
+        public float MmdPhysicsMilliseconds { get; }
         public float MmdFlushMilliseconds { get; }
         public float MmdSdefMilliseconds { get; }
         public float HandContactMilliseconds { get; }
@@ -620,6 +622,8 @@ namespace QuestMmdPlayer
                 : Mathf.Max(0f, monitor.physicsDroppedFramePercent30s);
             MmdSamplingMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdSamplingMilliseconds);
             MmdSolverMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdSolverMilliseconds);
+            MmdBoneAndIkMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdBoneAndIkMilliseconds);
+            MmdPhysicsMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdPhysicsMilliseconds);
             MmdFlushMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdFlushMilliseconds);
             MmdSdefMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdSdefMilliseconds);
             HandContactMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.handContactMilliseconds);

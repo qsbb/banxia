@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using UnityEngine;
 
 namespace QuestMmdPlayer.Tests
 {
@@ -77,6 +78,26 @@ namespace QuestMmdPlayer.Tests
                 out _);
 
             Assert.That(1000f / average, Is.InRange(71f, 73f));
+        }
+
+        [Test]
+        public void EnablingDetailedSamplingDoesNotResetWornFrameWindow()
+        {
+            var owner = new GameObject("Performance Monitor");
+            try
+            {
+                var monitor = owner.AddComponent<RuntimePerformanceMonitor>();
+                monitor.RecordFrameDurationMilliseconds(13.8f);
+
+                monitor.SetDetailedSamplingEnabled(true);
+
+                Assert.That(monitor.frameSampleCount, Is.EqualTo(1));
+                Assert.That(monitor.currentFps, Is.GreaterThan(70f));
+            }
+            finally
+            {
+                Object.DestroyImmediate(owner);
+            }
         }
     }
 }

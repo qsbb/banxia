@@ -349,7 +349,9 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(root.transform.Find("Model Library Layer/Installed Model List/删除模型包"), Is.Not.Null);
                 Assert.That(root.transform.Find("Model Library Layer/Installed Model List/上一页"), Is.Not.Null);
                 Assert.That(root.transform.Find("Model Library Layer/Installed Model List/下一页"), Is.Not.Null);
-                Assert.That(root.transform.Find("Quality Layer/清晰"), Is.Not.Null);
+                Assert.That(root.transform.Find("Quality Layer/画质：清晰"), Is.Not.Null);
+                Assert.That(root.transform.Find("Quality Layer/物理：平衡"), Is.Not.Null);
+                Assert.That(root.transform.Find("Quality Layer/物理：精细"), Is.Not.Null);
 
                 InvokeTargetMethod(menu, "ShowDebugPanel");
                 var mainLayer = root.transform.Find("Main Menu Layer");

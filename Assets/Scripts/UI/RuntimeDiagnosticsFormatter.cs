@@ -231,12 +231,16 @@ namespace QuestMmdPlayer
                     .Append("%帧；30秒 ")
                     .Append(performance.PhysicsDroppedMillisecondsPerSecond30s.ToString("F1"))
                     .Append("ms/s · ").Append(performance.PhysicsDroppedFramePercent30s.ToString("F1")).Append("%帧");
-                builder.Append("\nMMD采样/求解/回写/SDEF：")
+                builder.Append("\nMMD采样/骨骼IK/Bullet/回写/SDEF：")
                     .Append(performance.MmdSamplingMilliseconds.ToString("F2")).Append('/')
-                    .Append(performance.MmdSolverMilliseconds.ToString("F2")).Append('/')
+                    .Append(performance.MmdBoneAndIkMilliseconds.ToString("F2")).Append('/')
+                    .Append(performance.MmdPhysicsMilliseconds.ToString("F2")).Append('/')
                     .Append(performance.MmdFlushMilliseconds.ToString("F2")).Append('/')
                     .Append(performance.MmdSdefMilliseconds.ToString("F2")).Append("ms");
                 builder.Append(" · 手部接触 ").Append(performance.HandContactMilliseconds.ToString("F2")).Append("ms");
+                builder.Append(" · 描边提交 ")
+                    .Append(AvatarOutlineController.LastRenderSubmissionMilliseconds.ToString("F2"))
+                    .Append("ms/").Append(AvatarOutlineController.LastRenderedSubmeshCount).Append("子网格");
             }
             else
             {

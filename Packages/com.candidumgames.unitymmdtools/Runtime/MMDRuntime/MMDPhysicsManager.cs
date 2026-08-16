@@ -453,7 +453,7 @@ namespace UMT
         public static int ResolveLockedTranslationReinforcement(int jointCount)
         {
             return jointCount > 80
-                ? s_LockedTranslationReinforceCount
+                ? math.min(1, s_LockedTranslationReinforceCount)
                 : k_DefaultLockedTranslationReinforceCount;
         }
 

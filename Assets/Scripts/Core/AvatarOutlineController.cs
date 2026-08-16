@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace QuestMmdPlayer
 {
@@ -14,36 +16,37 @@ namespace QuestMmdPlayer
         private const float MaximumWidth = .003f;
         private const float WidthStep = .00025f;
         private const float ReferenceWidth = .0011f;
+        public const string OutlineTagName = "BanxiaOutline";
         private static readonly int OutlineWidthProperty = Shader.PropertyToID("_OutlineWidth");
         private static readonly int OutlineColorProperty = Shader.PropertyToID("_OutlineColor");
-        private static readonly int UseOutlineProperty = Shader.PropertyToID("_UseOutline");
+        private static readonly List<AvatarOutlineController> ActiveControllers = new List<AvatarOutlineController>();
 
         [SerializeField] private bool enabledByDefault = true;
         [SerializeField, Range(MinimumWidth, MaximumWidth)] private float outlineWidth = ReferenceWidth;
         [SerializeField] private Color outlineColor = new Color(.025f, .03f, .035f, .88f);
 
-        private readonly List<MaterialBinding> materials = new List<MaterialBinding>();
+        private readonly List<RendererBinding> renderers = new List<RendererBinding>();
         private AvatarController avatar;
+        private Material outlineMaterial;
 
-        private sealed class MaterialBinding
+        private sealed class RendererBinding
         {
-            internal Material material;
-            internal float originalWidth;
-            internal Color originalColor;
-            internal float originalUseOutline;
-            internal bool supportsUseOutline;
+            internal Renderer renderer;
+            internal int submeshIndex;
         }
 
         public event Action SettingsChanged;
 
         public bool OutlineEnabled { get; private set; }
         public float OutlineWidth => outlineWidth;
-        // Kept for compatibility with diagnostics. It now counts native
-        // outline materials rather than duplicated shell renderers.
-        public int ShellCount => materials.Count;
+        // Kept for compatibility with diagnostics. It counts submeshes drawn
+        // by the URP pass rather than duplicated shell renderers.
+        public int ShellCount => renderers.Count;
         public string Status => ShellCount == 0
-            ? "当前模型没有可调节的原生描边材质"
-            : $"描边 {(OutlineEnabled ? "开启" : "关闭")} | {outlineWidth * 1000f:F2} mm · 单渲染器";
+            ? "当前模型没有声明可描边材质"
+            : $"描边 {(OutlineEnabled ? "开启" : "关闭")} | {outlineWidth * 1000f:F2} mm · URP额外Pass";
+        public static float LastRenderSubmissionMilliseconds { get; private set; }
+        public static int LastRenderedSubmeshCount { get; private set; }
 
         private void Awake()
         {
@@ -51,13 +54,26 @@ namespace QuestMmdPlayer
             outlineWidth = Mathf.Clamp(PlayerPrefs.GetFloat(WidthPreference, outlineWidth), MinimumWidth, MaximumWidth);
         }
 
+        private void OnEnable()
+        {
+            if (!ActiveControllers.Contains(this))
+            {
+                ActiveControllers.Add(this);
+            }
+        }
+
+        private void OnDisable()
+        {
+            ActiveControllers.Remove(this);
+        }
+
         public void Bind(AvatarController target)
         {
-            if (avatar == target && (target == null || materials.Count > 0))
+            if (avatar == target && (target == null || renderers.Count > 0))
             {
                 return;
             }
-            RestoreAndClearMaterials();
+            ClearBindings();
             avatar = target;
             if (avatar == null || avatar.VisualRoot == null)
             {
@@ -65,33 +81,29 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            var seen = new HashSet<Material>();
-            var renderers = avatar.VisualRoot.GetComponentsInChildren<Renderer>(true);
-            for (var rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+            EnsureOutlineMaterial();
+            var avatarRenderers = avatar.VisualRoot.GetComponentsInChildren<Renderer>(true);
+            for (var rendererIndex = 0; rendererIndex < avatarRenderers.Length; rendererIndex++)
             {
-                var shared = renderers[rendererIndex].sharedMaterials;
+                var renderer = avatarRenderers[rendererIndex];
+                var shared = renderer.sharedMaterials;
                 for (var materialIndex = 0; materialIndex < shared.Length; materialIndex++)
                 {
                     var material = shared[materialIndex];
-                    if (material == null || !seen.Add(material) ||
-                        !material.HasProperty(OutlineWidthProperty) ||
-                        !material.HasProperty(OutlineColorProperty))
+                    if (material == null ||
+                        material.GetTag(OutlineTagName, false, "0") != "1")
                     {
                         continue;
                     }
-                    var supportsUseOutline = material.HasProperty(UseOutlineProperty);
-                    materials.Add(new MaterialBinding
+                    renderers.Add(new RendererBinding
                     {
-                        material = material,
-                        originalWidth = material.GetFloat(OutlineWidthProperty),
-                        originalColor = material.GetColor(OutlineColorProperty),
-                        originalUseOutline = supportsUseOutline ? material.GetFloat(UseOutlineProperty) : 1f,
-                        supportsUseOutline = supportsUseOutline
+                        renderer = renderer,
+                        submeshIndex = materialIndex
                     });
                 }
             }
             ApplySettings(false);
-            Debug.Log($"[AvatarOutline] Bound {ShellCount} native outline materials without duplicate renderers.", this);
+            Debug.Log($"[AvatarOutline] Bound {ShellCount} submeshes to URP outline pass without duplicate renderers.", this);
         }
 
         public void Toggle() => SetEnabled(!OutlineEnabled);
@@ -123,22 +135,11 @@ namespace QuestMmdPlayer
 
         private void ApplySettings(bool save)
         {
-            var widthScale = outlineWidth / ReferenceWidth;
-            for (var index = 0; index < materials.Count; index++)
+            EnsureOutlineMaterial();
+            if (outlineMaterial != null)
             {
-                var binding = materials[index];
-                if (binding.material == null)
-                {
-                    continue;
-                }
-                binding.material.SetFloat(
-                    OutlineWidthProperty,
-                    OutlineEnabled ? Mathf.Max(0f, binding.originalWidth) * widthScale : 0f);
-                binding.material.SetColor(OutlineColorProperty, outlineColor);
-                if (binding.supportsUseOutline)
-                {
-                    binding.material.SetFloat(UseOutlineProperty, OutlineEnabled ? 1f : 0f);
-                }
+                outlineMaterial.SetFloat(OutlineWidthProperty, outlineWidth);
+                outlineMaterial.SetColor(OutlineColorProperty, outlineColor);
             }
             if (save)
             {
@@ -149,28 +150,67 @@ namespace QuestMmdPlayer
             SettingsChanged?.Invoke();
         }
 
-        private void RestoreAndClearMaterials()
+        private void EnsureOutlineMaterial()
         {
-            for (var index = 0; index < materials.Count; index++)
+            if (outlineMaterial != null)
             {
-                var binding = materials[index];
-                if (binding.material == null)
+                return;
+            }
+            var shader = Shader.Find("QuestMmdPlayer/Avatar Outline");
+            if (shader != null)
+            {
+                outlineMaterial = new Material(shader) { name = "Banxia Runtime Avatar Outline" };
+            }
+        }
+
+        private void ClearBindings()
+        {
+            renderers.Clear();
+        }
+
+        internal static void DrawRegistered(CommandBuffer commandBuffer)
+        {
+            var startedAt = Stopwatch.GetTimestamp();
+            var rendered = 0;
+            for (var controllerIndex = 0; controllerIndex < ActiveControllers.Count; controllerIndex++)
+            {
+                var controller = ActiveControllers[controllerIndex];
+                if (controller == null || !controller.isActiveAndEnabled ||
+                    !controller.OutlineEnabled || controller.outlineMaterial == null)
                 {
                     continue;
                 }
-                binding.material.SetFloat(OutlineWidthProperty, binding.originalWidth);
-                binding.material.SetColor(OutlineColorProperty, binding.originalColor);
-                if (binding.supportsUseOutline)
+                for (var bindingIndex = 0; bindingIndex < controller.renderers.Count; bindingIndex++)
                 {
-                    binding.material.SetFloat(UseOutlineProperty, binding.originalUseOutline);
+                    var binding = controller.renderers[bindingIndex];
+                    if (binding.renderer == null || !binding.renderer.enabled ||
+                        !binding.renderer.gameObject.activeInHierarchy)
+                    {
+                        continue;
+                    }
+                    commandBuffer.DrawRenderer(
+                        binding.renderer,
+                        controller.outlineMaterial,
+                        binding.submeshIndex,
+                        0);
+                    rendered++;
                 }
             }
-            materials.Clear();
+            LastRenderedSubmeshCount = rendered;
+            LastRenderSubmissionMilliseconds = (float)(
+                (Stopwatch.GetTimestamp() - startedAt) * 1000d / Stopwatch.Frequency);
         }
 
         private void OnDestroy()
         {
-            RestoreAndClearMaterials();
+            ActiveControllers.Remove(this);
+            ClearBindings();
+            if (outlineMaterial != null)
+            {
+                if (Application.isPlaying) Destroy(outlineMaterial);
+                else DestroyImmediate(outlineMaterial);
+                outlineMaterial = null;
+            }
         }
     }
 }

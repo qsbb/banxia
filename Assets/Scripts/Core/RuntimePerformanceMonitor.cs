@@ -138,6 +138,8 @@ namespace QuestMmdPlayer
         public float physicsDroppedFramePercent30s { get; private set; }
         public float mmdSamplingMilliseconds { get; private set; }
         public float mmdSolverMilliseconds { get; private set; }
+        public float mmdBoneAndIkMilliseconds { get; private set; }
+        public float mmdPhysicsMilliseconds { get; private set; }
         public float mmdFlushMilliseconds { get; private set; }
         public float mmdSdefMilliseconds { get; private set; }
         public float handContactMilliseconds { get; private set; }
@@ -163,11 +165,14 @@ namespace QuestMmdPlayer
             {
                 RecordActiveFrame(Time.unscaledDeltaTime * 1000f, Time.unscaledTime);
             }
+            // Physics drop accounting is deliberately lightweight and always
+            // follows the worn session. Opening the detail panel must not
+            // redefine the session baseline.
+            CapturePhysicsMetrics();
             if (detailedSamplingEnabled)
             {
                 FrameTimingManager.CaptureFrameTimings();
                 CaptureFrameTiming();
-                CapturePhysicsMetrics();
                 CaptureXrPerformanceMetrics();
             }
 
@@ -210,11 +215,6 @@ namespace QuestMmdPlayer
 
             detailedSamplingEnabled = enabled;
             nextSlowSampleAt = 0f;
-            if (enabled)
-            {
-                currentModelInstanceId = int.MinValue;
-                ResetActiveSessionMetrics();
-            }
         }
 
         public void RecordFrameDurationMilliseconds(float frameMilliseconds)
@@ -742,6 +742,8 @@ namespace QuestMmdPlayer
                 physicsDroppedFramePercent30s = 0f;
                 mmdSamplingMilliseconds = 0f;
                 mmdSolverMilliseconds = 0f;
+                mmdBoneAndIkMilliseconds = 0f;
+                mmdPhysicsMilliseconds = 0f;
                 mmdFlushMilliseconds = 0f;
                 mmdSdefMilliseconds = 0f;
                 handContactMilliseconds = 0f;
@@ -757,6 +759,8 @@ namespace QuestMmdPlayer
             var transformManager = physics.GetComponent<MMDTransformManager>();
             mmdSamplingMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSamplingMilliseconds);
             mmdSolverMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSolverMilliseconds);
+            mmdBoneAndIkMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastBoneAndIkMilliseconds);
+            mmdPhysicsMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastPhysicsMilliseconds);
             mmdFlushMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastFlushMilliseconds);
             mmdSdefMilliseconds = transformManager == null ? 0f : Mathf.Max(0f, transformManager.lastSdefMilliseconds);
             var trackedHands = GetComponent<QuestTrackedHandVisualizer>();

@@ -1615,16 +1615,19 @@ namespace QuestMmdPlayer
         {
             qualityLayer = CreateUiObject("Quality Layer", menuRoot.transform, Vector2.zero, new Vector2(720f, 680f));
             CreateImage("Accent", qualityLayer.transform, new Vector2(0f, 335f), new Vector2(720f, 10f), new Color(.25f, .86f, .66f, 1f));
-            CreateText("画质设置", qualityLayer.transform, new Vector2(0f, 288f), new Vector2(640f, 50f), 29, FontStyle.Bold, Color.white);
-            CreateText("Quest 渲染比例与抗锯齿", qualityLayer.transform, new Vector2(0f, 250f), new Vector2(640f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
+            CreateText("画质与物理", qualityLayer.transform, new Vector2(0f, 288f), new Vector2(640f, 50f), 29, FontStyle.Bold, Color.white);
+            CreateText("渲染画质与固定 MMD 物理档位", qualityLayer.transform, new Vector2(0f, 250f), new Vector2(640f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
 
-            CreateButton("性能", -224f, 150f, 204f, 62f, () => ApplyQualityPreset(QuestQualityPreset.Performance), qualityLayer.transform);
-            CreateButton("平衡", 0f, 150f, 204f, 62f, () => ApplyQualityPreset(QuestQualityPreset.Balanced), qualityLayer.transform);
-            CreateButton("清晰", 224f, 150f, 204f, 62f, () => ApplyQualityPreset(QuestQualityPreset.Clear), qualityLayer.transform);
-            CreateButton("恢复默认", -112f, 72f, 204f, 62f, ResetQualityPreset, qualityLayer.transform);
-            qualityStatusText = CreateText("", qualityLayer.transform, new Vector2(0f, -30f), new Vector2(650f, 110f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
-            CreateButton("返回外观", -112f, -182f, 204f, 62f, ShowAppearancePanel, qualityLayer.transform);
-            CreateButton("关闭", 112f, -182f, 204f, 62f, Hide, qualityLayer.transform);
+            CreateButton("画质：性能", -224f, 166f, 204f, 58f, () => ApplyQualityPreset(QuestQualityPreset.Performance), qualityLayer.transform);
+            CreateButton("画质：平衡", 0f, 166f, 204f, 58f, () => ApplyQualityPreset(QuestQualityPreset.Balanced), qualityLayer.transform);
+            CreateButton("画质：清晰", 224f, 166f, 204f, 58f, () => ApplyQualityPreset(QuestQualityPreset.Clear), qualityLayer.transform);
+            CreateButton("物理：性能", -224f, 94f, 204f, 58f, () => ApplyPhysicsPreset(MmdPhysicsPreset.Performance), qualityLayer.transform);
+            CreateButton("物理：平衡", 0f, 94f, 204f, 58f, () => ApplyPhysicsPreset(MmdPhysicsPreset.Balanced), qualityLayer.transform);
+            CreateButton("物理：精细", 224f, 94f, 204f, 58f, () => ApplyPhysicsPreset(MmdPhysicsPreset.Fine), qualityLayer.transform);
+            CreateButton("恢复默认", 0f, 22f, 204f, 54f, ResetQualityPreset, qualityLayer.transform);
+            qualityStatusText = CreateText("", qualityLayer.transform, new Vector2(0f, -82f), new Vector2(650f, 118f), 13, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
+            CreateButton("返回外观", -112f, -220f, 204f, 56f, ShowAppearancePanel, qualityLayer.transform);
+            CreateButton("关闭", 112f, -220f, 204f, 56f, Hide, qualityLayer.transform);
             qualityLayer.SetActive(false);
         }
 
@@ -1683,6 +1686,12 @@ namespace QuestMmdPlayer
             RefreshQualityPanel();
         }
 
+        private void ApplyPhysicsPreset(MmdPhysicsPreset preset)
+        {
+            owner?.Quality?.ApplyPhysicsPreset(preset);
+            RefreshQualityPanel();
+        }
+
         private void ResetQualityPreset()
         {
             owner?.Quality?.ResetToDefault();
@@ -1720,7 +1729,9 @@ namespace QuestMmdPlayer
             var quality = owner?.Quality;
             qualityStatusText.text = quality == null
                 ? "画质控制不可用"
-                : "当前档位：" + QuestQualitySettings.GetDisplayName(quality.CurrentPreset) + "\n" + quality.Status + "\n切换会立即生效，并保存到本机";
+                : "画质：" + QuestQualitySettings.GetDisplayName(quality.CurrentPreset) +
+                    " · 物理：" + QuestQualitySettings.GetPhysicsDisplayName(quality.CurrentPhysicsPreset) +
+                    "\n" + quality.Status + "\n切换会立即生效，并保存到本机";
         }
 
         private void BuildPairingPanel()

@@ -8,6 +8,7 @@ namespace QuestMmdPlayer.Tests
     {
         private GameObject avatarObject;
         private GameObject serviceObject;
+        private Material sourceMaterial;
 
         [TearDown]
         public void TearDown()
@@ -16,18 +17,21 @@ namespace QuestMmdPlayer.Tests
             PlayerPrefs.DeleteKey("quest_avatar_outline_width_v1");
             if (serviceObject != null) Object.DestroyImmediate(serviceObject);
             if (avatarObject != null) Object.DestroyImmediate(avatarObject);
+            if (sourceMaterial != null) Object.DestroyImmediate(sourceMaterial);
         }
 
         [Test]
-        public void BindUsesNativeOutlineMaterialWithoutDuplicatingRenderer()
+        public void BindUsesUrpPassWithoutDuplicatingRenderer()
         {
             avatarObject = new GameObject("Outline Avatar");
             var meshObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
             meshObject.name = "Body";
             meshObject.transform.SetParent(avatarObject.transform, false);
-            var outlineShader = Shader.Find("QuestMmdPlayer/Avatar Outline");
-            Assert.That(outlineShader, Is.Not.Null);
-            meshObject.GetComponent<Renderer>().sharedMaterial = new Material(outlineShader);
+            var sourceShader = Shader.Find("Universal Render Pipeline/Unlit");
+            Assert.That(sourceShader, Is.Not.Null);
+            sourceMaterial = new Material(sourceShader);
+            sourceMaterial.SetOverrideTag(AvatarOutlineController.OutlineTagName, "1");
+            meshObject.GetComponent<Renderer>().sharedMaterial = sourceMaterial;
             var avatar = avatarObject.AddComponent<AvatarController>();
             avatar.Initialize(avatarObject.transform);
 
@@ -38,6 +42,7 @@ namespace QuestMmdPlayer.Tests
 
             Assert.That(outline.ShellCount, Is.EqualTo(1));
             Assert.That(outline.Status, Does.Contain("描边 开启"));
+            Assert.That(outline.Status, Does.Contain("URP额外Pass"));
             var renderers = avatarObject.GetComponentsInChildren<MeshRenderer>(true);
             Assert.That(renderers.Length, Is.EqualTo(1));
 
@@ -45,7 +50,6 @@ namespace QuestMmdPlayer.Tests
             Assert.That(outline.OutlineWidth, Is.EqualTo(.003f).Within(.00001f));
             outline.Toggle();
             Assert.That(outline.OutlineEnabled, Is.False);
-            Assert.That(renderers[0].sharedMaterial.GetFloat("_OutlineWidth"), Is.Zero);
         }
     }
 }

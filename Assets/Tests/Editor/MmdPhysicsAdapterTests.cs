@@ -118,6 +118,15 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void JointHeavyModelsRemainCappedAtOneInFinePolicy()
+        {
+            MMDPhysicsManager.ConfigureRuntimeQuality(120, 4, 2);
+
+            Assert.That(MMDPhysicsManager.ResolveLockedTranslationReinforcement(43), Is.EqualTo(2));
+            Assert.That(MMDPhysicsManager.ResolveLockedTranslationReinforcement(138), Is.EqualTo(1));
+        }
+
+        [Test]
         public void ExternalCollisionGroupPrefersUnusedGroupWithoutChangingInternalPairs()
         {
             var root = new GameObject("ExternalCollisionGroupTest");

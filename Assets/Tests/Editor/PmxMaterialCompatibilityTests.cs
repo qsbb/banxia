@@ -518,6 +518,43 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(material.GetFloat("_ZWrite"), Is.EqualTo(0f));
                 Assert.That(material.renderQueue, Is.EqualTo(3000));
                 Assert.That(material.GetColor("_BaseColor").a, Is.EqualTo(.95f).Within(.001f));
+                Assert.That(material.GetTag("BanxiaOutline", false, "missing"), Is.EqualTo("0"));
+            }
+            finally
+            {
+                if (material != null) Object.DestroyImmediate(material);
+                Object.DestroyImmediate(model);
+            }
+        }
+
+        [Test]
+        public void OpaqueDrawEdgeMaterialDeclaresUrpOutlinePassEligibility()
+        {
+            var model = ScriptableObject.CreateInstance<PMXModel>();
+            Material material = null;
+            try
+            {
+                model.materials = new[]
+                {
+                    new PMXMaterial
+                    {
+                        originalName = "body",
+                        renamedName = "body",
+                        diffuse = Color.white,
+                        drawingFlags = PMXMaterial.DrawingFlags.DrawEdge,
+                        textureIndex = -1,
+                        sphereTextureIndex = -1,
+                        faceIndexCount = 0
+                    }
+                };
+
+                material = PMXMaterialBuilder.Build(
+                    model,
+                    new PMXImportOptions(),
+                    "outline-tag-test",
+                    System.Array.Empty<Texture2D>())[0];
+
+                Assert.That(material.GetTag("BanxiaOutline", false, "0"), Is.EqualTo("1"));
             }
             finally
             {

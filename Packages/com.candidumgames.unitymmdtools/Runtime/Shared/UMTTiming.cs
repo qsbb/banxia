@@ -195,10 +195,92 @@ namespace UMT
 #if UNITY_2023_1_OR_NEWER
             await Awaitable.NextFrameAsync();
 #else
-            await Task.Yield();
+            await UMTNextFrameScheduler.NextFrameAsync();
 #endif
             ++YieldCount;
             m_Stopwatch.Restart();
         }
     }
+
+#if !UNITY_2023_1_OR_NEWER
+    /// <summary>
+    /// Unity 2022's Task.Yield continuation can run again in the same player
+    /// loop. This scheduler gives runtime import work a real rendered-frame
+    /// boundary before continuing.
+    /// </summary>
+    internal sealed class UMTNextFrameScheduler : MonoBehaviour
+    {
+        private readonly List<Waiter> waiters = new List<Waiter>();
+        private static UMTNextFrameScheduler instance;
+
+        private sealed class Waiter
+        {
+            internal int targetFrame;
+            internal TaskCompletionSource<bool> completion;
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            instance = null;
+        }
+
+        internal static Task NextFrameAsync()
+        {
+            if (!Application.isPlaying)
+            {
+                return YieldEditorTurnAsync();
+            }
+            if (instance == null)
+            {
+                var owner = new GameObject("UMT Next Frame Scheduler")
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+                DontDestroyOnLoad(owner);
+                instance = owner.AddComponent<UMTNextFrameScheduler>();
+            }
+
+            var completion = new TaskCompletionSource<bool>();
+            instance.waiters.Add(new Waiter
+            {
+                targetFrame = Time.frameCount + 1,
+                completion = completion
+            });
+            return completion.Task;
+        }
+
+        private static async Task YieldEditorTurnAsync()
+        {
+            await Task.Yield();
+        }
+
+        private void Update()
+        {
+            for (var index = waiters.Count - 1; index >= 0; index--)
+            {
+                var waiter = waiters[index];
+                if (Time.frameCount < waiter.targetFrame)
+                {
+                    continue;
+                }
+                waiters.RemoveAt(index);
+                waiter.completion.TrySetResult(true);
+            }
+        }
+
+        private void OnDestroy()
+        {
+            for (var index = 0; index < waiters.Count; index++)
+            {
+                waiters[index].completion.TrySetCanceled();
+            }
+            waiters.Clear();
+            if (instance == this)
+            {
+                instance = null;
+            }
+        }
+    }
+#endif
 }

@@ -68,6 +68,10 @@ namespace UMT
         public float lastSamplingMilliseconds { get; private set; }
         /// <summary>Latest constraints, IK and Bullet solve cost in milliseconds.</summary>
         public float lastSolverMilliseconds { get; private set; }
+        /// <summary>Latest pre/post-physics bone, constraint, and IK solve time.</summary>
+        public float lastBoneAndIkMilliseconds { get; private set; }
+        /// <summary>Latest native Bullet advancement time.</summary>
+        public float lastPhysicsMilliseconds { get; private set; }
         /// <summary>Latest solved transform flush cost in milliseconds.</summary>
         public float lastFlushMilliseconds { get; private set; }
         /// <summary>Latest SDEF reconciliation cost in milliseconds.</summary>
@@ -429,11 +433,23 @@ namespace UMT
             if (runPhysics)
             {
                 var elapsed = physicsManager.simulationSuspended ? 0.0f : physicsElapsedTime;
-                TransformBonesWithPhysics(ref m_RuntimeContext, ref physicsManager.Context, elapsed);
+                var boneStarted = Stopwatch.GetTimestamp();
+                TransformMath.TransformBones(ref m_RuntimeContext, false);
+                lastBoneAndIkMilliseconds = ElapsedMilliseconds(boneStarted);
+
+                var physicsStarted = Stopwatch.GetTimestamp();
+                MMDPhysicsManager.TransformPhysics(elapsed, ref m_RuntimeContext, ref physicsManager.Context);
+                lastPhysicsMilliseconds = ElapsedMilliseconds(physicsStarted);
+
+                boneStarted = Stopwatch.GetTimestamp();
+                TransformMath.TransformBones(ref m_RuntimeContext, true);
+                lastBoneAndIkMilliseconds += ElapsedMilliseconds(boneStarted);
             }
             else
             {
                 TransformBones(ref m_RuntimeContext);
+                lastBoneAndIkMilliseconds = ElapsedMilliseconds(solveStarted);
+                lastPhysicsMilliseconds = 0f;
             }
             lastSolverMilliseconds = ElapsedMilliseconds(solveStarted);
 

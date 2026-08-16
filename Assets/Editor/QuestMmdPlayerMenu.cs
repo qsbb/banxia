@@ -125,6 +125,7 @@ namespace QuestMmdPlayer.Editor
                 rendererData.name = "QuestMmdPlayerURP_Renderer";
                 AssetDatabase.CreateAsset(rendererData, UrpRendererPath);
             }
+            EnsureRendererFeature<AvatarOutlineRendererFeature>(rendererData, "Banxia Avatar Outline");
 
             var pipelineAsset = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(UrpAssetPath);
             if (pipelineAsset == null)
@@ -154,6 +155,26 @@ namespace QuestMmdPlayer.Editor
             EditorUtility.SetDirty(pipelineAsset);
             AssetDatabase.SaveAssets();
             Debug.Log($"URP Passthrough rendering configured: {AssetDatabase.GetAssetPath(pipelineAsset)}");
+        }
+
+        private static void EnsureRendererFeature<T>(UniversalRendererData rendererData, string featureName)
+            where T : ScriptableRendererFeature
+        {
+            for (var index = 0; index < rendererData.rendererFeatures.Count; index++)
+            {
+                if (rendererData.rendererFeatures[index] is T)
+                {
+                    return;
+                }
+            }
+
+            var feature = ScriptableObject.CreateInstance<T>();
+            feature.name = featureName;
+            feature.SetActive(true);
+            AssetDatabase.AddObjectToAsset(feature, rendererData);
+            rendererData.rendererFeatures.Add(feature);
+            EditorUtility.SetDirty(feature);
+            EditorUtility.SetDirty(rendererData);
         }
 
         private static void SetRequiredBool(SerializedObject settings, string propertyName, bool value)

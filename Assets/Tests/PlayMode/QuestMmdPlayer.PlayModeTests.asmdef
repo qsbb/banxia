@@ -1,7 +1,9 @@
 {
   "name": "QuestMmdPlayer.PlayModeTests",
   "rootNamespace": "QuestMmdPlayer.PlayModeTests",
-  "references": [],
+  "references": [
+    "UMT.Runtime"
+  ],
   "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,

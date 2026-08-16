@@ -34,8 +34,8 @@ namespace QuestMmdPlayer.Editor
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
         private const string OutputPath = "Builds/Banxia.apk";
         private const string AndroidApplicationIdentifier = "com.lingxi.banxia";
-        private const string AndroidVersionName = "0.2.4";
-        private const int AndroidVersionCode = 15;
+        private const string AndroidVersionName = "0.2.5";
+        private const int AndroidVersionCode = 16;
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
         private const string EditorSimulationSettingsPath = "Assets/XR/Settings/XRSimulationSettings.asset";
@@ -64,6 +64,8 @@ namespace QuestMmdPlayer.Editor
             {
                 throw new BuildFailedException("Could not switch the active build target to Android.");
             }
+
+            QuestMmdPlayerMenu.EnsureRenderPipeline();
 
             RestoreSimulationSettingsFromTemp();
             using (new PreloadedAssetsScope())
