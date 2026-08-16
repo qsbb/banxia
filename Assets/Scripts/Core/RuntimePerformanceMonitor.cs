@@ -292,6 +292,13 @@ namespace QuestMmdPlayer
             }
         }
 
+        internal bool IsQaSampleActive => IsActivePerformanceSample();
+
+        internal void ResetQaSamplingWindow()
+        {
+            ResetActiveSessionMetrics();
+        }
+
         public void RecordFrameDurationMilliseconds(float frameMilliseconds)
         {
             if (!IsFinitePositive(frameMilliseconds))

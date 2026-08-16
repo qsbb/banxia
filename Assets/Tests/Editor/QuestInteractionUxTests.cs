@@ -17,6 +17,178 @@ namespace QuestMmdPlayer.Tests
             Assert.That(CompanionWorldMenu.ClampQaIndex(requested, count), Is.EqualTo(expected));
         }
 
+        [TestCase(-1, 10, 30, 10)]
+        [TestCase(0, 10, 30, 10)]
+        [TestCase(12, 10, 30, 12)]
+        [TestCase(999, 10, 30, 30)]
+        [TestCase(999, 30, 999, 120)]
+        public void PerformanceQaDurationsAreStrictlyBounded(
+            int requested,
+            int fallback,
+            int maximum,
+            int expected)
+        {
+            Assert.That(
+                CompanionWorldMenu.NormalizePerformanceQaDuration(
+                    requested,
+                    fallback,
+                    maximum),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void PerformanceQaOutputContainsEveryRequiredMetric()
+        {
+            var line = CompanionWorldMenu.FormatPerformanceQaResult(
+                2,
+                10,
+                30,
+                1800,
+                13f,
+                14f,
+                20f,
+                "balanced",
+                "on",
+                "off",
+                null);
+
+            Assert.That(line, Does.StartWith("[BanxiaQA] performance_result status=completed"));
+            foreach (var field in new[]
+            {
+                "model_index=", "warmup_s=", "sample_s=", "sampled_frames=",
+                "physics_profile=balanced", "hand_contact=on", "outline=off",
+                "fps_5s=", "fps_30s=", "frame_p50_ms=", "frame_p95_ms=",
+                "frame_max_ms=", "xr_cpu_ms=", "xr_gpu_ms=", "xr_cpu_util=",
+                "xr_gpu_util=", "compositor_dropped=", "physics_drop_s=",
+                "bullet_ms=", "bone_ik_ms=", "flush_ms=", "sdef_ms=",
+                "hand_contact_ms=", "outline_submit_ms=", "outline_submeshes=",
+                "xr_cpu_p50_ms=", "xr_cpu_p95_ms=", "xr_gpu_p50_ms=",
+                "xr_gpu_p95_ms=", "mmd_sampling_p50_ms=", "mmd_sampling_p95_ms=",
+                "mmd_bone_ik_p50_ms=", "mmd_bone_ik_p95_ms=",
+                "mmd_physics_p50_ms=", "mmd_physics_p95_ms=",
+                "mmd_flush_p50_ms=", "mmd_flush_p95_ms=",
+                "mmd_sdef_p50_ms=", "mmd_sdef_p95_ms=",
+                "hand_contact_p50_ms=", "hand_contact_p95_ms=",
+                "outline_submit_p50_ms=", "outline_submit_p95_ms="
+            })
+            {
+                Assert.That(line, Does.Contain(field), field);
+            }
+        }
+
+        [Test]
+        public void PerformanceQaRunnerIsNotAPublicUiCommand()
+        {
+            var privateRunner = typeof(CompanionWorldMenu).GetMethod(
+                "RunQaPerformanceScenarioWhenReady",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var publicRunner = typeof(CompanionWorldMenu).GetMethod(
+                "RunQaPerformanceScenarioWhenReady",
+                BindingFlags.Instance | BindingFlags.Public);
+
+            Assert.That(privateRunner, Is.Not.Null);
+            Assert.That(publicRunner, Is.Null);
+        }
+
+        [Test]
+        public void PerformanceQaCanRestoreModelSelectionPreferences()
+        {
+            const string absoluteKey = "Banxia.RuntimeMmdModel.SelectedPath";
+            const string relativeKey = "Banxia.RuntimeMmdModel.SelectedRelativePath";
+            var hadAbsolute = PlayerPrefs.HasKey(absoluteKey);
+            var hadRelative = PlayerPrefs.HasKey(relativeKey);
+            var previousAbsolute = PlayerPrefs.GetString(absoluteKey, string.Empty);
+            var previousRelative = PlayerPrefs.GetString(relativeKey, string.Empty);
+            var owner = new GameObject("Performance QA Model Preferences");
+            try
+            {
+                PlayerPrefs.SetString(absoluteKey, "temporary-model.pmx");
+                PlayerPrefs.SetString(relativeKey, "Imported/temporary/model.pmx");
+                var loader = owner.AddComponent<RuntimeMmdModelLoader>();
+                var restorePreferences = typeof(RuntimeMmdModelLoader).GetMethod(
+                    "RestoreSelectedModelPreferencesForQa",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.That(restorePreferences, Is.Not.Null);
+
+                restorePreferences.Invoke(
+                    loader,
+                    new object[]
+                    {
+                        "original-model.pmx",
+                        "Imported/original/model.pmx"
+                    });
+
+                Assert.That(
+                    PlayerPrefs.GetString(absoluteKey),
+                    Is.EqualTo("original-model.pmx"));
+                Assert.That(
+                    PlayerPrefs.GetString(relativeKey),
+                    Is.EqualTo("Imported/original/model.pmx"));
+                restorePreferences.Invoke(
+                    loader,
+                    new object[] { string.Empty, string.Empty });
+                Assert.That(PlayerPrefs.HasKey(absoluteKey), Is.False);
+                Assert.That(PlayerPrefs.HasKey(relativeKey), Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(owner);
+                if (hadAbsolute)
+                {
+                    PlayerPrefs.SetString(absoluteKey, previousAbsolute);
+                }
+                else
+                {
+                    PlayerPrefs.DeleteKey(absoluteKey);
+                }
+                if (hadRelative)
+                {
+                    PlayerPrefs.SetString(relativeKey, previousRelative);
+                }
+                else
+                {
+                    PlayerPrefs.DeleteKey(relativeKey);
+                }
+                PlayerPrefs.Save();
+            }
+        }
+
+        [TestCase("performance", MmdPhysicsPreset.Performance, true)]
+        [TestCase("balanced", MmdPhysicsPreset.Balanced, true)]
+        [TestCase("precise", MmdPhysicsPreset.Fine, true)]
+        [TestCase("fine", MmdPhysicsPreset.Balanced, false)]
+        [TestCase("Performance", MmdPhysicsPreset.Balanced, false)]
+        [TestCase(" balanced", MmdPhysicsPreset.Balanced, false)]
+        [TestCase("", MmdPhysicsPreset.Balanced, false)]
+        public void PerformanceQaPhysicsProfileUsesAStrictEnumeration(
+            string value,
+            MmdPhysicsPreset expected,
+            bool valid)
+        {
+            Assert.That(
+                CompanionWorldMenu.TryParsePerformanceQaPhysicsProfile(
+                    value,
+                    out var parsed),
+                Is.EqualTo(valid));
+            Assert.That(parsed, Is.EqualTo(expected));
+        }
+
+        [TestCase("on", true, true)]
+        [TestCase("off", false, true)]
+        [TestCase("ON", false, false)]
+        [TestCase("true", false, false)]
+        [TestCase("", false, false)]
+        public void PerformanceQaToggleUsesAStrictEnumeration(
+            string value,
+            bool expected,
+            bool valid)
+        {
+            Assert.That(
+                CompanionWorldMenu.TryParsePerformanceQaToggle(value, out var parsed),
+                Is.EqualTo(valid));
+            Assert.That(parsed, Is.EqualTo(expected));
+        }
+
         [TestCase(0f, 0f)]
         [TestCase(.2f, 0f)]
         [TestCase(.6f, .5f)]

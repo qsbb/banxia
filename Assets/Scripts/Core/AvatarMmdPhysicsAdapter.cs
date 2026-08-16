@@ -22,6 +22,7 @@ namespace QuestMmdPlayer
         private MMDPhysicsManager physicsManager;
         private Renderer[] avatarRenderers = Array.Empty<Renderer>();
         private bool configured;
+        private bool runtimeContactEnabled = true;
         private bool highFrequencyContact;
         private int updateParity;
         private int activeProbeCount;
@@ -43,6 +44,18 @@ namespace QuestMmdPlayer
         public string Status => status;
         public int ActiveProbeCount => activeProbeCount;
         public bool IsConfigured => configured && physicsManager != null;
+        internal bool RuntimeContactEnabled => runtimeContactEnabled;
+        internal bool HighFrequencyContact => highFrequencyContact;
+
+        internal void SetRuntimeContactEnabledForQa(bool enabled)
+        {
+            runtimeContactEnabled = enabled;
+            updateParity = 0;
+            if (!enabled)
+            {
+                DeactivateExternalProbes();
+            }
+        }
 
         public void SetHighFrequencyContact(bool enabled)
         {
@@ -70,7 +83,8 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
-            if (!enabledForRuntime || trackedHands == null || physicsManager == null)
+            if (!enabledForRuntime || !runtimeContactEnabled ||
+                trackedHands == null || physicsManager == null)
             {
                 return;
             }

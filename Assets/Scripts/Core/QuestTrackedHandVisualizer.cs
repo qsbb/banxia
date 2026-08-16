@@ -54,6 +54,7 @@ namespace QuestMmdPlayer
         private int statusTrackedCount = -1;
         private string statusLeftSource = string.Empty;
         private string statusRightSource = string.Empty;
+        private bool contactEvaluationEnabled = true;
 
         public string Status { get; private set; } = "代理手等待 XR 输入";
         public int TrackedHandCount { get; private set; }
@@ -61,6 +62,27 @@ namespace QuestMmdPlayer
         public TrackedHandContactFact LatestContactFact { get; private set; }
         public const int PhysicsProbeCount = 12;
         public bool HandsVisible => showHands;
+        internal bool ContactEvaluationEnabled => contactEvaluationEnabled;
+
+        internal void SetContactEvaluationEnabledForQa(bool enabled)
+        {
+            if (contactEvaluationEnabled == enabled)
+            {
+                return;
+            }
+            contactEvaluationEnabled = enabled;
+            if (!enabled)
+            {
+                EndContactFacts(left);
+                EndContactFacts(right);
+                left.DisableContacts();
+                right.DisableContacts();
+                ClearPreviousPose(left);
+                ClearPreviousPose(right);
+                ActiveContactCount = 0;
+                LastContactEvaluationMilliseconds = 0f;
+            }
+        }
 
         public void SetHandsVisible(bool visible)
         {
@@ -112,7 +134,8 @@ namespace QuestMmdPlayer
             radius = collider is SphereCollider sphere
                 ? sphere.radius * MaximumScale(collider.transform.lossyScale)
                 : jointRadius;
-            active = visual.root != null && visual.root.activeInHierarchy &&
+            active = contactEvaluationEnabled &&
+                     visual.root != null && visual.root.activeInHierarchy &&
                      collider.enabled && visual.jointTracked[jointIndex];
             return true;
         }
@@ -222,6 +245,12 @@ namespace QuestMmdPlayer
 
         private void LateUpdate()
         {
+            if (!contactEvaluationEnabled)
+            {
+                ActiveContactCount = 0;
+                LastContactEvaluationMilliseconds = 0f;
+                return;
+            }
             var leftActive = HasActiveContactProbe(left);
             var rightActive = HasActiveContactProbe(right);
             if (!ShouldEvaluatePhysicalContacts(interaction != null, leftActive, rightActive))
@@ -785,10 +814,11 @@ namespace QuestMmdPlayer
             return null;
         }
 
-        private static void SetJointContactState(HandVisual visual, int index, bool tracked)
+        private void SetJointContactState(HandVisual visual, int index, bool tracked)
         {
             var probe = ContactProbeForJoint(JointIds[index]);
-            var active = tracked && probe != TrackedHandContactProbe.None;
+            var active = contactEvaluationEnabled &&
+                         tracked && probe != TrackedHandContactProbe.None;
             if (visual.contactColliders[index] != null) visual.contactColliders[index].enabled = active;
             if (visual.relays[index] != null) visual.relays[index].SetTracked(active);
         }

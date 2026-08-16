@@ -118,6 +118,16 @@ namespace QuestMmdPlayer
             ApplySettings(true);
         }
 
+        internal void SetEnabledForQa(bool value)
+        {
+            if (OutlineEnabled == value)
+            {
+                return;
+            }
+            OutlineEnabled = value;
+            ApplySettings(false);
+        }
+
         public void IncreaseWidth() => SetWidth(outlineWidth + WidthStep);
 
         public void DecreaseWidth() => SetWidth(outlineWidth - WidthStep);

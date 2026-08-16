@@ -118,6 +118,12 @@ namespace QuestMmdPlayer
             ApplyPhysicsPreset(preset, true);
         }
 
+        internal void ApplyPhysicsPresetForQa(MmdPhysicsPreset preset)
+        {
+            ApplyPhysicsPreset(preset, false);
+            ApplyPhysicsPolicyToLoadedModels(true, FullHandContact);
+        }
+
         public void ResetToDefault()
         {
             ApplyPreset(defaultPreset);
@@ -231,7 +237,11 @@ namespace QuestMmdPlayer
                 case MmdPhysicsPreset.Performance:
                     frequencyHz = 60;
                     maximumSubsteps = 2;
-                    reinforcement = 1;
+                    // Joint-heavy models spend most of their frame in the
+                    // duplicate locked-translation constraints. The explicit
+                    // performance profile removes those duplicates while the
+                    // balanced default retains one reinforcement copy.
+                    reinforcement = 0;
                     fullHandContact = false;
                     return;
                 case MmdPhysicsPreset.Fine:

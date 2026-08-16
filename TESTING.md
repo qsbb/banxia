@@ -109,3 +109,16 @@ adb shell am start -n com.lingxi.banxia/com.unity3d.player.UnityPlayerActivity -
 Use `logcat` to collect `[BanxiaQA] vmd_pass` entries. Index values are clamped to the current on-device catalog. This command never accepts a filesystem path and does not expose pairing credentials.
 
 跨重启缓存验收需连续运行上面的完整命令两次。第一次 `cold` 应显示 `disk_cache=False` 并完成曲线写入；应用退出后第二次 `cold` 应显示 `disk_cache=True`、`motion_ms=-1`，且 `disk_read_ms + disk_rebuild_ms` 明显小于第一次转换耗时。两次都必须保持 `physics_drop_delta_s=0.0000`，损坏或删除 `VmdActionCache/v1` 后应安全回退首次转换。
+
+# Device Performance QA
+
+`run_performance_qa` 是仅通过 Android Intent 触发的有界采样场景。它按模型索引加载角色，默认预热 10 秒、采样 30 秒，输出一条 `[BanxiaQA] performance_result`，随后恢复原模型选择和临时性能设置并退出 App：
+
+```powershell
+adb shell am force-stop com.lingxi.banxia
+adb shell am start -n com.lingxi.banxia/com.unity3d.player.UnityPlayerActivity --es quest_debug_command run_performance_qa --ei quest_debug_model_index 3 --ei quest_debug_warmup_seconds 10 --ei quest_debug_sample_seconds 30 --es quest_debug_physics_profile balanced --es quest_debug_hand_contact on --es quest_debug_outline on
+```
+
+可选物理档严格限制为 `performance|balanced|precise`，手部接触和描边严格限制为 `on|off`。`hand_contact=off` 保留视觉手模型，但完整停用精确接触、`Physics.SyncTransforms()` 和外部 Bullet 手部探针，不能理解成低频接触。预热最多 30 秒，采样最多 120 秒；不接受文件路径。头显未佩戴或 App 未获得焦点时不计入有效帧，整个窗口没有有效帧会报告失败而不是输出全零的成功结果。
+
+森林莓果 A/B 先固定 `balanced/on/on` 作为基线，再一次只改一个变量：`performance/on/on`、`precise/on/on`、`balanced/off/on`、`balanced/on/off`。至少比较 `frame_p95_ms`、`xr_cpu_p95_ms`、`xr_gpu_p95_ms`、`physics_drop_s`、`mmd_physics_p95_ms`、`mmd_bone_ik_p95_ms`、`hand_contact_p95_ms` 和 `outline_submit_p95_ms`，不要把未佩戴、模型加载或预热数据混入结论。旧的 `xr_cpu_ms`、`bullet_ms` 等字段只是采样结束瞬时值，只用于兼容诊断，不用于归因。

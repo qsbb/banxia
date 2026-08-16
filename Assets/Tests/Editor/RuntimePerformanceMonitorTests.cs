@@ -1,3 +1,4 @@
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -178,6 +179,37 @@ namespace QuestMmdPlayer.Tests
 
                 Assert.That(monitor.frameSampleCount, Is.EqualTo(1));
                 Assert.That(monitor.currentFps, Is.GreaterThan(70f));
+            }
+            finally
+            {
+                Object.DestroyImmediate(owner);
+            }
+        }
+
+        [Test]
+        public void PerformanceQaWindowResetExcludesWarmupWithoutDisablingDetailSampling()
+        {
+            var owner = new GameObject("Performance QA Monitor");
+            try
+            {
+                var monitor = owner.AddComponent<RuntimePerformanceMonitor>();
+                monitor.SetDetailedSamplingEnabled(true);
+                monitor.RecordFrameDurationMilliseconds(25f);
+
+                var reset = typeof(RuntimePerformanceMonitor).GetMethod(
+                    "ResetQaSamplingWindow",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.That(reset, Is.Not.Null);
+                reset.Invoke(monitor, null);
+
+                Assert.That(monitor.detailedSamplingEnabled, Is.True);
+                Assert.That(monitor.frameSampleCount, Is.Zero);
+                Assert.That(monitor.currentFps, Is.Zero);
+                Assert.That(monitor.frameTimeP50Ms, Is.Zero);
+                Assert.That(monitor.frameTimeP95Ms, Is.Zero);
+                Assert.That(monitor.frameTimeMaxMs, Is.Zero);
+                Assert.That(monitor.physicsSessionDroppedSeconds, Is.Zero);
+                Assert.That(monitor.compositorDroppedFramesSession, Is.Zero);
             }
             finally
             {

@@ -88,6 +88,11 @@ namespace QuestMmdPlayer
         private int pointerPressFrame = -1;
         private const string DebugAutoScrollPreferenceKey = "Banxia.Debug.AutoScroll";
         private const int DebugTimelinePageSize = 9;
+        private const int PerformanceQaDefaultWarmupSeconds = 10;
+        private const int PerformanceQaDefaultSampleSeconds = 30;
+        private const int PerformanceQaMaximumWarmupSeconds = 30;
+        private const int PerformanceQaMaximumSampleSeconds = 120;
+        private const int PerformanceQaModelLoadTimeoutMilliseconds = 60000;
 
         private static readonly InputFeatureUsage<bool> MenuButtonAlias = new InputFeatureUsage<bool>("MenuButton");
         private static readonly InputFeatureUsage<bool> MenuButtonLowerAlias = new InputFeatureUsage<bool>("menuButton");
@@ -280,6 +285,44 @@ namespace QuestMmdPlayer
                             requestedModelIndex,
                             requestedActionIndex,
                             exitWhenComplete));
+                        return false;
+                    }
+                    if (string.Equals(command, "run_performance_qa", StringComparison.Ordinal))
+                    {
+                        var requestedModelIndex = intent.Call<int>(
+                            "getIntExtra",
+                            "quest_debug_model_index",
+                            0);
+                        var warmupSeconds = NormalizePerformanceQaDuration(
+                            intent.Call<int>(
+                                "getIntExtra",
+                                "quest_debug_warmup_seconds",
+                                PerformanceQaDefaultWarmupSeconds),
+                            PerformanceQaDefaultWarmupSeconds,
+                            PerformanceQaMaximumWarmupSeconds);
+                        var sampleSeconds = NormalizePerformanceQaDuration(
+                            intent.Call<int>(
+                                "getIntExtra",
+                                "quest_debug_sample_seconds",
+                                PerformanceQaDefaultSampleSeconds),
+                            PerformanceQaDefaultSampleSeconds,
+                            PerformanceQaMaximumSampleSeconds);
+                        var physicsProfile = intent.Call<string>(
+                            "getStringExtra",
+                            "quest_debug_physics_profile");
+                        var handContact = intent.Call<string>(
+                            "getStringExtra",
+                            "quest_debug_hand_contact");
+                        var outline = intent.Call<string>(
+                            "getStringExtra",
+                            "quest_debug_outline");
+                        StartCoroutine(RunQaPerformanceScenarioWhenReady(
+                            requestedModelIndex,
+                            warmupSeconds,
+                            sampleSeconds,
+                            physicsProfile,
+                            handContact,
+                            outline));
                         return false;
                     }
                 }
@@ -535,6 +578,71 @@ namespace QuestMmdPlayer
             }
         }
 
+        public sealed class PerformanceQaCapture
+        {
+            internal readonly List<float> FrameMilliseconds;
+            internal readonly List<float> XrCpuMilliseconds;
+            internal readonly List<float> XrGpuMilliseconds;
+            internal readonly List<float> MmdSamplingMilliseconds;
+            internal readonly List<float> MmdBoneAndIkMilliseconds;
+            internal readonly List<float> MmdPhysicsMilliseconds;
+            internal readonly List<float> MmdFlushMilliseconds;
+            internal readonly List<float> MmdSdefMilliseconds;
+            internal readonly List<float> HandContactMilliseconds;
+            internal readonly List<float> OutlineSubmissionMilliseconds;
+
+            internal PerformanceQaCapture(int capacity)
+            {
+                var boundedCapacity = Mathf.Max(1, capacity);
+                FrameMilliseconds = new List<float>(boundedCapacity);
+                XrCpuMilliseconds = new List<float>(boundedCapacity);
+                XrGpuMilliseconds = new List<float>(boundedCapacity);
+                MmdSamplingMilliseconds = new List<float>(boundedCapacity);
+                MmdBoneAndIkMilliseconds = new List<float>(boundedCapacity);
+                MmdPhysicsMilliseconds = new List<float>(boundedCapacity);
+                MmdFlushMilliseconds = new List<float>(boundedCapacity);
+                MmdSdefMilliseconds = new List<float>(boundedCapacity);
+                HandContactMilliseconds = new List<float>(boundedCapacity);
+                OutlineSubmissionMilliseconds = new List<float>(boundedCapacity);
+            }
+
+            public int Count => FrameMilliseconds.Count;
+
+            internal void Add(RuntimePerformanceMonitor performance, bool outlineEnabled)
+            {
+                AddFinite(FrameMilliseconds, Time.unscaledDeltaTime * 1000f, true);
+                if (performance == null)
+                {
+                    return;
+                }
+                if (performance.xrPerformanceMetricsAvailable)
+                {
+                    AddFinite(XrCpuMilliseconds, performance.xrAppCpuTimeMs, false);
+                    AddFinite(XrGpuMilliseconds, performance.xrAppGpuTimeMs, false);
+                }
+                AddFinite(MmdSamplingMilliseconds, performance.mmdSamplingMilliseconds, false);
+                AddFinite(MmdBoneAndIkMilliseconds, performance.mmdBoneAndIkMilliseconds, false);
+                AddFinite(MmdPhysicsMilliseconds, performance.mmdPhysicsMilliseconds, false);
+                AddFinite(MmdFlushMilliseconds, performance.mmdFlushMilliseconds, false);
+                AddFinite(MmdSdefMilliseconds, performance.mmdSdefMilliseconds, false);
+                AddFinite(HandContactMilliseconds, performance.handContactMilliseconds, false);
+                AddFinite(
+                    OutlineSubmissionMilliseconds,
+                    outlineEnabled ? AvatarOutlineController.LastRenderSubmissionMilliseconds : 0f,
+                    false);
+            }
+
+            private static void AddFinite(List<float> destination, float value, bool positiveOnly)
+            {
+                if (float.IsNaN(value) || float.IsInfinity(value) ||
+                    (positiveOnly ? value <= 0f : value < 0f))
+                {
+                    return;
+                }
+                destination.Add(Mathf.Clamp(value, 0f, 1000f));
+            }
+        }
+
         private static async System.Threading.Tasks.Task RunQaVmdPassAsync(
             string pass,
             string actionId,
@@ -573,6 +681,431 @@ namespace QuestMmdPlayer
                     .ToString("F1", CultureInfo.InvariantCulture) +
                 " frame_p95_ms=" + (performance == null ? 0f : performance.frameTimeP95Ms)
                     .ToString("F2", CultureInfo.InvariantCulture));
+        }
+
+        private IEnumerator RunQaPerformanceScenarioWhenReady(
+            int requestedModelIndex,
+            int warmupSeconds,
+            int sampleSeconds,
+            string physicsProfile,
+            string handContact,
+            string outline)
+        {
+            var remaining = 30f;
+            while (remaining > 0f &&
+                   (owner?.ModelLoader == null || owner.Performance == null || owner.ModelLoader.IsLoading))
+            {
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
+                yield return null;
+            }
+
+            if (owner?.ModelLoader == null || owner.Performance == null || owner.ModelLoader.IsLoading)
+            {
+                Debug.LogWarning(
+                    "[BanxiaQA] performance_scenario status=timeout phase=runtime_ready",
+                    this);
+                Application.Quit();
+                yield break;
+            }
+
+            RunQaPerformanceScenarioAsync(
+                requestedModelIndex,
+                warmupSeconds,
+                sampleSeconds,
+                physicsProfile,
+                handContact,
+                outline);
+        }
+
+        private async void RunQaPerformanceScenarioAsync(
+            int requestedModelIndex,
+            int warmupSeconds,
+            int sampleSeconds,
+            string physicsProfile,
+            string handContact,
+            string outline)
+        {
+            var loader = owner?.ModelLoader;
+            var performance = owner?.Performance;
+            if (loader == null || performance == null)
+            {
+                Application.Quit();
+                return;
+            }
+
+            var originalDetailedSampling = performance.detailedSamplingEnabled;
+            var originalModelPath = loader.CurrentModelPath;
+            var originalSavedModelPath = loader.SavedModelPath;
+            var originalSavedModelRelativePath = loader.SavedModelRelativePath;
+            var quality = owner?.Quality;
+            var trackedHands = owner?.TrackedHands;
+            var handPhysics = owner?.HandPhysics;
+            var outlineController = owner?.Outline;
+            var originalPhysicsPreset = quality == null
+                ? MmdPhysicsPreset.Balanced
+                : quality.CurrentPhysicsPreset;
+            var originalHandContact = handPhysics != null && handPhysics.HighFrequencyContact;
+            var originalHandRuntimeContact = handPhysics == null || handPhysics.RuntimeContactEnabled;
+            var originalContactEvaluation = trackedHands == null || trackedHands.ContactEvaluationEnabled;
+            var originalOutline = outlineController != null && outlineController.OutlineEnabled;
+            var physicsLabel = "default";
+            var handContactLabel = "default";
+            var outlineLabel = "default";
+            try
+            {
+                if (!string.IsNullOrEmpty(physicsProfile))
+                {
+                    if (!TryParsePerformanceQaPhysicsProfile(
+                            physicsProfile,
+                            out var requestedPhysicsPreset))
+                    {
+                        throw new ArgumentException("Performance QA physics profile is invalid.");
+                    }
+                    if (quality == null)
+                    {
+                        throw new InvalidOperationException("Performance QA quality control is unavailable.");
+                    }
+                    quality.ApplyPhysicsPresetForQa(requestedPhysicsPreset);
+                    physicsLabel = physicsProfile;
+                }
+                if (!string.IsNullOrEmpty(handContact))
+                {
+                    if (!TryParsePerformanceQaToggle(handContact, out var handContactEnabled))
+                    {
+                        throw new ArgumentException("Performance QA hand contact option is invalid.");
+                    }
+                    if (handPhysics == null || trackedHands == null)
+                    {
+                        handContactLabel = "unavailable";
+                    }
+                    else
+                    {
+                        trackedHands.SetContactEvaluationEnabledForQa(handContactEnabled);
+                        handPhysics.SetRuntimeContactEnabledForQa(handContactEnabled);
+                        handContactLabel = handContact;
+                    }
+                }
+                if (!string.IsNullOrEmpty(outline))
+                {
+                    if (!TryParsePerformanceQaToggle(outline, out var outlineEnabled))
+                    {
+                        throw new ArgumentException("Performance QA outline option is invalid.");
+                    }
+                    if (outlineController == null)
+                    {
+                        outlineLabel = "unavailable";
+                    }
+                    else
+                    {
+                        outlineController.SetEnabledForQa(outlineEnabled);
+                        outlineLabel = outline;
+                    }
+                }
+
+                var models = loader.DiscoverInstalledModels();
+                var modelSelection = ClampQaIndex(requestedModelIndex, models.Count);
+                if (modelSelection < 0)
+                {
+                    throw new InvalidOperationException("No installed model is available.");
+                }
+
+                Debug.Log(
+                    "[BanxiaQA] performance_scenario status=started model_index=" + modelSelection +
+                    " warmup_s=" + warmupSeconds +
+                    " sample_s=" + sampleSeconds +
+                    " physics_profile=" + physicsLabel +
+                    " hand_contact=" + handContactLabel +
+                    " outline=" + outlineLabel,
+                    this);
+                performance.SetDetailedSamplingEnabled(true);
+
+                var targetPath = models[modelSelection].Path;
+                if (!string.Equals(
+                        loader.CurrentModelPath,
+                        targetPath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    var loadTask = loader.LoadFromFileAsync(targetPath);
+                    var completed = await System.Threading.Tasks.Task.WhenAny(
+                        loadTask,
+                        System.Threading.Tasks.Task.Delay(
+                            PerformanceQaModelLoadTimeoutMilliseconds));
+                    if (!ReferenceEquals(completed, loadTask))
+                    {
+                        throw new TimeoutException("Performance QA model load timed out.");
+                    }
+                    await loadTask;
+                }
+
+                await WaitForQaDurationAsync(warmupSeconds);
+                performance.ResetQaSamplingWindow();
+                var samples = await CaptureQaFrameSamplesAsync(
+                    performance,
+                    sampleSeconds,
+                    outlineController != null && outlineController.OutlineEnabled);
+                if (samples.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "Performance QA captured no active headset frames.");
+                }
+                RuntimePerformanceMonitor.CalculateFrameStatistics(
+                    samples.FrameMilliseconds.ToArray(),
+                    samples.Count,
+                    out _,
+                    out var p50,
+                    out var p95,
+                    out var maximum);
+                Debug.Log(
+                    FormatPerformanceQaResult(
+                        modelSelection,
+                        warmupSeconds,
+                        sampleSeconds,
+                        samples.Count,
+                        p50,
+                        p95,
+                        maximum,
+                        physicsLabel,
+                        handContactLabel,
+                        outlineLabel,
+                        performance,
+                        samples),
+                    this);
+                Debug.Log("[BanxiaQA] performance_scenario status=completed", this);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning(
+                    "[BanxiaQA] performance_scenario status=failed error=" +
+                    exception.GetType().Name,
+                    this);
+            }
+            finally
+            {
+                performance.SetDetailedSamplingEnabled(originalDetailedSampling);
+                if (!string.IsNullOrWhiteSpace(originalModelPath) &&
+                    !string.Equals(
+                        loader.CurrentModelPath,
+                        originalModelPath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        await loader.LoadFromFileAsync(originalModelPath);
+                        Debug.Log(
+                            "[BanxiaQA] performance_scenario original_model_restored=true",
+                            this);
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogWarning(
+                            "[BanxiaQA] performance_scenario original_model_restored=false error=" +
+                            exception.GetType().Name,
+                            this);
+                    }
+                }
+                loader.RestoreSelectedModelPreferencesForQa(
+                    originalSavedModelPath,
+                    originalSavedModelRelativePath);
+                if (quality != null)
+                {
+                    quality.ApplyPhysicsPresetForQa(originalPhysicsPreset);
+                }
+                if (handPhysics != null)
+                {
+                    handPhysics.SetHighFrequencyContact(originalHandContact);
+                    handPhysics.SetRuntimeContactEnabledForQa(originalHandRuntimeContact);
+                }
+                if (trackedHands != null)
+                {
+                    trackedHands.SetContactEvaluationEnabledForQa(originalContactEvaluation);
+                }
+                if (outlineController != null)
+                {
+                    outlineController.SetEnabledForQa(originalOutline);
+                }
+                Application.Quit();
+            }
+        }
+
+        private static async System.Threading.Tasks.Task WaitForQaDurationAsync(
+            int durationSeconds)
+        {
+            var deadline = Time.realtimeSinceStartup + Mathf.Max(0, durationSeconds);
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                await System.Threading.Tasks.Task.Yield();
+            }
+        }
+
+        private static async System.Threading.Tasks.Task<PerformanceQaCapture> CaptureQaFrameSamplesAsync(
+            RuntimePerformanceMonitor performance,
+            int sampleSeconds,
+            bool outlineEnabled)
+        {
+            var maximumFrames = Mathf.Clamp(sampleSeconds, 1, PerformanceQaMaximumSampleSeconds) * 144 + 16;
+            var samples = new PerformanceQaCapture(maximumFrames);
+            var deadline = Time.realtimeSinceStartup + Mathf.Max(1, sampleSeconds);
+            var lastFrame = -1;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                await System.Threading.Tasks.Task.Yield();
+                if (Time.frameCount == lastFrame)
+                {
+                    continue;
+                }
+                lastFrame = Time.frameCount;
+                if (performance != null && performance.IsQaSampleActive && samples.Count < maximumFrames)
+                {
+                    samples.Add(performance, outlineEnabled);
+                }
+            }
+            return samples;
+        }
+
+        public static int NormalizePerformanceQaDuration(
+            int requestedSeconds,
+            int defaultSeconds,
+            int maximumSeconds)
+        {
+            var maximum = Mathf.Clamp(maximumSeconds, 1, PerformanceQaMaximumSampleSeconds);
+            var fallback = Mathf.Clamp(defaultSeconds, 1, maximum);
+            return requestedSeconds <= 0
+                ? fallback
+                : Mathf.Clamp(requestedSeconds, 1, maximum);
+        }
+
+        public static bool TryParsePerformanceQaPhysicsProfile(
+            string value,
+            out MmdPhysicsPreset preset)
+        {
+            switch (value)
+            {
+                case "performance":
+                    preset = MmdPhysicsPreset.Performance;
+                    return true;
+                case "balanced":
+                    preset = MmdPhysicsPreset.Balanced;
+                    return true;
+                case "precise":
+                    preset = MmdPhysicsPreset.Fine;
+                    return true;
+                default:
+                    preset = MmdPhysicsPreset.Balanced;
+                    return false;
+            }
+        }
+
+        public static bool TryParsePerformanceQaToggle(string value, out bool enabled)
+        {
+            if (string.Equals(value, "on", StringComparison.Ordinal))
+            {
+                enabled = true;
+                return true;
+            }
+            if (string.Equals(value, "off", StringComparison.Ordinal))
+            {
+                enabled = false;
+                return true;
+            }
+            enabled = false;
+            return false;
+        }
+
+        private static string SafePerformanceQaLabel(string value)
+        {
+            switch (value)
+            {
+                case "performance":
+                case "balanced":
+                case "precise":
+                case "on":
+                case "off":
+                case "unavailable":
+                    return value;
+                default:
+                    return "default";
+            }
+        }
+
+        public static string FormatPerformanceQaResult(
+            int modelIndex,
+            int warmupSeconds,
+            int sampleSeconds,
+            int sampledFrames,
+            float p50Milliseconds,
+            float p95Milliseconds,
+            float maximumMilliseconds,
+            string physicsProfile,
+            string handContact,
+            string outline,
+            RuntimePerformanceMonitor performance,
+            PerformanceQaCapture capture = null)
+        {
+            float Metric(Func<RuntimePerformanceMonitor, float> selector)
+            {
+                return performance == null ? 0f : Mathf.Max(0f, selector(performance));
+            }
+
+            string F(float value, string format = "F3")
+            {
+                return Mathf.Max(0f, value).ToString(format, CultureInfo.InvariantCulture);
+            }
+
+            string PercentileFields(string name, List<float> values)
+            {
+                var p50 = 0f;
+                var p95 = 0f;
+                if (values != null && values.Count > 0)
+                {
+                    RuntimePerformanceMonitor.CalculateFrameStatistics(
+                        values.ToArray(),
+                        values.Count,
+                        out _,
+                        out p50,
+                        out p95,
+                        out _);
+                }
+                return " " + name + "_p50_ms=" + F(p50) +
+                       " " + name + "_p95_ms=" + F(p95);
+            }
+
+            return "[BanxiaQA] performance_result status=completed" +
+                " model_index=" + Mathf.Max(0, modelIndex) +
+                " warmup_s=" + Mathf.Max(0, warmupSeconds) +
+                " sample_s=" + Mathf.Max(0, sampleSeconds) +
+                " sampled_frames=" + Mathf.Max(0, sampledFrames) +
+                " physics_profile=" + SafePerformanceQaLabel(physicsProfile) +
+                " hand_contact=" + SafePerformanceQaLabel(handContact) +
+                " outline=" + SafePerformanceQaLabel(outline) +
+                " headset_worn=" + (performance != null && performance.headsetWorn) +
+                " fps_5s=" + F(Metric(value => value.fps5Seconds), "F1") +
+                " fps_30s=" + F(Metric(value => value.fps30Seconds), "F1") +
+                " frame_p50_ms=" + F(p50Milliseconds) +
+                " frame_p95_ms=" + F(p95Milliseconds) +
+                " frame_max_ms=" + F(maximumMilliseconds) +
+                " xr_available=" + (performance != null && performance.xrPerformanceMetricsAvailable) +
+                " xr_cpu_ms=" + F(Metric(value => value.xrAppCpuTimeMs)) +
+                " xr_gpu_ms=" + F(Metric(value => value.xrAppGpuTimeMs)) +
+                " xr_cpu_util=" + F(Metric(value => value.xrCpuUtilization), "F1") +
+                " xr_gpu_util=" + F(Metric(value => value.xrGpuUtilization), "F1") +
+                " compositor_dropped=" + F(Metric(value => value.compositorDroppedFramesSession), "F0") +
+                " physics_drop_s=" + F(Metric(value => value.physicsSessionDroppedSeconds), "F4") +
+                " bullet_ms=" + F(Metric(value => value.mmdPhysicsMilliseconds)) +
+                " bone_ik_ms=" + F(Metric(value => value.mmdBoneAndIkMilliseconds)) +
+                " flush_ms=" + F(Metric(value => value.mmdFlushMilliseconds)) +
+                " sdef_ms=" + F(Metric(value => value.mmdSdefMilliseconds)) +
+                " hand_contact_ms=" + F(Metric(value => value.handContactMilliseconds)) +
+                " outline_submit_ms=" + F(AvatarOutlineController.LastRenderSubmissionMilliseconds) +
+                " outline_submeshes=" + Mathf.Max(0, AvatarOutlineController.LastRenderedSubmeshCount) +
+                PercentileFields("xr_cpu", capture == null ? null : capture.XrCpuMilliseconds) +
+                PercentileFields("xr_gpu", capture == null ? null : capture.XrGpuMilliseconds) +
+                PercentileFields("mmd_sampling", capture == null ? null : capture.MmdSamplingMilliseconds) +
+                PercentileFields("mmd_bone_ik", capture == null ? null : capture.MmdBoneAndIkMilliseconds) +
+                PercentileFields("mmd_physics", capture == null ? null : capture.MmdPhysicsMilliseconds) +
+                PercentileFields("mmd_flush", capture == null ? null : capture.MmdFlushMilliseconds) +
+                PercentileFields("mmd_sdef", capture == null ? null : capture.MmdSdefMilliseconds) +
+                PercentileFields("hand_contact", capture == null ? null : capture.HandContactMilliseconds) +
+                PercentileFields("outline_submit", capture == null ? null : capture.OutlineSubmissionMilliseconds);
         }
 
         public static int ClampQaIndex(int requested, int count)

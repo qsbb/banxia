@@ -1,4 +1,5 @@
 #if UNITY_EDITOR
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -50,6 +51,26 @@ namespace QuestMmdPlayer.Tests
             Assert.That(outline.OutlineWidth, Is.EqualTo(.003f).Within(.00001f));
             outline.Toggle();
             Assert.That(outline.OutlineEnabled, Is.False);
+        }
+
+        [Test]
+        public void PerformanceQaOutlineOverrideDoesNotPersistOverUserPreference()
+        {
+            PlayerPrefs.SetInt("quest_avatar_outline_enabled_v1", 1);
+            PlayerPrefs.Save();
+            serviceObject = new GameObject("Outline QA Service");
+            var outline = serviceObject.AddComponent<AvatarOutlineController>();
+
+            var setEnabledForQa = typeof(AvatarOutlineController).GetMethod(
+                "SetEnabledForQa",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(setEnabledForQa, Is.Not.Null);
+            setEnabledForQa.Invoke(outline, new object[] { false });
+
+            Assert.That(outline.OutlineEnabled, Is.False);
+            Assert.That(
+                PlayerPrefs.GetInt("quest_avatar_outline_enabled_v1"),
+                Is.EqualTo(1));
         }
     }
 }

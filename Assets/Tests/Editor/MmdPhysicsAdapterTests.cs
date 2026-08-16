@@ -118,6 +118,26 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PerformancePolicyCanRemoveHeavyModelReinforcementOnly()
+        {
+            try
+            {
+                MMDPhysicsManager.ConfigureRuntimeQuality(60, 2, 0);
+
+                Assert.That(
+                    MMDPhysicsManager.ResolveLockedTranslationReinforcement(43),
+                    Is.EqualTo(2));
+                Assert.That(
+                    MMDPhysicsManager.ResolveLockedTranslationReinforcement(138),
+                    Is.Zero);
+            }
+            finally
+            {
+                MMDPhysicsManager.ConfigureRuntimeQuality(120, 4, 2);
+            }
+        }
+
+        [Test]
         public void ExternalHandProbeIsInactiveOutsideAvatarBroadphase()
         {
             var bounds = new Bounds(Vector3.zero, Vector3.one);
@@ -446,6 +466,51 @@ namespace QuestMmdPlayer.Tests
                     out _,
                     out _,
                     out _));
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void PerformanceQaCanDisableContactWithoutHidingTrackedHands()
+        {
+            var root = new GameObject("HandContactQaToggleTest");
+            try
+            {
+                var hands = root.AddComponent<QuestTrackedHandVisualizer>();
+                var adapter = root.AddComponent<AvatarMmdPhysicsAdapter>();
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var setEvaluation = typeof(QuestTrackedHandVisualizer).GetMethod(
+                    "SetContactEvaluationEnabledForQa",
+                    flags);
+                var evaluationEnabled = typeof(QuestTrackedHandVisualizer).GetProperty(
+                    "ContactEvaluationEnabled",
+                    flags);
+                var setRuntimeContact = typeof(AvatarMmdPhysicsAdapter).GetMethod(
+                    "SetRuntimeContactEnabledForQa",
+                    flags);
+                var runtimeContactEnabled = typeof(AvatarMmdPhysicsAdapter).GetProperty(
+                    "RuntimeContactEnabled",
+                    flags);
+                Assert.That(setEvaluation, Is.Not.Null);
+                Assert.That(evaluationEnabled, Is.Not.Null);
+                Assert.That(setRuntimeContact, Is.Not.Null);
+                Assert.That(runtimeContactEnabled, Is.Not.Null);
+
+                setEvaluation.Invoke(hands, new object[] { false });
+                setRuntimeContact.Invoke(adapter, new object[] { false });
+
+                Assert.That(hands.HandsVisible, Is.True);
+                Assert.That(evaluationEnabled.GetValue(hands), Is.False);
+                Assert.That(runtimeContactEnabled.GetValue(adapter), Is.False);
+                Assert.That(adapter.ActiveProbeCount, Is.Zero);
+
+                setEvaluation.Invoke(hands, new object[] { true });
+                setRuntimeContact.Invoke(adapter, new object[] { true });
+                Assert.That(evaluationEnabled.GetValue(hands), Is.True);
+                Assert.That(runtimeContactEnabled.GetValue(adapter), Is.True);
             }
             finally
             {

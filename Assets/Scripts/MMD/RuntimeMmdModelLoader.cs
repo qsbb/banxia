@@ -179,6 +179,15 @@ namespace QuestMmdPlayer
         public string SavedModelRelativePath =>
             PlayerPrefs.GetString(SelectedModelRelativePreference, string.Empty);
 
+        internal void RestoreSelectedModelPreferencesForQa(
+            string savedPath,
+            string savedRelativePath)
+        {
+            RestorePreference(SelectedModelPreference, savedPath);
+            RestorePreference(SelectedModelRelativePreference, savedRelativePath);
+            PlayerPrefs.Save();
+        }
+
         public async Task<bool> RestoreLastModelAsync()
         {
             var restored = false;
@@ -1064,6 +1073,16 @@ namespace QuestMmdPlayer
                 SelectedModelRelativePreference,
                 ExtractModelRelativePath(modelsRoot, pmxPath));
             PlayerPrefs.Save();
+        }
+
+        private static void RestorePreference(string key, string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                PlayerPrefs.DeleteKey(key);
+                return;
+            }
+            PlayerPrefs.SetString(key, value);
         }
 
         private static bool IsPathWithin(string root, string path)
