@@ -17,6 +17,60 @@ namespace QuestMmdPlayer.Tests
             Assert.That(CompanionWorldMenu.ClampQaIndex(requested, count), Is.EqualTo(expected));
         }
 
+        [Test]
+        public void DebugAutoScrollPersistsAndManualPagingDisablesIt()
+        {
+            const string preferenceKey = "Banxia.Debug.AutoScroll";
+            var hadPreference = PlayerPrefs.HasKey(preferenceKey);
+            var previousPreference = PlayerPrefs.GetInt(preferenceKey, 1);
+            var menuObject = new GameObject("Debug auto-scroll persistence test");
+            try
+            {
+                var menu = menuObject.AddComponent<CompanionWorldMenu>();
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var autoScroll = typeof(CompanionWorldMenu).GetField(
+                    "debugAutoScroll",
+                    flags);
+                var timelineOffset = typeof(CompanionWorldMenu).GetField(
+                    "debugTimelineOffset",
+                    flags);
+                var toggle = typeof(CompanionWorldMenu).GetMethod(
+                    "ToggleDebugAutoScroll",
+                    flags);
+                var scroll = typeof(CompanionWorldMenu).GetMethod(
+                    "ScrollDebugTimeline",
+                    flags);
+                Assert.That(autoScroll, Is.Not.Null);
+                Assert.That(timelineOffset, Is.Not.Null);
+                Assert.That(toggle, Is.Not.Null);
+                Assert.That(scroll, Is.Not.Null);
+
+                autoScroll.SetValue(menu, false);
+                timelineOffset.SetValue(menu, 4);
+                toggle.Invoke(menu, null);
+                Assert.That((bool)autoScroll.GetValue(menu), Is.True);
+                Assert.That((int)timelineOffset.GetValue(menu), Is.Zero);
+                Assert.That(PlayerPrefs.GetInt(preferenceKey), Is.EqualTo(1));
+
+                scroll.Invoke(menu, new object[] { 1 });
+                Assert.That((bool)autoScroll.GetValue(menu), Is.False);
+                Assert.That(PlayerPrefs.GetInt(preferenceKey), Is.Zero);
+            }
+            finally
+            {
+                Object.DestroyImmediate(menuObject);
+                if (hadPreference)
+                {
+                    PlayerPrefs.SetInt(preferenceKey, previousPreference);
+                }
+                else
+                {
+                    PlayerPrefs.DeleteKey(preferenceKey);
+                }
+                PlayerPrefs.Save();
+            }
+        }
+
         [TestCase(-1, 10, 30, 10)]
         [TestCase(0, 10, 30, 10)]
         [TestCase(12, 10, 30, 12)]

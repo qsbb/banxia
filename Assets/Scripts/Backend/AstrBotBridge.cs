@@ -1075,8 +1075,11 @@ namespace QuestMmdPlayer
                         (Succeeded(request) ? "（成功）" : "（失败）"));
                 }
                 var succeeded = Succeeded(request);
-                if (!string.Equals(endpoint, "audio/chunk", StringComparison.Ordinal) ||
-                    sequence == 0 || !succeeded || elapsedMs >= 250)
+                if (ShouldRecordAudioRequestStage(
+                    endpoint,
+                    sequence,
+                    succeeded,
+                    elapsedMs))
                 {
                     RecordStage(
                         "audio_upload",
@@ -1143,6 +1146,18 @@ namespace QuestMmdPlayer
                 offset += chunk.Length;
             }
             return merged;
+        }
+
+        public static bool ShouldRecordAudioRequestStage(
+            string endpoint,
+            int sequence,
+            bool succeeded,
+            int elapsedMs)
+        {
+            return !string.Equals(endpoint, "audio/chunk", StringComparison.Ordinal) ||
+                sequence == 0 ||
+                !succeeded ||
+                elapsedMs >= 250;
         }
 
         private void CancelAudioUpload()

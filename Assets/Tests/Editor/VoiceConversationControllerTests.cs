@@ -1,6 +1,9 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
+using System.IO;
 using NUnit.Framework;
+using UMT;
 using UnityEngine;
 
 namespace QuestMmdPlayer.Tests
@@ -390,6 +393,28 @@ namespace QuestMmdPlayer.Tests
             Assert.That(chunks.Count, Is.EqualTo(1));
         }
 
+        [TestCase("turn/start", 0, true, 1, true)]
+        [TestCase("audio/end", 20, true, 1, true)]
+        [TestCase("audio/chunk", 0, true, 1, true)]
+        [TestCase("audio/chunk", 1, false, 1, true)]
+        [TestCase("audio/chunk", 1, true, 249, false)]
+        [TestCase("audio/chunk", 1, true, 250, true)]
+        public void AudioUploadDiagnosticsKeepOnlyFirstSlowFailedAndTerminalRequests(
+            string endpoint,
+            int sequence,
+            bool succeeded,
+            int elapsedMs,
+            bool expected)
+        {
+            Assert.That(
+                AstrBotBridge.ShouldRecordAudioRequestStage(
+                    endpoint,
+                    sequence,
+                    succeeded,
+                    elapsedMs),
+                Is.EqualTo(expected));
+        }
+
         [Test]
         public void SilenceTimeoutWaitsForSpeechThenUsesTrailingSilence()
         {
@@ -710,6 +735,55 @@ namespace QuestMmdPlayer.Tests
             Assert.That(AvatarConversationPresenter.GetVisemeGroup("あ2"), Is.EqualTo(-1));
             Assert.That(AvatarConversationPresenter.GetVisemeGroup("口上"), Is.EqualTo(-1));
             Assert.That(AvatarConversationPresenter.GetVisemeGroup("笑い"), Is.EqualTo(-1));
+        }
+
+        [Test]
+        public void OptionalRealForestBerryPmxMapsExactlyOneMorphPerCanonicalVowel()
+        {
+            var pmxPath = Environment.GetEnvironmentVariable(
+                "BANXIA_TEST_FOREST_BERRY_PMX");
+            if (string.IsNullOrWhiteSpace(pmxPath) || !File.Exists(pmxPath))
+            {
+                Assert.Ignore(
+                    "BANXIA_TEST_FOREST_BERRY_PMX is not configured for this run.");
+            }
+
+            PMXModel model = null;
+            try
+            {
+                using (var stream = File.OpenRead(pmxPath))
+                {
+                    model = PMXReader.Read(stream, true);
+                }
+                var groups = new HashSet<int>();
+                var accepted = 0;
+                for (var index = 0; index < model.morphs.Length; index++)
+                {
+                    var morph = model.morphs[index];
+                    if (morph.type != PMXMorph.Type.Vertex)
+                    {
+                        continue;
+                    }
+                    var group = AvatarConversationPresenter.GetVisemeGroup(
+                        morph.originalName.ToString());
+                    if (group < 0)
+                    {
+                        continue;
+                    }
+                    accepted++;
+                    groups.Add(group);
+                }
+
+                Assert.That(accepted, Is.EqualTo(5));
+                Assert.That(groups, Is.EquivalentTo(new[] { 0, 1, 2, 3, 4 }));
+            }
+            finally
+            {
+                if (model != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(model);
+                }
+            }
         }
 
         [Test]
