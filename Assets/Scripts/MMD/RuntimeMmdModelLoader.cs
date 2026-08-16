@@ -70,6 +70,7 @@ namespace QuestMmdPlayer
         private IReadOnlyList<RuntimeMmdModelInfo> installedModelCache;
         private float nextParsedCacheTrimAt;
         private bool restoreStarted;
+        private int loadMetricsStartFrame = int.MaxValue;
 
         private sealed class ParsedModelCacheEntry
         {
@@ -123,7 +124,7 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
-            if (IsLoading)
+            if (ShouldCountLoadFrame(IsLoading, Time.frameCount, loadMetricsStartFrame))
             {
                 LastLoadFrameCount++;
                 var frameMilliseconds = Mathf.Max(0f, Time.unscaledDeltaTime * 1000f);
@@ -744,6 +745,7 @@ namespace QuestMmdPlayer
             LastLoadFrameCount = 0;
             LastLoadLongFrameCount = 0;
             LastLoadMaximumFrameMilliseconds = 0f;
+            loadMetricsStartFrame = int.MaxValue;
             var loadStartedAt = Time.realtimeSinceStartup;
             var displayName = ResolveDisplayName(pmxPath);
             var resolvedTextureRoot = string.IsNullOrWhiteSpace(textureBaseDirectory)
@@ -758,6 +760,13 @@ namespace QuestMmdPlayer
             GameObject importedAvatarHost = null;
             try
             {
+                // Startup model restoration begins before the first rendered
+                // frame. Cross one real player-loop boundary before doing PMX
+                // work so OpenXR/application startup time is not attributed to
+                // the model, and so the first visible frame can be submitted.
+                await new UMTFrameBudget(0d).YieldIfNeeded();
+                token.ThrowIfCancellationRequested();
+                loadMetricsStartFrame = Time.frameCount;
                 importedResult = await ImportAsync(pmxPath, textureBaseDirectory, token);
                 token.ThrowIfCancellationRequested();
 
@@ -833,6 +842,7 @@ namespace QuestMmdPlayer
                 if (generation == loadGeneration)
                 {
                     IsLoading = false;
+                    loadMetricsStartFrame = int.MaxValue;
                 }
                 if (ReferenceEquals(loadCancellation, currentCancellation))
                 {
@@ -840,6 +850,14 @@ namespace QuestMmdPlayer
                 }
                 currentCancellation.Dispose();
             }
+        }
+
+        public static bool ShouldCountLoadFrame(
+            bool isLoading,
+            int currentFrame,
+            int measurementStartFrame)
+        {
+            return isLoading && currentFrame > measurementStartFrame;
         }
 
         public void CancelLoad()

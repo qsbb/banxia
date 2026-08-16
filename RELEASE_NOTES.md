@@ -2,7 +2,7 @@
 
 - 森林莓果等重物理模型默认使用独立的平衡物理档：72Hz/2 子步、单份锁定平移强化，并保留逐帧手部接触；画质和 MMD 物理可分别手动选择。
 - 未佩戴或失焦时暂停 Bullet 并排除失真样本；性能页增加 5/30 秒窗口、OpenXR 指标及骨骼/IK、Bullet、回写、SDEF、手部接触和描边提交耗时。
-- PMX 导入在 Unity 2022 上改用真实下一帧调度，避免 `Task.Yield` 在同一 PlayerLoop 内继续执行造成集中长帧。
+- PMX 导入在 Unity 2022 上改用真实下一帧调度，并在冷启动恢复模型前先提交首帧，避免 `Task.Yield` 同帧续跑及 OpenXR 启动时间被计入模型长帧。
 - 描边改为复用原 SkinnedMeshRenderer 的 URP 额外 Pass，不再复制渲染器或逐帧同步 Morph。
 - 动作协议支持受约束的 `method / parameters / transition / source`、客户端能力协商、自然下蹲和完整执行回执。
 

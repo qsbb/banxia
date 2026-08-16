@@ -532,6 +532,23 @@ namespace QuestMmdPlayer.Tests
             }
         }
 
+        [Test]
+        public void LoadFrameMetricsBeginAfterThePrimingFrame()
+        {
+            Assert.That(
+                RuntimeMmdModelLoader.ShouldCountLoadFrame(true, 40, int.MaxValue),
+                Is.False);
+            Assert.That(
+                RuntimeMmdModelLoader.ShouldCountLoadFrame(true, 40, 40),
+                Is.False);
+            Assert.That(
+                RuntimeMmdModelLoader.ShouldCountLoadFrame(true, 41, 40),
+                Is.True);
+            Assert.That(
+                RuntimeMmdModelLoader.ShouldCountLoadFrame(false, 41, 40),
+                Is.False);
+        }
+
         private static IReadOnlyList<RuntimeMmdModelInfo> DiscoverInstalledModels(string root)
         {
             var method = typeof(RuntimeMmdModelLoader).GetMethod(
