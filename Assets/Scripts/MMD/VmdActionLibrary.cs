@@ -487,6 +487,7 @@ namespace QuestMmdPlayer
         public int LastPrepareFacialConversionMilliseconds { get; private set; } = -1;
         public int LastPrepareBindingMilliseconds { get; private set; } = -1;
         public int LastPrepareYieldCount { get; private set; }
+        public float LastPrepareFrameBudgetMilliseconds { get; private set; } = -1f;
         public bool LastPrepareSuspendedLivePhysics { get; private set; }
         public bool IsPrepared(string actionId) => !string.IsNullOrEmpty(actionId) && preparedActions.ContainsKey(actionId);
 
@@ -752,6 +753,7 @@ namespace QuestMmdPlayer
             LastPrepareFacialConversionMilliseconds = -1;
             LastPrepareBindingMilliseconds = -1;
             LastPrepareYieldCount = 0;
+            LastPrepareFrameBudgetMilliseconds = -1f;
             LastPrepareSuspendedLivePhysics = false;
             await conversionGate.WaitAsync();
             try
@@ -797,7 +799,16 @@ namespace QuestMmdPlayer
                     }
 
                     ProgressChanged?.Invoke("正在读取 " + info.DisplayName);
-                    preparationBudget = new UMTFrameBudget(frameBudgetMilliseconds);
+                    LastPrepareFrameBudgetMilliseconds = SelectPreparationFrameBudget(
+                        frameBudgetMilliseconds,
+                        requestModel == null || requestModel.rigidBodies == null
+                            ? 0
+                            : requestModel.rigidBodies.Length,
+                        requestModel == null || requestModel.joints == null
+                            ? 0
+                            : requestModel.joints.Length);
+                    preparationBudget = new UMTFrameBudget(
+                        LastPrepareFrameBudgetMilliseconds);
                     var stageStartedAt = Time.realtimeSinceStartup;
                     using (var stream = new FileStream(source.motionPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                     {
@@ -918,6 +929,7 @@ namespace QuestMmdPlayer
                     " motion_convert_ms=" + LastPrepareMotionConversionMilliseconds +
                     " facial_convert_ms=" + LastPrepareFacialConversionMilliseconds +
                     " binding_ms=" + LastPrepareBindingMilliseconds +
+                    " frame_budget_ms=" + LastPrepareFrameBudgetMilliseconds.ToString("F2") +
                     " live_physics_paused=" + LastPrepareSuspendedLivePhysics +
                     " elapsed_ms=" + Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)),
                     this);
@@ -986,6 +998,28 @@ namespace QuestMmdPlayer
                 bakePhysicsToFK = true,
                 physicsWarmUpDuration = Mathf.Clamp(warmUpDuration, .05f, 1.2f)
             };
+        }
+
+        public static float SelectPreparationFrameBudget(
+            float configuredMilliseconds,
+            int rigidBodyCount,
+            int jointCount)
+        {
+            var configured = Mathf.Clamp(configuredMilliseconds, .5f, 8f);
+            var bodies = Mathf.Max(0, rigidBodyCount);
+            var joints = Mathf.Max(0, jointCount);
+
+            // A joint-heavy avatar still runs its normal render/skin workload
+            // while the converter bakes every motion frame on the main thread.
+            // Keep those slices below one millisecond so the bake does not
+            // consume the remaining headroom of a 72 Hz XR frame. Typical PMX
+            // avatars retain the configured budget and therefore their current
+            // first-play latency.
+            if (bodies >= 90 || joints >= 100 || bodies + joints >= 200)
+            {
+                return Mathf.Min(configured, .8f);
+            }
+            return configured;
         }
 
         private static VMDAnimationClipOptions CreateFacialConversionOptions(float frameRate)

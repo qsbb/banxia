@@ -25,7 +25,10 @@ namespace QuestMmdPlayer
         private GameObject menuRoot;
         private Text statusText;
         private Text debugLogText;
+        private Text debugScrollStatusText;
         private bool debugMode;
+        private bool debugAutoScroll = true;
+        private int debugTimelineOffset;
         private Material pointerMaterial;
         private Font font;
         private GameObject mainLayer;
@@ -83,6 +86,8 @@ namespace QuestMmdPlayer
         private Transform focusedInputLayer;
         private bool pointerReleaseRequired;
         private int pointerPressFrame = -1;
+        private const string DebugAutoScrollPreferenceKey = "Banxia.Debug.AutoScroll";
+        private const int DebugTimelinePageSize = 9;
 
         private static readonly InputFeatureUsage<bool> MenuButtonAlias = new InputFeatureUsage<bool>("MenuButton");
         private static readonly InputFeatureUsage<bool> MenuButtonLowerAlias = new InputFeatureUsage<bool>("menuButton");
@@ -113,6 +118,8 @@ namespace QuestMmdPlayer
                 owner.FileImport.StatusChanged -= HandleFileImportStatusChanged;
             }
             owner = bootstrap;
+            debugAutoScroll = PlayerPrefs.GetInt(DebugAutoScrollPreferenceKey, 1) != 0;
+            if (debugAutoScroll) debugTimelineOffset = 0;
             if (owner?.FileImport != null)
             {
                 owner.FileImport.StatusChanged += HandleFileImportStatusChanged;
@@ -755,9 +762,12 @@ namespace QuestMmdPlayer
             AddInputBlocker(background.gameObject, new Vector2(440f, 680f), debugLayer.transform);
             CreateImage("Accent", debugLayer.transform, new Vector2(0f, 335f), new Vector2(440f, 10f), new Color(.25f, .86f, .66f, 1f));
             CreateText("运行诊断", debugLayer.transform, new Vector2(0f, 292f), new Vector2(400f, 44f), 24, FontStyle.Bold, Color.white);
-            CreateText("实时刷新  ·  主菜单可同时操作", debugLayer.transform, new Vector2(0f, 254f), new Vector2(400f, 26f), 12, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
-            debugLogText = CreateText("", debugLayer.transform, new Vector2(0f, 2f), new Vector2(410f, 454f), 11, FontStyle.Normal, new Color(.66f, .95f, .78f, 1f));
+            debugScrollStatusText = CreateText("", debugLayer.transform, new Vector2(0f, 254f), new Vector2(400f, 26f), 12, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
+            debugLogText = CreateText("", debugLayer.transform, new Vector2(0f, 18f), new Vector2(410f, 420f), 11, FontStyle.Normal, new Color(.66f, .95f, .78f, 1f));
             debugLogText.alignment = TextAnchor.UpperLeft;
+            CreateButton("上翻", -132f, -232f, 120f, 42f, () => ScrollDebugTimeline(DebugTimelinePageSize), debugLayer.transform);
+            CreateButton("下翻", 0f, -232f, 120f, 42f, () => ScrollDebugTimeline(-DebugTimelinePageSize), debugLayer.transform);
+            CreateButton("自动滚动", 132f, -232f, 120f, 42f, ToggleDebugAutoScroll, debugLayer.transform);
             CreateButton("清空记录", -132f, -282f, 120f, 48f, ClearDebugLog, debugLayer.transform);
             CreateButton("收起", 0f, -282f, 120f, 48f, ToggleDebugMode, debugLayer.transform);
             CreateButton("关闭菜单", 132f, -282f, 120f, 48f, Hide, debugLayer.transform);
@@ -1757,6 +1767,7 @@ namespace QuestMmdPlayer
             }
             debugLayer.SetActive(true);
             debugMode = true;
+            if (debugAutoScroll) debugTimelineOffset = 0;
             owner?.DebugLog?.SetDisplayEnabled(true);
             FocusInputLayer(primaryFocus);
             Physics.SyncTransforms();
@@ -1777,6 +1788,31 @@ namespace QuestMmdPlayer
         private void ClearDebugLog()
         {
             owner?.DebugLog?.Clear();
+            debugTimelineOffset = 0;
+            UpdateDebugLogText();
+        }
+
+        private void ToggleDebugAutoScroll()
+        {
+            debugAutoScroll = !debugAutoScroll;
+            if (debugAutoScroll) debugTimelineOffset = 0;
+            PlayerPrefs.SetInt(DebugAutoScrollPreferenceKey, debugAutoScroll ? 1 : 0);
+            PlayerPrefs.Save();
+            UpdateDebugLogText();
+        }
+
+        private void ScrollDebugTimeline(int delta)
+        {
+            debugAutoScroll = false;
+            var maximumOffset = owner?.DebugLog == null
+                ? 0
+                : Mathf.Max(0, owner.DebugLog.StageCount - 1);
+            debugTimelineOffset = Mathf.Clamp(
+                debugTimelineOffset + delta,
+                0,
+                maximumOffset);
+            PlayerPrefs.SetInt(DebugAutoScrollPreferenceKey, 0);
+            PlayerPrefs.Save();
             UpdateDebugLogText();
         }
 
@@ -2510,9 +2546,16 @@ namespace QuestMmdPlayer
             var rootCause = owner.DebugLog == null
                 ? "诊断组件不可用"
                 : owner.DebugLog.CurrentRootCause;
+            if (debugAutoScroll) debugTimelineOffset = 0;
             var timeline = owner.DebugLog == null
                 ? string.Empty
-                : owner.DebugLog.GetRecentTimelineText(11);
+                : owner.DebugLog.GetTimelineText(DebugTimelinePageSize, debugTimelineOffset);
+            if (debugScrollStatusText != null)
+            {
+                debugScrollStatusText.text = debugAutoScroll
+                    ? "自动滚动：开  ·  主菜单可同时操作"
+                    : "自动滚动：关  ·  已向前翻 " + debugTimelineOffset + " 条";
+            }
             debugLogText.text =
                 $"当前根因：{rootCause}\n" +
                 $"链路：{backend.ChainStatus}，连接={OnOff(backend.Connected)}，等待回复={OnOff(conversation.AwaitingBackendResponse)}{error}\n" +

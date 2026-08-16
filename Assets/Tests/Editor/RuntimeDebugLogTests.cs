@@ -64,6 +64,23 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void TimelinePagingCanPauseAwayFromNewestEntries()
+        {
+            for (var index = 0; index < 6; index++)
+            {
+                diagnostics.RecordStage("transport", "ok", "page_" + index);
+            }
+
+            var newest = diagnostics.GetTimelineText(2, 0);
+            var previous = diagnostics.GetTimelineText(2, 2);
+
+            Assert.That(newest, Does.Contain("page_5"));
+            Assert.That(newest, Does.Not.Contain("page_3"));
+            Assert.That(previous, Does.Contain("page_3"));
+            Assert.That(previous, Does.Not.Contain("page_5"));
+        }
+
+        [Test]
         public void TraceLabelsAndQueueMetricsStayShortAndVisible()
         {
             const string rawTurnId = "voice-turn-with-sensitive-session-context";

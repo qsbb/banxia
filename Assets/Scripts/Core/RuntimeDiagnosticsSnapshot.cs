@@ -423,13 +423,22 @@ namespace QuestMmdPlayer
         public bool FullBodyMotionBusy { get; }
         public bool ConversationPresentationActive { get; }
         public bool SemanticContactOwnsInteraction { get; }
+        public bool MouthPresenterAvailable { get; }
+        public int MatchedVisemeCount { get; }
+        public bool SpeechTimelineActive { get; }
+        public float AudibleRms { get; }
+        public float SmoothedMouthAmount { get; }
+        public float VisibleMouthAmount { get; }
+        public float TimelinePositionMs { get; }
+        public float TimelinePeak { get; }
 
         internal MotionDiagnostics(
             AvatarController avatar,
             AvatarNaturalIdlePose idle,
             VmdActionLibrary vmd,
             ConversationController conversation,
-            AvatarHumanInteraction human)
+            AvatarHumanInteraction human,
+            AvatarConversationPresenter presenter)
         {
             AvatarAvailable = avatar != null;
             AvatarActionPlaying = avatar != null && avatar.IsPlaying;
@@ -452,6 +461,14 @@ namespace QuestMmdPlayer
             FullBodyMotionBusy = AvatarActionPlaying || VmdLoading || VmdPlaying || HoldingEndPose || BlendingOut;
             ConversationPresentationActive = conversation != null && conversation.State != ConversationState.Idle;
             SemanticContactOwnsInteraction = human != null && human.HasSemanticContact;
+            MouthPresenterAvailable = presenter != null;
+            MatchedVisemeCount = presenter == null ? 0 : Mathf.Max(0, presenter.MatchedVisemeCount);
+            SpeechTimelineActive = presenter != null && presenter.SpeechTimelineActive;
+            AudibleRms = presenter == null ? 0f : Mathf.Max(0f, presenter.LastAudibleRms);
+            SmoothedMouthAmount = presenter == null ? 0f : Mathf.Clamp01(presenter.SmoothedMouthAmount);
+            VisibleMouthAmount = presenter == null ? 0f : Mathf.Clamp01(presenter.LastVisibleMouthAmount);
+            TimelinePositionMs = presenter == null ? 0f : Mathf.Max(0f, presenter.LastTimelinePositionMs);
+            TimelinePeak = presenter == null ? 0f : Mathf.Clamp01(presenter.LastTimelinePeak);
         }
     }
 
@@ -685,7 +702,8 @@ namespace QuestMmdPlayer
                     owner == null ? null : owner.IdlePose,
                     owner == null ? null : owner.VmdActions,
                     conversation,
-                    owner == null ? null : owner.HumanInteraction),
+                    owner == null ? null : owner.HumanInteraction,
+                    conversation == null ? null : conversation.GetComponent<AvatarConversationPresenter>()),
                 new ModelLoadDiagnostics(owner == null ? null : owner.ModelLoader),
                 new PerformanceDiagnostics(owner == null ? null : owner.Performance));
         }

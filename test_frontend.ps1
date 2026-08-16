@@ -135,6 +135,8 @@ $sourceChecks = @{
 }
 foreach ($entry in $sourceChecks.GetEnumerator()) { CheckSource $entry.Key $entry.Value }
 
+CheckSource "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" @("ResolveRuntimeUmtResources", "Resources.Load", "umtResources = ResolveRuntimeUmtResources()")
+
 $bridgeSource = Get-Content -LiteralPath (Join-Path $projectRoot "Assets/Scripts/Backend/AstrBotBridge.cs") -Raw
 if ($bridgeSource.Contains('SetRequestHeader("Authorization", "ApiKey "')) { Pass "AstrBot API-key authentication scheme" }
 else { Fail "AstrBot API-key authentication scheme missing" }

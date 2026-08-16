@@ -268,6 +268,24 @@ namespace QuestMmdPlayer.Tests
             }
         }
 
+        [TestCase(2f, 111, 138, .8f)]
+        [TestCase(2f, 62, 43, 2f)]
+        [TestCase(.6f, 111, 138, .6f)]
+        [TestCase(20f, 0, 0, 8f)]
+        public void HeavyAvatarPreparationUsesASeparateBoundedFrameSlice(
+            float configured,
+            int rigidBodies,
+            int joints,
+            float expected)
+        {
+            Assert.That(
+                VmdActionLibrary.SelectPreparationFrameBudget(
+                    configured,
+                    rigidBodies,
+                    joints),
+                Is.EqualTo(expected).Within(.001f));
+        }
+
         [Test]
         public void FacialTrackConversionDoesNotRebakeBodyPhysics()
         {

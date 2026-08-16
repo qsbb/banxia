@@ -289,13 +289,25 @@ namespace QuestMmdPlayer
             var displays = new List<XRDisplaySubsystem>();
             var requestAccepted = false;
             var lastReportedRefreshRate = 0f;
-            var deadline = Time.unscaledTime + 10f;
+            // OpenXR can expose the display subsystem after the first scene has
+            // already been enabled. Keep a short fast-retry window for normal
+            // startup, then retry at a low cadence instead of silently leaving
+            // the runtime at its default 60 Hz forever.
+            var initialDeadline = Time.unscaledTime + 10f;
             var nextRequestAt = 0f;
+            var nextPollAt = Time.unscaledTime;
             ApplyFramePacing(PreferredRefreshRate);
-            while (Time.unscaledTime < deadline)
+            while (true)
             {
+                if (Time.unscaledTime < nextPollAt)
+                {
+                    yield return new WaitForSecondsRealtime(.5f);
+                    continue;
+                }
+
                 displays.Clear();
                 SubsystemManager.GetInstances(displays);
+                var foundRunningDisplay = false;
                 for (var index = 0; index < displays.Count; index++)
                 {
                     var display = displays[index];
@@ -303,6 +315,7 @@ namespace QuestMmdPlayer
                     {
                         continue;
                     }
+                    foundRunningDisplay = true;
                     if (!requestAccepted && Time.unscaledTime >= nextRequestAt)
                     {
                         requestAccepted = display.TryRequestDisplayRefreshRate(PreferredRefreshRate);
@@ -332,15 +345,28 @@ namespace QuestMmdPlayer
                         : "运行时暂未接受 " + PreferredRefreshRate.ToString("F0") +
                           "Hz 请求 · 目标 " + ApplicationTargetFrameRate + "FPS";
                 }
-                yield return null;
+
+                if (Time.unscaledTime >= initialDeadline)
+                {
+                    RefreshRateStatus = lastReportedRefreshRate > 0f
+                        ? "运行时未切换到 " + PreferredRefreshRate.ToString("F0") +
+                          "Hz · 当前 " + lastReportedRefreshRate.ToString("F0") +
+                          "Hz · 30秒后重试 · 目标 " + ApplicationTargetFrameRate + "FPS"
+                        : foundRunningDisplay
+                            ? "运行时未切换到 " + PreferredRefreshRate.ToString("F0") +
+                              "Hz · 30秒后重试 · 目标 " + ApplicationTargetFrameRate + "FPS"
+                            : "XR 显示器暂不可用 · 30秒后重试 · 目标 " + ApplicationTargetFrameRate + "FPS";
+                    requestAccepted = false;
+                    nextRequestAt = Time.unscaledTime + 30f;
+                    nextPollAt = nextRequestAt;
+                }
+                else
+                {
+                    nextPollAt = Time.unscaledTime + .5f;
+                }
+
+                yield return new WaitForSecondsRealtime(.5f);
             }
-            RefreshRateStatus = lastReportedRefreshRate > 0f
-                ? "运行时未切换到 " + PreferredRefreshRate.ToString("F0") +
-                  "Hz · 当前 " + lastReportedRefreshRate.ToString("F0") +
-                  "Hz · 目标 " + ApplicationTargetFrameRate + "FPS"
-                : "XR 显示器不可用";
-            ApplyFramePacing(PreferredRefreshRate);
-            refreshRateRequest = null;
         }
 
         private void ApplyFramePacing(float refreshRate)

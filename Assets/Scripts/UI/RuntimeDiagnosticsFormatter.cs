@@ -112,7 +112,15 @@ namespace QuestMmdPlayer
                 "/已准备" + motion.PreparedActionCount +
                 "\n缓存命中/未命中/淘汰" + motion.ActionCacheHits + "/" +
                 motion.ActionCacheMisses + "/" + motion.ActionCacheEvictions +
-                " · 准备" + prepare + " · 模型" + LoadPhaseName(model.Phase) + "/" + load;
+                " · 准备" + prepare + " · 模型" + LoadPhaseName(model.Phase) + "/" + load +
+                "\n口型：" + (motion.MouthPresenterAvailable ? "可用" : "不可用") +
+                " · 变形" + motion.MatchedVisemeCount +
+                " · RMS" + motion.AudibleRms.ToString("F4") +
+                " · 平滑" + motion.SmoothedMouthAmount.ToString("F2") +
+                " · 可见" + motion.VisibleMouthAmount.ToString("F2") +
+                " · 时间线" + (motion.SpeechTimelineActive ? "开" : "关") +
+                " " + motion.TimelinePositionMs.ToString("F0") + "ms/" +
+                motion.TimelinePeak.ToString("F2");
         }
 
         public static string FormatPerformanceSummary(PerformanceDiagnostics performance)

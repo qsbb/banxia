@@ -18,6 +18,9 @@ namespace QuestMmdPlayer
             public int Index;
             public float BaseWeight;
             public int Group;
+            public float LastSpeechWeight;
+            public float LastCompositeWeight;
+            public bool HasSpeechComposite;
         }
 
         private struct ExpressionMorph
@@ -27,6 +30,9 @@ namespace QuestMmdPlayer
             public string Name;
             public float BaseWeight;
             public float CurrentWeight;
+            public float LastExpressionWeight;
+            public float LastCompositeWeight;
+            public bool HasExpressionComposite;
         }
 
         private readonly List<Viseme> visemes = new List<Viseme>();
@@ -57,6 +63,10 @@ namespace QuestMmdPlayer
         private bool hasSmoothedHeadRotation;
         private bool mouthWasActive;
         private float smoothedMouthAmount;
+        private float lastAudibleRms;
+        private float lastVisibleMouthAmount;
+        private float lastTimelinePositionMs;
+        private float lastTimelinePeak;
         private int fallbackVisemeGroup = -1;
         private string targetEmotion = "neutral";
         private float targetEmotionIntensity;
@@ -67,13 +77,24 @@ namespace QuestMmdPlayer
         private bool activeTrackedActionStarted;
         private float activeTrackedActionAcceptedAt;
         private Coroutine timedActionCompletion;
+        private Coroutine pendingDanceExpiry;
+        private AvatarActionExecutionContext pendingDanceContext;
+        private bool pendingDanceRequest;
+        private bool pendingDanceSelectNext;
         private SpeechVisemeCue[] speechTimeline = Array.Empty<SpeechVisemeCue>();
         private bool speechTimelineMatchesAvatar;
+        private readonly float[] visemeInfluences = new float[5];
         [SerializeField, Range(1f, 12f)] private float expressionBlendSpeed = 6f;
         [SerializeField, Range(1f, 24f)] private float mouthAttackSpeed = 11f;
         [SerializeField, Range(1f, 24f)] private float mouthReleaseSpeed = 7f;
 
         public int MatchedVisemeCount => visemes.Count;
+        public float LastAudibleRms => lastAudibleRms;
+        public float SmoothedMouthAmount => smoothedMouthAmount;
+        public float LastVisibleMouthAmount => lastVisibleMouthAmount;
+        public float LastTimelinePositionMs => lastTimelinePositionMs;
+        public float LastTimelinePeak => lastTimelinePeak;
+        public bool SpeechTimelineActive => speechTimelineMatchesAvatar && speechTimeline.Length > 0;
         public string ManualExpression => manualExpression;
         public string Status => avatar == null
             ? "Waiting for avatar"
@@ -82,7 +103,10 @@ namespace QuestMmdPlayer
 
         public void Bind(AvatarController target, AvatarHumanInteraction human, Pcm16StreamAudioPlayer streamPlayer)
         {
-            if (activeTrackedAction != null)
+            var preservePendingDance = pendingDanceRequest &&
+                activeTrackedAction != null &&
+                ReferenceEquals(activeTrackedAction, pendingDanceContext);
+            if (activeTrackedAction != null && !preservePendingDance)
             {
                 EmitActionUpdate(
                     activeTrackedAction,
@@ -124,6 +148,10 @@ namespace QuestMmdPlayer
             lookAtMode = "none";
             mouthWasActive = false;
             smoothedMouthAmount = 0f;
+            lastAudibleRms = 0f;
+            lastVisibleMouthAmount = 0f;
+            lastTimelinePositionMs = 0f;
+            lastTimelinePeak = 0f;
             fallbackVisemeGroup = -1;
             ClearSpeechTimeline();
             behavior.Reset(Time.unscaledTime, UnityEngine.Random.value);
@@ -150,6 +178,7 @@ namespace QuestMmdPlayer
             }
             CacheVisemes();
             CacheExpressions();
+            FlushPendingDanceRequest();
             Debug.Log($"[ConversationPresenter] Bound mouth: visemes={visemes.Count}, expressions={expressions.Count}, jaw={(jaw == null ? "no" : "yes")}.", this);
         }
 
@@ -175,6 +204,24 @@ namespace QuestMmdPlayer
         {
             if (avatar == null)
             {
+                var earlyGesture = string.IsNullOrWhiteSpace(gesture)
+                    ? string.Empty
+                    : gesture.Trim().ToLowerInvariant();
+                if (executionContext != null &&
+                    (earlyGesture == "dance" || earlyGesture == "dance_next"))
+                {
+                    // The backend can beat asynchronous PMX binding by a few
+                    // frames. Preserve an explicit dance instead of turning
+                    // a transient bootstrap state into invalid_state.
+                    ActivateTrackedAction(executionContext);
+                    QueuePendingDanceRequest(earlyGesture == "dance_next", executionContext);
+                    Debug.Log(
+                        earlyGesture == "dance_next"
+                            ? "[ConversationPresenter] dance_waiting_model_next: avatar binding not ready."
+                            : "[ConversationPresenter] dance_waiting_model: avatar binding not ready.",
+                        this);
+                    return true;
+                }
                 ReportRejected(executionContext, "avatar_unavailable");
                 return false;
             }
@@ -288,6 +335,11 @@ namespace QuestMmdPlayer
                 if (acceptedGesture == "dance" || acceptedGesture == "dance_next")
                 {
                     ActivateTrackedAction(executionContext);
+                    if (executionContext != null && ShouldWaitForDanceBinding())
+                    {
+                        QueuePendingDanceRequest(acceptedGesture == "dance_next", executionContext);
+                        return true;
+                    }
                     _ = PlayRecommendedDance(acceptedGesture == "dance_next", executionContext);
                     return true;
                 }
@@ -474,6 +526,15 @@ namespace QuestMmdPlayer
             }
             else
             {
+                // The intent can arrive while the avatar bootstrap is still
+                // binding the model and its VMD library. Keep the explicit
+                // action alive until that binding completes instead of
+                // falling through to a silent no-op.
+                if (ShouldWaitForDanceBinding() && executionContext != null)
+                {
+                    QueuePendingDanceRequest(selectNext, executionContext);
+                    return;
+                }
                 diagnostics?.Record(
                     "AvatarAction",
                     vmdActions == null
@@ -487,6 +548,97 @@ namespace QuestMmdPlayer
             var fallbackPlayed = avatar != null &&
                 avatar.PlayActionFromSource("dance", AvatarActionSource.Backend);
             if (!fallbackPlayed) ReportRejected(executionContext, "asset_missing");
+        }
+
+        private void QueuePendingDanceRequest(
+            bool selectNext,
+            AvatarActionExecutionContext executionContext)
+        {
+            if (executionContext == null)
+            {
+                return;
+            }
+            pendingDanceRequest = true;
+            pendingDanceSelectNext = selectNext;
+            pendingDanceContext = executionContext;
+            diagnostics?.Record(
+                "AvatarAction",
+                selectNext
+                    ? "舞蹈请求等待角色模型绑定：下一支导入舞蹈"
+                    : "舞蹈请求等待角色模型绑定：导入舞蹈");
+            diagnostics?.RecordStage(
+                "avatar_action",
+                "queued",
+                selectNext ? "dance_waiting_model_next" : "dance_waiting_model");
+            Debug.Log(
+                selectNext
+                    ? "[ConversationPresenter] dance_waiting_model_next: preserving action until model binding."
+                    : "[ConversationPresenter] dance_waiting_model: preserving action until model binding.",
+                this);
+            if (pendingDanceExpiry != null)
+            {
+                StopCoroutine(pendingDanceExpiry);
+            }
+            pendingDanceExpiry = StartCoroutine(ExpirePendingDanceRequest(
+                executionContext,
+                20f));
+        }
+
+        private System.Collections.IEnumerator ExpirePendingDanceRequest(
+            AvatarActionExecutionContext executionContext,
+            float timeoutSeconds)
+        {
+            yield return new WaitForSecondsRealtime(Mathf.Max(.1f, timeoutSeconds));
+            pendingDanceExpiry = null;
+            if (!pendingDanceRequest || !ReferenceEquals(pendingDanceContext, executionContext))
+            {
+                yield break;
+            }
+
+            pendingDanceRequest = false;
+            pendingDanceContext = null;
+            diagnostics?.RecordStage("avatar_action", "limited", "dance_model_bind_timeout");
+            ReportRejected(executionContext, "asset_missing");
+        }
+
+        private void FlushPendingDanceRequest()
+        {
+            if (!pendingDanceRequest || vmdActions == null || !vmdActions.BoundModel)
+            {
+                return;
+            }
+
+            var selectNext = pendingDanceSelectNext;
+            var context = pendingDanceContext;
+            pendingDanceRequest = false;
+            pendingDanceContext = null;
+            if (pendingDanceExpiry != null)
+            {
+                StopCoroutine(pendingDanceExpiry);
+                pendingDanceExpiry = null;
+            }
+
+            if (!IsTrackedActionCurrent(context))
+            {
+                diagnostics?.RecordStage("avatar_action", "skipped", "dance_waiting_model_stale");
+                return;
+            }
+
+            diagnostics?.RecordStage(
+                "avatar_action",
+                "processing",
+                selectNext ? "dance_model_bound_resume_next" : "dance_model_bound_resume");
+            Debug.Log(
+                selectNext
+                    ? "[ConversationPresenter] dance_model_bound_resume_next: starting imported dance."
+                    : "[ConversationPresenter] dance_model_bound_resume: starting imported dance.",
+                this);
+            _ = PlayRecommendedDance(selectNext, context);
+        }
+
+        private bool ShouldWaitForDanceBinding()
+        {
+            return vmdActions == null || !vmdActions.BoundModel || avatar == null;
         }
 
         public void InterruptTrackedAction(string turnId, string reasonCode = "user_interrupted")
@@ -714,6 +866,7 @@ namespace QuestMmdPlayer
             var speechLevel = state == ConversationState.Speaking && audioPlayer != null
                 ? audioPlayer.AudibleRms
                 : 0f;
+            lastAudibleRms = Mathf.Max(0f, speechLevel);
             ApplyMouth(speechLevel);
         }
 
@@ -971,8 +1124,12 @@ namespace QuestMmdPlayer
 
         private void ApplyMouth(float rms)
         {
+            lastAudibleRms = Mathf.Max(0f, rms);
             if (visemes.Count == 0 && jaw == null)
             {
+                lastVisibleMouthAmount = 0f;
+                lastTimelinePositionMs = 0f;
+                lastTimelinePeak = 0f;
                 return;
             }
 
@@ -991,6 +1148,9 @@ namespace QuestMmdPlayer
                 : 0f;
             var timelinePeak = useTimeline ? TimelinePeak(timelinePositionMs) : 1f;
             var visibleAmount = amount * timelinePeak;
+            lastTimelinePositionMs = timelinePositionMs;
+            lastTimelinePeak = timelinePeak;
+            lastVisibleMouthAmount = visibleAmount;
             if (visibleAmount <= .001f)
             {
                 if (mouthWasActive)
@@ -1003,14 +1163,30 @@ namespace QuestMmdPlayer
             }
 
             mouthWasActive = true;
+            var totalInfluence = BuildVisemeInfluences(useTimeline, timelinePositionMs);
             for (var i = 0; i < visemes.Count; i++)
             {
                 var viseme = visemes[i];
-                var influence = useTimeline
-                    ? TimelineInfluence(viseme.Group, timelinePositionMs)
-                    : viseme.Group == fallbackVisemeGroup ? 1f : 0f;
+                var influence = viseme.Group >= 0 && viseme.Group < visemeInfluences.Length
+                    ? NormalizeVisemeInfluence(visemeInfluences[viseme.Group], totalInfluence)
+                    : 0f;
                 var add = amount * influence * 68f;
-                viseme.Renderer.SetBlendShapeWeight(viseme.Index, Mathf.Clamp(viseme.BaseWeight + add, 0f, 100f));
+                if (viseme.Renderer != null)
+                {
+                    var current = viseme.Renderer.GetBlendShapeWeight(viseme.Index);
+                    var authored = ResolveMorphLayerBaseWeight(
+                        current,
+                        viseme.LastCompositeWeight,
+                        viseme.LastSpeechWeight,
+                        viseme.HasSpeechComposite,
+                        viseme.BaseWeight);
+                    var composite = ComposeMorphLayerWeight(authored, add);
+                    viseme.Renderer.SetBlendShapeWeight(viseme.Index, composite);
+                    viseme.LastSpeechWeight = Mathf.Max(0f, composite - authored);
+                    viseme.LastCompositeWeight = composite;
+                    viseme.HasSpeechComposite = add > .001f;
+                    visemes[i] = viseme;
+                }
             }
             // A blend-shape vowel already opens the mouth. Rotating a jaw bone
             // on top of it doubles the deformation on avatars that expose both.
@@ -1050,6 +1226,67 @@ namespace QuestMmdPlayer
                 }
             }
             return peak;
+        }
+
+        private float BuildVisemeInfluences(bool useTimeline, float positionMs)
+        {
+            Array.Clear(visemeInfluences, 0, visemeInfluences.Length);
+            if (useTimeline)
+            {
+                for (var group = 0; group < visemeInfluences.Length; group++)
+                {
+                    visemeInfluences[group] = TimelineInfluence(group, positionMs);
+                }
+            }
+            else if (fallbackVisemeGroup >= 0 && fallbackVisemeGroup < visemeInfluences.Length)
+            {
+                visemeInfluences[fallbackVisemeGroup] = 1f;
+            }
+
+            var total = 0f;
+            for (var group = 0; group < visemeInfluences.Length; group++)
+            {
+                total += Mathf.Max(0f, visemeInfluences[group]);
+            }
+            return total;
+        }
+
+        public static float NormalizeVisemeInfluence(float influence, float totalInfluence)
+        {
+            var value = Mathf.Max(0f, influence);
+            var total = Mathf.Max(0f, totalInfluence);
+            return total > 1f ? value / total : value;
+        }
+
+        public static float ResolveMorphLayerBaseWeight(
+            float currentWeight,
+            float previousCompositeWeight,
+            float previousContribution,
+            bool hasPreviousComposite,
+            float fallbackWeight = 0f)
+        {
+            var current = float.IsNaN(currentWeight) || float.IsInfinity(currentWeight)
+                ? Mathf.Clamp(fallbackWeight, 0f, 100f)
+                : Mathf.Clamp(currentWeight, 0f, 100f);
+            if (!hasPreviousComposite ||
+                Mathf.Abs(current - previousCompositeWeight) > .05f)
+            {
+                // An upstream owner (for example VMD facial animation) wrote a
+                // fresh value this frame. Compose on top of that authored pose.
+                return current;
+            }
+            return Mathf.Clamp(current - Mathf.Max(0f, previousContribution), 0f, 100f);
+        }
+
+        public static float ComposeMorphLayerWeight(float authoredWeight, float contribution)
+        {
+            var authored = float.IsNaN(authoredWeight) || float.IsInfinity(authoredWeight)
+                ? 0f
+                : authoredWeight;
+            var added = float.IsNaN(contribution) || float.IsInfinity(contribution)
+                ? 0f
+                : contribution;
+            return Mathf.Clamp(authored + Mathf.Max(0f, added), 0f, 100f);
         }
 
         public static float SpeechCueEnvelope(
@@ -1170,9 +1407,21 @@ namespace QuestMmdPlayer
                 expression.CurrentWeight = Mathf.MoveTowards(expression.CurrentWeight, target, step * 100f);
                 if (expression.Renderer != null)
                 {
-                    expression.Renderer.SetBlendShapeWeight(
-                        expression.Index,
-                        Mathf.Clamp(expression.BaseWeight + expression.CurrentWeight, 0f, 100f));
+                    var current = expression.Renderer.GetBlendShapeWeight(expression.Index);
+                    var authored = ResolveMorphLayerBaseWeight(
+                        current,
+                        expression.LastCompositeWeight,
+                        expression.LastExpressionWeight,
+                        expression.HasExpressionComposite,
+                        expression.BaseWeight);
+                    var composite = ComposeMorphLayerWeight(authored, expression.CurrentWeight);
+                    if (expression.CurrentWeight > .001f || expression.HasExpressionComposite)
+                    {
+                        expression.Renderer.SetBlendShapeWeight(expression.Index, composite);
+                    }
+                    expression.LastExpressionWeight = Mathf.Max(0f, composite - authored);
+                    expression.LastCompositeWeight = composite;
+                    expression.HasExpressionComposite = expression.CurrentWeight > .001f;
                 }
                 expressions[index] = expression;
             }
@@ -1185,8 +1434,23 @@ namespace QuestMmdPlayer
                 var expression = expressions[index];
                 if (expression.Renderer != null)
                 {
-                    expression.Renderer.SetBlendShapeWeight(expression.Index, expression.BaseWeight);
+                    var current = expression.Renderer.GetBlendShapeWeight(expression.Index);
+                    var authored = ResolveMorphLayerBaseWeight(
+                        current,
+                        expression.LastCompositeWeight,
+                        expression.LastExpressionWeight,
+                        expression.HasExpressionComposite,
+                        expression.BaseWeight);
+                    if (expression.HasExpressionComposite)
+                    {
+                        expression.Renderer.SetBlendShapeWeight(expression.Index, authored);
+                    }
                 }
+                expression.CurrentWeight = 0f;
+                expression.LastExpressionWeight = 0f;
+                expression.LastCompositeWeight = 0f;
+                expression.HasExpressionComposite = false;
+                expressions[index] = expression;
             }
         }
 
@@ -1256,8 +1520,22 @@ namespace QuestMmdPlayer
                 var viseme = visemes[i];
                 if (viseme.Renderer != null)
                 {
-                    viseme.Renderer.SetBlendShapeWeight(viseme.Index, viseme.BaseWeight);
+                    var current = viseme.Renderer.GetBlendShapeWeight(viseme.Index);
+                    var authored = ResolveMorphLayerBaseWeight(
+                        current,
+                        viseme.LastCompositeWeight,
+                        viseme.LastSpeechWeight,
+                        viseme.HasSpeechComposite,
+                        viseme.BaseWeight);
+                    if (viseme.HasSpeechComposite)
+                    {
+                        viseme.Renderer.SetBlendShapeWeight(viseme.Index, authored);
+                    }
                 }
+                viseme.LastSpeechWeight = 0f;
+                viseme.LastCompositeWeight = 0f;
+                viseme.HasSpeechComposite = false;
+                visemes[i] = viseme;
             }
         }
 

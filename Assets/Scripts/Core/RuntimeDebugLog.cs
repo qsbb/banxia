@@ -42,6 +42,7 @@ namespace QuestMmdPlayer
 
         public bool DisplayEnabled { get; private set; }
         public int Count => entries.Count;
+        public int StageCount => stageEntries.Count;
         public string CurrentRootCause => string.IsNullOrEmpty(rootCauseCode)
             ? "未发现明确的失败阶段"
             : StageLabel(rootCauseStage) + "：" + CodeLabel(rootCauseCode);
@@ -166,10 +167,18 @@ namespace QuestMmdPlayer
 
         public string GetRecentTimelineText(int maximumLines = 10)
         {
+            return GetTimelineText(maximumLines, 0);
+        }
+
+        public string GetTimelineText(int maximumLines, int skipNewest)
+        {
             var snapshot = stageEntries.ToArray();
-            var first = Mathf.Max(0, snapshot.Length - Mathf.Max(1, maximumLines));
+            var count = Mathf.Max(1, maximumLines);
+            var safeSkip = Mathf.Clamp(skipNewest, 0, Mathf.Max(0, snapshot.Length - 1));
+            var end = Mathf.Max(0, snapshot.Length - safeSkip);
+            var first = Mathf.Max(0, end - count);
             var builder = new StringBuilder();
-            for (var index = first; index < snapshot.Length; index++)
+            for (var index = first; index < end; index++)
             {
                 if (builder.Length > 0) builder.Append('\n');
                 builder.Append(FormatStageEntry(snapshot[index]));

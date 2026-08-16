@@ -1042,6 +1042,60 @@ namespace QuestMmdPlayer.Tests
             Assert.That(AvatarConversationPresenter.SpeechCueEnvelope(cue, 265f), Is.Zero);
         }
 
+        [Test]
+        public void SpeechVisemeCrossfadeKeepsCombinedMorphWeightBounded()
+        {
+            Assert.That(
+                AvatarConversationPresenter.NormalizeVisemeInfluence(.8f, 1.6f),
+                Is.EqualTo(.5f).Within(.001f));
+            Assert.That(
+                AvatarConversationPresenter.NormalizeVisemeInfluence(.8f, .8f),
+                Is.EqualTo(.8f).Within(.001f));
+            Assert.That(
+                AvatarConversationPresenter.NormalizeVisemeInfluence(-1f, 2f),
+                Is.Zero);
+        }
+
+        [Test]
+        public void SpeechAndExpressionLayersPreserveFreshAuthoredMorphWeights()
+        {
+            var authored = AvatarConversationPresenter.ResolveMorphLayerBaseWeight(
+                35f,
+                0f,
+                0f,
+                false,
+                5f);
+            var composite = AvatarConversationPresenter.ComposeMorphLayerWeight(authored, 10f);
+            var restored = AvatarConversationPresenter.ResolveMorphLayerBaseWeight(
+                composite,
+                composite,
+                composite - authored,
+                true,
+                5f);
+            var freshVmdFrame = AvatarConversationPresenter.ResolveMorphLayerBaseWeight(
+                62f,
+                composite,
+                composite - authored,
+                true,
+                5f);
+
+            Assert.That(authored, Is.EqualTo(35f).Within(.001f));
+            Assert.That(composite, Is.EqualTo(45f).Within(.001f));
+            Assert.That(restored, Is.EqualTo(35f).Within(.001f));
+            Assert.That(freshVmdFrame, Is.EqualTo(62f).Within(.001f));
+
+            var saturated = AvatarConversationPresenter.ComposeMorphLayerWeight(90f, 20f);
+            Assert.That(saturated, Is.EqualTo(100f));
+            Assert.That(
+                AvatarConversationPresenter.ResolveMorphLayerBaseWeight(
+                    saturated,
+                    saturated,
+                    saturated - 90f,
+                    true,
+                    0f),
+                Is.EqualTo(90f).Within(.001f));
+        }
+
         private sealed class RecordingVoiceTransport : MonoBehaviour, IConversationTransport
         {
             public event Action<ConversationEvent> EventReceived;

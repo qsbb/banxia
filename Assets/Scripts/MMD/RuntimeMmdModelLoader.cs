@@ -68,6 +68,8 @@ namespace QuestMmdPlayer
         private AvatarController currentAvatar;
         private readonly List<ParsedModelCacheEntry> parsedModelCache = new List<ParsedModelCacheEntry>();
         private IReadOnlyList<RuntimeMmdModelInfo> installedModelCache;
+        private UMTResources runtimeUmtResources;
+        private bool runtimeUmtResourcesResolved;
         private float nextParsedCacheTrimAt;
         private bool restoreStarted;
         private int loadMetricsStartFrame = int.MaxValue;
@@ -913,6 +915,11 @@ namespace QuestMmdPlayer
                 textureBaseDirectory = string.IsNullOrWhiteSpace(textureBaseDirectory)
                     ? Path.GetDirectoryName(pmxPath)
                     : textureBaseDirectory,
+                // Runtime PMX imports must receive the package resource asset so
+                // UMT can bind its SDEF compute shader. Without this assignment
+                // UMT silently falls back to CPU SDEF skinning for every SDEF
+                // renderer, which is especially expensive on joint-heavy models.
+                umtResources = ResolveRuntimeUmtResources(),
                 applyRenames = false,
                 createAvatar = false,
                 timingCallback = (stage, elapsed) => Debug.Log(
@@ -941,6 +948,34 @@ namespace QuestMmdPlayer
             }
 
             return result;
+        }
+
+        private UMTResources ResolveRuntimeUmtResources()
+        {
+            if (runtimeUmtResourcesResolved)
+            {
+                return runtimeUmtResources;
+            }
+
+            runtimeUmtResourcesResolved = true;
+            runtimeUmtResources = Resources.Load<UMTResources>("UMTResources");
+            if (runtimeUmtResources == null)
+            {
+                Debug.LogWarning(
+                    "[RuntimeMmdModelLoader] UMTResources unavailable; SDEF will use CPU fallback.",
+                    this);
+            }
+            else if (runtimeUmtResources.sdefComputeShader == null)
+            {
+                Debug.LogWarning(
+                    "[RuntimeMmdModelLoader] UMTResources loaded without SDEF compute shader; CPU fallback remains active.",
+                    this);
+            }
+            else
+            {
+                Debug.Log("[RuntimeMmdModelLoader] UMT SDEF compute shader ready for runtime PMX imports.", this);
+            }
+            return runtimeUmtResources;
         }
 
         public static int ElapsedMilliseconds(float startedAt, float now = -1f)
