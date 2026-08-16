@@ -105,6 +105,8 @@ namespace QuestMmdPlayer
             if (motion == null || model == null) return "动作：不可用";
             var prepare = motion.LastActionPrepareMs < 0 ? "-" : motion.LastActionPrepareMs + "ms";
             var load = model.LastTotalMs < 0 ? "-" : model.LastTotalMs + "ms";
+            var diskRead = motion.LastDiskCacheReadMs < 0 ? "-" : motion.LastDiskCacheReadMs + "ms";
+            var diskRebuild = motion.LastDiskCacheRebuildMs < 0 ? "-" : motion.LastDiskCacheRebuildMs + "ms";
             return "动作：" + PlaybackName(motion.PlaybackPhase) +
                 " · 待机" + IdleName(motion.IdlePreset) +
                 " · 来源" + SourceName(motion.CurrentActionSource) +
@@ -113,6 +115,10 @@ namespace QuestMmdPlayer
                 "\n缓存命中/未命中/淘汰" + motion.ActionCacheHits + "/" +
                 motion.ActionCacheMisses + "/" + motion.ActionCacheEvictions +
                 " · 准备" + prepare + " · 模型" + LoadPhaseName(model.Phase) + "/" + load +
+                "\n磁盘缓存" + (motion.LastActionUsedDiskCache ? "命中" : "未命中") +
+                " · 命中/未命中/无效" + motion.DiskActionCacheHits + "/" +
+                motion.DiskActionCacheMisses + "/" + motion.DiskActionCacheInvalid +
+                " · 读取" + diskRead + " · 重建" + diskRebuild +
                 "\n口型：" + (motion.MouthPresenterAvailable ? "可用" : "不可用") +
                 " · 变形" + motion.MatchedVisemeCount +
                 " · RMS" + motion.AudibleRms.ToString("F4") +

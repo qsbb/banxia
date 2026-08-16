@@ -53,6 +53,7 @@ $requiredFiles = @(
     "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs",
     "Assets/Scripts/MMD/AvatarQaCapture.cs",
     "Assets/Scripts/MMD/VmdActionLibrary.cs",
+    "Assets/Scripts/MMD/VmdPreparedClipCache.cs",
     "Assets/Scripts/MR/RoomUnderstandingService.cs",
     "Assets/Scripts/MR/SpatialCapabilityAdapter.cs",
     "Assets/Scripts/MR/QuestFileImportService.cs",
@@ -75,6 +76,7 @@ $requiredFiles = @(
     "Assets/Tests/Editor/AvatarTouchInteractionTests.cs",
     "Assets/Tests/Editor/ExternalInteractionTurnTests.cs",
     "Assets/Tests/Editor/VmdActionLibraryTests.cs",
+    "Assets/Tests/Editor/VmdPreparedClipCacheTests.cs",
     "Assets/Tests/Editor/RuntimeDiagnosticsSnapshotTests.cs",
     "Assets/Tests/Editor/VoiceConversationControllerTests.cs",
     "Assets/Tests/Editor/BackendPairingTests.cs",
@@ -113,8 +115,9 @@ $sourceChecks = @{
     "Assets/Scripts/Core/AvatarTouchInteraction.cs" = @("TryGetContactSurface", "SetSemanticInteractionLock")
     "Assets/Scripts/Core/AvatarMmdPhysicsAdapter.cs" = @("ConfigureExternalKinematicSpheres", "SetExternalKinematicSpherePose")
     "Assets/Scripts/Core/QuestTrackedHandVisualizer.cs" = @("ShouldShowTrackedHand", "TrackedHandContactAggregator", "Physics.SyncTransforms", "ContactDiagnosticCode", "ShouldRecordContactDiagnostic", "contactDiagnosticHoverInterval")
-    "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "BeginPhysicsArbitration", "StopAndReturnToIdle")
-    "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("SelectedModelPreference", "RestoreLastModelAsync", "ParsedModelCacheCapacity", "TrimParsedModelCache", "ModelCache")
+    "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "BuildPersistentCacheKeyAsync", "VmdPreparedClipCache", "BeginPhysicsArbitration", "StopAndReturnToIdle")
+    "Assets/Scripts/MMD/VmdPreparedClipCache.cs" = @("BXVMDPC1", "TryReadAsync", "TryWriteAsync", "maxTotalBytes", "minFreeSpaceBytes")
+    "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("SelectedModelPreference", "RestoreLastModelAsync", "CurrentModelContentSha256", "ComputeFileSha256Async", "ParsedModelCacheCapacity", "TrimParsedModelCache", "ModelCache")
     "Assets/Scripts/Conversation/AvatarConversationPresenter.cs" = @("ApplyIntent", "PlayRecommendedDance", "PlayActionFromSource")
     "Assets/Scripts/Conversation/AvatarMouthLatePass.cs" = @("DefaultExecutionOrder(11000)", "ApplyMouthLatePass")
     "Assets/Scripts/Conversation/ConversationController.cs" = @("BeginVoiceInput", "PushVoiceAudio", "HandleTransportEvent", "backend_total")

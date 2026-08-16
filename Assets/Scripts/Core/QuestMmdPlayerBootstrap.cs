@@ -227,7 +227,10 @@ namespace QuestMmdPlayer
                 runtimeMmdLoader == null || runtimeMmdLoader.CurrentModel == null
                     ? null
                     : runtimeMmdLoader.CurrentModel.transform,
-                avatar);
+                avatar,
+                runtimeMmdLoader == null
+                    ? string.Empty
+                    : runtimeMmdLoader.CurrentModelContentSha256);
             BindInteractions();
             if (avatarObject != null)
             {

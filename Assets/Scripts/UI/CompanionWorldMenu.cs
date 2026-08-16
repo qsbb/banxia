@@ -501,6 +501,8 @@ namespace QuestMmdPlayer
                 await System.Threading.Tasks.Task.Yield();
                 await RunQaVmdPassAsync("warm", actionId, actionSelection, library, performance);
                 library.StopAndReturnToIdle();
+                await library.WaitForPendingDiskCacheWritesAsync();
+                Debug.Log("[BanxiaQA] vmd_disk_cache_flush status=completed", this);
                 Debug.Log("[BanxiaQA] vmd_scenario status=completed", this);
             }
             catch (Exception exception)
@@ -553,8 +555,11 @@ namespace QuestMmdPlayer
                 " action_index=" + actionIndex +
                 " status=" + (played ? "ready" : "failed") +
                 " cache_before=" + wasPrepared +
+                " disk_cache=" + library.LastPrepareUsedDiskCache +
                 " elapsed_ms=" + elapsedMs +
                 " prepare_ms=" + library.LastPrepareMilliseconds +
+                " disk_read_ms=" + library.LastPrepareDiskReadMilliseconds +
+                " disk_rebuild_ms=" + library.LastPrepareDiskRebuildMilliseconds +
                 " read_ms=" + library.LastPrepareReadMilliseconds +
                 " motion_ms=" + library.LastPrepareMotionConversionMilliseconds +
                 " facial_ms=" + library.LastPrepareFacialConversionMilliseconds +

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -403,6 +404,7 @@ namespace QuestMmdPlayer
     [DisallowMultipleComponent]
     public sealed class VmdActionLibrary : MonoBehaviour
     {
+        private const string PersistentCacheConverterAbi = "banxia-umt-vmd-bake-1";
         [SerializeField] private VmdActionLimits limits = new VmdActionLimits();
         // Leave enough of Quest's 13.89 ms (72 Hz) frame for rendering and the
         // live avatar. The original player used a 3 ms slice; 10 ms caused the
@@ -437,6 +439,7 @@ namespace QuestMmdPlayer
             new Dictionary<string, PreparedAction>(StringComparer.OrdinalIgnoreCase);
         private readonly SemaphoreSlim conversionGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim refreshGate = new SemaphoreSlim(1, 1);
+        private readonly List<Task> pendingPersistentCacheWrites = new List<Task>();
         private VmdActionInfo[] actions = Array.Empty<VmdActionInfo>();
         private string lastPlayedActionId = string.Empty;
         private RuntimeDebugLog diagnostics;
@@ -447,6 +450,9 @@ namespace QuestMmdPlayer
         private AvatarController boundAvatar;
         private MMDTransformManager transformManager;
         private PMXAnimationPaths animationPaths;
+        private VmdPreparedClipCache preparedClipDiskCache;
+        private string boundModelContentSha256 = string.Empty;
+        private string boundAnimationBindingFingerprint = string.Empty;
         private BoneBinding[] boneBindings = Array.Empty<BoneBinding>();
         private MorphBinding[] morphBindings = Array.Empty<MorphBinding>();
         private int generation;
@@ -481,14 +487,20 @@ namespace QuestMmdPlayer
         public int CacheHitCount { get; private set; }
         public int CacheMissCount { get; private set; }
         public int CacheEvictionCount { get; private set; }
+        public int DiskCacheHitCount { get; private set; }
+        public int DiskCacheMissCount { get; private set; }
+        public int DiskCacheInvalidCount { get; private set; }
         public int LastPrepareMilliseconds { get; private set; } = -1;
         public int LastPrepareReadMilliseconds { get; private set; } = -1;
         public int LastPrepareMotionConversionMilliseconds { get; private set; } = -1;
         public int LastPrepareFacialConversionMilliseconds { get; private set; } = -1;
         public int LastPrepareBindingMilliseconds { get; private set; } = -1;
+        public int LastPrepareDiskReadMilliseconds { get; private set; } = -1;
+        public int LastPrepareDiskRebuildMilliseconds { get; private set; } = -1;
         public int LastPrepareYieldCount { get; private set; }
         public float LastPrepareFrameBudgetMilliseconds { get; private set; } = -1f;
         public bool LastPrepareSuspendedLivePhysics { get; private set; }
+        public bool LastPrepareUsedDiskCache { get; private set; }
         public bool IsPrepared(string actionId) => !string.IsNullOrEmpty(actionId) && preparedActions.ContainsKey(actionId);
 
         private sealed class BoneBinding
@@ -680,7 +692,11 @@ namespace QuestMmdPlayer
             }
             return builder.ToString();
         }
-        public void BindModel(PMXModel model, Transform modelRoot, AvatarController avatar)
+        public void BindModel(
+            PMXModel model,
+            Transform modelRoot,
+            AvatarController avatar,
+            string modelContentSha256 = null)
         {
             ClearModel();
             diagnostics = GetComponent<RuntimeDebugLog>();
@@ -697,6 +713,8 @@ namespace QuestMmdPlayer
             boundAvatar = avatar;
             transformManager = modelRoot.GetComponent<MMDTransformManager>();
             animationPaths = new PMXAnimationPaths();
+            boundModelContentSha256 = NormalizeSha256(modelContentSha256);
+            boundAnimationBindingFingerprint = BuildAnimationBindingFingerprint(modelRoot);
             diagnostics?.RecordStage("avatar_action", "ready", "vmd_model_bound");
         }
 
@@ -710,6 +728,8 @@ namespace QuestMmdPlayer
             boundAvatar = null;
             transformManager = null;
             animationPaths = null;
+            boundModelContentSha256 = string.Empty;
+            boundAnimationBindingFingerprint = string.Empty;
             lastPlayedActionId = string.Empty;
             PlaybackPhase = VmdPlaybackPhase.Idle;
         }
@@ -744,6 +764,8 @@ namespace QuestMmdPlayer
             var requestRoot = boundRoot;
             var requestTransformManager = transformManager;
             var requestAnimationPaths = animationPaths;
+            var requestModelContentSha256 = boundModelContentSha256;
+            var requestBindingFingerprint = boundAnimationBindingFingerprint;
             VMDAnimation motionAnimation = null;
             VMDAnimation facialAnimation = null;
             UMTFrameBudget preparationBudget = null;
@@ -752,15 +774,26 @@ namespace QuestMmdPlayer
             LastPrepareMotionConversionMilliseconds = -1;
             LastPrepareFacialConversionMilliseconds = -1;
             LastPrepareBindingMilliseconds = -1;
+            LastPrepareDiskReadMilliseconds = -1;
+            LastPrepareDiskRebuildMilliseconds = -1;
             LastPrepareYieldCount = 0;
             LastPrepareFrameBudgetMilliseconds = -1f;
             LastPrepareSuspendedLivePhysics = false;
+            LastPrepareUsedDiskCache = false;
             await conversionGate.WaitAsync();
             try
             {
                 VmdActionInfo info;
                 BoneBinding[] nextBones;
                 MorphBinding[] nextMorphs;
+                var currentSourceCacheKey = BuildSourceCacheKey(
+                    source.motionPath,
+                    source.facialPath);
+                if (!string.Equals(source.cacheKey, currentSourceCacheKey, StringComparison.Ordinal))
+                {
+                    source.cacheKey = currentSourceCacheKey;
+                    preparedActions.Remove(actionId);
+                }
                 if (preparedActions.TryGetValue(actionId, out var prepared) &&
                     string.Equals(prepared.sourceCacheKey, source.cacheKey, StringComparison.Ordinal))
                 {
@@ -777,9 +810,6 @@ namespace QuestMmdPlayer
                 {
                     CacheMissCount++;
                     preparedActions.Remove(actionId);
-                    preparationSuspendedLivePhysics = SuspendLivePhysicsForPreparation(
-                        requestTransformManager);
-                    LastPrepareSuspendedLivePhysics = preparationSuspendedLivePhysics;
                     info = VmdActionFilePolicy.Inspect(source.motionPath, actionId, limits);
                     if (!string.IsNullOrEmpty(source.facialPath))
                     {
@@ -809,77 +839,191 @@ namespace QuestMmdPlayer
                             : requestModel.joints.Length);
                     preparationBudget = new UMTFrameBudget(
                         LastPrepareFrameBudgetMilliseconds);
-                    var stageStartedAt = Time.realtimeSinceStartup;
-                    using (var stream = new FileStream(source.motionPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                    {
-                        motionAnimation = await VMDReader.ReadAsync(preparationBudget, stream);
-                    }
-                    if (!string.IsNullOrEmpty(source.facialPath))
-                    {
-                        using (var stream = new FileStream(source.facialPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                        {
-                            facialAnimation = await VMDReader.ReadAsync(preparationBudget, stream);
-                        }
-                    }
-                    LastPrepareReadMilliseconds = ElapsedMilliseconds(stageStartedAt);
-                    diagnostics?.RecordStage(
-                        "avatar_action",
-                        "completed",
-                        "vmd_read_completed",
-                        elapsedMs: LastPrepareReadMilliseconds);
-                    if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
-                    {
-                        return false;
-                    }
-
-                    ProgressChanged?.Invoke("正在适配骨骼与表情");
+                    preparationSuspendedLivePhysics = SuspendLivePhysicsForPreparation(
+                        requestTransformManager);
+                    LastPrepareSuspendedLivePhysics = preparationSuspendedLivePhysics;
                     var options = CreateMotionConversionOptions(
                         limits.frameRate,
                         physicsWarmUpDuration);
-                    stageStartedAt = Time.realtimeSinceStartup;
-                    var clipData = await VMDAnimationClipConverter.ConvertAsync(
-                        preparationBudget,
-                        motionAnimation,
-                        requestModel,
-                        requestAnimationPaths,
-                        options);
-                    LastPrepareMotionConversionMilliseconds = ElapsedMilliseconds(stageStartedAt);
-                    diagnostics?.RecordStage(
-                        "avatar_action",
-                        "completed",
-                        "vmd_motion_converted",
-                        elapsedMs: LastPrepareMotionConversionMilliseconds);
-                    VMDModelClipData facialClipData = null;
-                    if (facialAnimation != null)
+                    var persistentCacheKey = await BuildPersistentCacheKeyAsync(
+                        actionId,
+                        source.motionPath,
+                        source.facialPath,
+                        requestModelContentSha256,
+                        requestBindingFingerprint,
+                        options,
+                        Application.version,
+                        Application.unityVersion);
+                    var loadedFromDisk = false;
+                    nextBones = Array.Empty<BoneBinding>();
+                    nextMorphs = Array.Empty<MorphBinding>();
+                    if (!string.IsNullOrEmpty(persistentCacheKey))
                     {
-                        stageStartedAt = Time.realtimeSinceStartup;
-                        // A facial-only VMD does not need another full-body IK and
-                        // Bullet bake. The old shared options repeated the most
-                        // expensive stage solely to obtain morph curves.
-                        facialClipData = await VMDAnimationClipConverter.ConvertAsync(
-                            preparationBudget,
-                            facialAnimation,
-                            requestModel,
-                            requestAnimationPaths,
-                            CreateFacialConversionOptions(limits.frameRate));
-                        LastPrepareFacialConversionMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                        var diskReadStartedAt = Time.realtimeSinceStartup;
+                        var diskResult = await GetPreparedClipDiskCache()
+                            .TryReadAsync(persistentCacheKey);
+                        LastPrepareDiskReadMilliseconds = ElapsedMilliseconds(diskReadStartedAt);
+                        if (diskResult.IsHit && IsCachedClipCurrent(diskResult.Clip, info, actionId))
+                        {
+                            try
+                            {
+                                ProgressChanged?.Invoke("正在恢复已转换动作 " + info.DisplayName);
+                                var rebuildStartedAt = Time.realtimeSinceStartup;
+                                nextBones = await BuildBoneBindingsAsync(
+                                    requestRoot,
+                                    diskResult.Clip.Bones,
+                                    preparationBudget,
+                                    () => IsRequestCurrent(
+                                        requestGeneration,
+                                        requestModel,
+                                        requestRoot));
+                                if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
+                                {
+                                    return false;
+                                }
+                                nextMorphs = await BuildMorphBindingsAsync(
+                                    requestRoot,
+                                    diskResult.Clip.Morphs,
+                                    preparationBudget,
+                                    () => IsRequestCurrent(
+                                        requestGeneration,
+                                        requestModel,
+                                        requestRoot));
+                                if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
+                                {
+                                    return false;
+                                }
+                                LastPrepareDiskRebuildMilliseconds = ElapsedMilliseconds(
+                                    rebuildStartedAt);
+                                LastPrepareBindingMilliseconds =
+                                    LastPrepareDiskRebuildMilliseconds;
+                                if (nextBones.Length == 0 && nextMorphs.Length == 0)
+                                {
+                                    throw new InvalidDataException(
+                                        "Cached VMD action has no tracks compatible with the current model.");
+                                }
+                                loadedFromDisk = true;
+                                usedPreparedCache = true;
+                                LastPrepareUsedDiskCache = true;
+                                DiskCacheHitCount++;
+                                diagnostics?.RecordStage(
+                                    "avatar_action",
+                                    "completed",
+                                    "vmd_disk_cache_hit",
+                                    elapsedMs: LastPrepareDiskReadMilliseconds +
+                                        LastPrepareDiskRebuildMilliseconds);
+                            }
+                            catch (Exception exception) when (
+                                exception is InvalidDataException ||
+                                exception is ArgumentException ||
+                                exception is OverflowException)
+                            {
+                                DiskCacheInvalidCount++;
+                                GetPreparedClipDiskCache().Remove(persistentCacheKey);
+                                diagnostics?.RecordStage(
+                                    "avatar_action",
+                                    "limited",
+                                    "vmd_disk_cache_invalid");
+                            }
+                        }
+                        else
+                        {
+                            DiskCacheMissCount++;
+                            if (diskResult.IsHit)
+                            {
+                                DiskCacheInvalidCount++;
+                                GetPreparedClipDiskCache().Remove(persistentCacheKey);
+                            }
+                            if (diskResult.CorruptEntryDeleted)
+                            {
+                                DiskCacheInvalidCount++;
+                            }
+                            diagnostics?.RecordStage(
+                                "avatar_action",
+                                "processing",
+                                "vmd_disk_cache_miss",
+                                elapsedMs: LastPrepareDiskReadMilliseconds);
+                        }
+                    }
+
+                    if (!loadedFromDisk)
+                    {
+                        var stageStartedAt = Time.realtimeSinceStartup;
+                        using (var stream = new FileStream(source.motionPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        {
+                            motionAnimation = await VMDReader.ReadAsync(preparationBudget, stream);
+                        }
+                        if (!string.IsNullOrEmpty(source.facialPath))
+                        {
+                            using (var stream = new FileStream(source.facialPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                            {
+                                facialAnimation = await VMDReader.ReadAsync(preparationBudget, stream);
+                            }
+                        }
+                        LastPrepareReadMilliseconds = ElapsedMilliseconds(stageStartedAt);
                         diagnostics?.RecordStage(
                             "avatar_action",
                             "completed",
-                            "vmd_facial_converted",
-                            elapsedMs: LastPrepareFacialConversionMilliseconds);
-                    }
-                    if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
-                    {
-                        return false;
-                    }
+                            "vmd_read_completed",
+                            elapsedMs: LastPrepareReadMilliseconds);
+                        if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
+                        {
+                            return false;
+                        }
 
-                    stageStartedAt = Time.realtimeSinceStartup;
-                    nextBones = BuildBoneBindings(requestRoot, clipData);
-                    nextMorphs = MergeMorphBindings(
-                        BuildMorphBindings(requestRoot, clipData),
-                        BuildMorphBindings(requestRoot, facialClipData));
-                    LastPrepareBindingMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                        ProgressChanged?.Invoke("正在适配骨骼与表情");
+                        stageStartedAt = Time.realtimeSinceStartup;
+                        var clipData = await VMDAnimationClipConverter.ConvertAsync(
+                            preparationBudget,
+                            motionAnimation,
+                            requestModel,
+                            requestAnimationPaths,
+                            options);
+                        LastPrepareMotionConversionMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                        diagnostics?.RecordStage(
+                            "avatar_action",
+                            "completed",
+                            "vmd_motion_converted",
+                            elapsedMs: LastPrepareMotionConversionMilliseconds);
+                        VMDModelClipData facialClipData = null;
+                        if (facialAnimation != null)
+                        {
+                            stageStartedAt = Time.realtimeSinceStartup;
+                            // Facial tracks do not require another full-body IK/physics bake.
+                            facialClipData = await VMDAnimationClipConverter.ConvertAsync(
+                                preparationBudget,
+                                facialAnimation,
+                                requestModel,
+                                requestAnimationPaths,
+                                CreateFacialConversionOptions(limits.frameRate));
+                            LastPrepareFacialConversionMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                            diagnostics?.RecordStage(
+                                "avatar_action",
+                                "completed",
+                                "vmd_facial_converted",
+                                elapsedMs: LastPrepareFacialConversionMilliseconds);
+                        }
+                        if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
+                        {
+                            return false;
+                        }
+
+                        stageStartedAt = Time.realtimeSinceStartup;
+                        nextBones = BuildBoneBindings(requestRoot, clipData);
+                        nextMorphs = MergeMorphBindings(
+                            BuildMorphBindings(requestRoot, clipData),
+                            BuildMorphBindings(requestRoot, facialClipData));
+                        LastPrepareBindingMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                        if (!string.IsNullOrEmpty(persistentCacheKey))
+                        {
+                            TrackPersistentCacheWrite(CaptureAndPersistPreparedClipAsync(
+                                persistentCacheKey,
+                                info,
+                                clipData,
+                                facialClipData,
+                                LastPrepareFrameBudgetMilliseconds));
+                        }
+                    }
                     LastPrepareYieldCount = preparationBudget.YieldCount;
                     diagnostics?.RecordStage(
                         "avatar_action",
@@ -924,7 +1068,10 @@ namespace QuestMmdPlayer
                 Debug.Log(
                     "[VmdActionLibrary] Playback ready: action=" + info.Id +
                     " cache=" + usedPreparedCache +
+                    " disk_cache=" + LastPrepareUsedDiskCache +
                     " yields=" + LastPrepareYieldCount +
+                    " disk_read_ms=" + LastPrepareDiskReadMilliseconds +
+                    " disk_rebuild_ms=" + LastPrepareDiskRebuildMilliseconds +
                     " read_ms=" + LastPrepareReadMilliseconds +
                     " motion_convert_ms=" + LastPrepareMotionConversionMilliseconds +
                     " facial_convert_ms=" + LastPrepareFacialConversionMilliseconds +
@@ -1318,6 +1465,528 @@ namespace QuestMmdPlayer
             return now >= lastUsedAt && now - lastUsedAt >= Mathf.Max(0f, retentionSeconds);
         }
 
+        private VmdPreparedClipCache GetPreparedClipDiskCache()
+        {
+            preparedClipDiskCache ??= new VmdPreparedClipCache();
+            return preparedClipDiskCache;
+        }
+
+        private async Task PersistPreparedClipAsync(VmdPreparedClipDto clip)
+        {
+            try
+            {
+                var result = await GetPreparedClipDiskCache().TryWriteDetailedAsync(clip);
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    result.Written ? "completed" : "limited",
+                    result.Written
+                        ? "vmd_disk_cache_written"
+                        : "vmd_disk_cache_write_" + result.Reason,
+                    bytes: (int)Math.Min(int.MaxValue, result.EntryBytes));
+            }
+            catch (Exception exception) when (
+                exception is IOException ||
+                exception is UnauthorizedAccessException ||
+                exception is InvalidDataException ||
+                exception is ArgumentException ||
+                exception is OverflowException)
+            {
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "limited",
+                    "vmd_disk_cache_write_failed");
+            }
+        }
+
+        private void TrackPersistentCacheWrite(Task task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+            pendingPersistentCacheWrites.Add(task);
+            _ = ObservePersistentCacheWriteAsync(task);
+        }
+
+        private async Task ObservePersistentCacheWriteAsync(Task task)
+        {
+            try
+            {
+                await task;
+            }
+            catch (Exception)
+            {
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "limited",
+                    "vmd_disk_cache_write_failed");
+            }
+            finally
+            {
+                pendingPersistentCacheWrites.Remove(task);
+            }
+        }
+
+        public async Task WaitForPendingDiskCacheWritesAsync()
+        {
+            while (pendingPersistentCacheWrites.Count > 0)
+            {
+                var snapshot = pendingPersistentCacheWrites.ToArray();
+                try
+                {
+                    await Task.WhenAll(snapshot);
+                }
+                catch (Exception)
+                {
+                    // Observation above records the bounded diagnostic. A cache
+                    // write can never turn a successfully prepared action into
+                    // a failed QA or conversation turn.
+                }
+                pendingPersistentCacheWrites.RemoveAll(item => item.IsCompleted);
+            }
+        }
+
+        private async Task CaptureAndPersistPreparedClipAsync(
+            string cacheKey,
+            VmdActionInfo info,
+            VMDModelClipData motion,
+            VMDModelClipData facial,
+            float frameBudget)
+        {
+            try
+            {
+                // Let the requested action start first. Curve projection then
+                // continues in small main-thread slices while file I/O remains
+                // entirely on the worker used by TryWriteAsync.
+                await Task.Yield();
+                var clip = await BuildPreparedClipDtoAsync(
+                    cacheKey,
+                    info,
+                    motion,
+                    facial,
+                    new UMTFrameBudget(Math.Max(.5f, frameBudget)));
+                var curveCount = clip.Bones.Sum(bone => bone.Curves.Count(curve => curve != null)) +
+                    clip.Morphs.Length;
+                var keyCount = clip.Bones.Sum(bone => bone.Curves
+                        .Where(curve => curve != null)
+                        .Sum(curve => curve.Keys.Length)) +
+                    clip.Morphs.Sum(morph => morph.Curve.Keys.Length);
+                Debug.Log(
+                    "[VmdActionLibrary] Disk cache capture: bones=" + clip.Bones.Length +
+                    " morphs=" + clip.Morphs.Length +
+                    " curves=" + curveCount +
+                    " keys=" + keyCount,
+                    this);
+                await PersistPreparedClipAsync(clip);
+            }
+            catch (Exception exception) when (
+                exception is IOException ||
+                exception is UnauthorizedAccessException ||
+                exception is InvalidDataException ||
+                exception is ArgumentException ||
+                exception is OverflowException)
+            {
+                diagnostics?.RecordStage(
+                    "avatar_action",
+                    "limited",
+                    "vmd_disk_cache_capture_failed");
+            }
+        }
+
+        private static async Task<string> BuildPersistentCacheKeyAsync(
+            string actionId,
+            string motionPath,
+            string facialPath,
+            string modelContentSha256,
+            string bindingFingerprint,
+            VMDAnimationClipOptions options,
+            string applicationVersion,
+            string unityVersion)
+        {
+            var normalizedModelHash = NormalizeSha256(modelContentSha256);
+            var normalizedBindingHash = NormalizeSha256(bindingFingerprint);
+            if (string.IsNullOrEmpty(normalizedModelHash) ||
+                string.IsNullOrEmpty(normalizedBindingHash) || options == null)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                var sourceBefore = BuildSourceCacheKey(motionPath, facialPath);
+                var hashes = await Task.Run(() => new[]
+                {
+                    ComputeFileSha256(motionPath),
+                    string.IsNullOrEmpty(facialPath)
+                        ? "absent"
+                        : ComputeFileSha256(facialPath)
+                });
+                if (!string.Equals(
+                    sourceBefore,
+                    BuildSourceCacheKey(motionPath, facialPath),
+                    StringComparison.Ordinal))
+                {
+                    return string.Empty;
+                }
+
+                var descriptor = new StringBuilder(512);
+                AppendCacheKeyPart(descriptor, "schema", VmdPreparedClipCache.CurrentFormatVersion.ToString());
+                AppendCacheKeyPart(descriptor, "converter", PersistentCacheConverterAbi);
+                AppendCacheKeyPart(descriptor, "app", applicationVersion ?? string.Empty);
+                AppendCacheKeyPart(descriptor, "unity", unityVersion ?? string.Empty);
+                AppendCacheKeyPart(descriptor, "umt", "0.5.0-bx");
+                AppendCacheKeyPart(descriptor, "action", actionId ?? string.Empty);
+                AppendCacheKeyPart(descriptor, "model", normalizedModelHash);
+                AppendCacheKeyPart(descriptor, "bindings", normalizedBindingHash);
+                AppendCacheKeyPart(descriptor, "motion", hashes[0]);
+                AppendCacheKeyPart(descriptor, "facial", hashes[1]);
+                AppendCacheKeyPart(descriptor, "frame_rate", FloatBits(options.frameRate).ToString());
+                AppendCacheKeyPart(descriptor, "bake_ik", options.bakeIKToFK ? "1" : "0");
+                AppendCacheKeyPart(descriptor, "bake_physics", options.bakePhysicsToFK ? "1" : "0");
+                AppendCacheKeyPart(descriptor, "physics_seed", options.physicsSeed.ToString());
+                AppendCacheKeyPart(
+                    descriptor,
+                    "physics_warmup",
+                    FloatBits(options.physicsWarmUpDuration).ToString());
+                return ComputeSha256Hex(Encoding.UTF8.GetBytes(descriptor.ToString()));
+            }
+            catch (Exception exception) when (
+                exception is IOException ||
+                exception is UnauthorizedAccessException ||
+                exception is ArgumentException ||
+                exception is NotSupportedException ||
+                exception is CryptographicException)
+            {
+                return string.Empty;
+            }
+        }
+
+        private static async Task<VmdPreparedClipDto> BuildPreparedClipDtoAsync(
+            string cacheKey,
+            VmdActionInfo info,
+            VMDModelClipData motion,
+            VMDModelClipData facial,
+            UMTFrameBudget budget)
+        {
+            if (info == null || motion == null || !motion.baked || motion.bones == null ||
+                motion.bones.paths == null || motion.bones.curves == null)
+            {
+                throw new InvalidDataException("VMD converter did not return cacheable baked curves.");
+            }
+
+            const int channelCount = 7;
+            var bones = new List<VmdPreparedBoneTrackDto>();
+            for (var index = 0; index < motion.bones.paths.Length; index++)
+            {
+                var offset = checked(index * channelCount);
+                if (offset + channelCount > motion.bones.curves.Length)
+                {
+                    throw new InvalidDataException("VMD bone curve layout is invalid.");
+                }
+                var curves = new VmdPreparedCurveDto[channelCount];
+                var hasCurve = false;
+                for (var channel = 0; channel < channelCount; channel++)
+                {
+                    var curve = motion.bones.curves[offset + channel];
+                    curves[channel] = ToCurveDto(curve);
+                    hasCurve |= curve != null;
+                }
+                if (hasCurve)
+                {
+                    bones.Add(new VmdPreparedBoneTrackDto
+                    {
+                        Path = motion.bones.paths[index],
+                        Curves = curves
+                    });
+                }
+                await budget.YieldIfNeeded();
+            }
+
+            var morphs = new Dictionary<string, VmdPreparedMorphTrackDto>(StringComparer.Ordinal);
+            await AddMorphDtosAsync(morphs, motion, budget);
+            await AddMorphDtosAsync(morphs, facial, budget);
+            return new VmdPreparedClipDto
+            {
+                CacheKey = cacheKey,
+                ActionId = info.Id,
+                SourceByteLength = info.ByteLength,
+                SourceKeyframeCount = info.KeyframeCount,
+                LastFrame = info.LastFrame,
+                DurationSeconds = info.DurationSeconds,
+                HasFacialTrack = info.HasFacialTrack,
+                Bones = bones.ToArray(),
+                Morphs = morphs.Values.ToArray()
+            };
+        }
+
+        private static async Task AddMorphDtosAsync(
+            IDictionary<string, VmdPreparedMorphTrackDto> destination,
+            VMDModelClipData clip,
+            UMTFrameBudget budget)
+        {
+            if (clip?.morphs == null)
+            {
+                return;
+            }
+            var morphs = clip.morphs;
+            if (morphs.paths == null || morphs.names == null || morphs.curves == null ||
+                morphs.paths.Length != morphs.names.Length ||
+                morphs.paths.Length != morphs.curves.Length)
+            {
+                throw new InvalidDataException("VMD morph curve layout is invalid.");
+            }
+            for (var index = 0; index < morphs.paths.Length; index++)
+            {
+                if (morphs.curves[index] != null)
+                {
+                    var track = new VmdPreparedMorphTrackDto
+                    {
+                        Path = morphs.paths[index],
+                        Name = morphs.names[index],
+                        Curve = ToCurveDto(morphs.curves[index])
+                    };
+                    destination[BuildMorphTrackKey(track.Path, track.Name)] = track;
+                }
+                await budget.YieldIfNeeded();
+            }
+        }
+
+        private static async Task<BoneBinding[]> BuildBoneBindingsAsync(
+            Transform root,
+            IEnumerable<VmdPreparedBoneTrackDto> tracks,
+            UMTFrameBudget budget,
+            Func<bool> stillCurrent)
+        {
+            var result = new List<BoneBinding>();
+            foreach (var track in tracks ?? Array.Empty<VmdPreparedBoneTrackDto>())
+            {
+                if (stillCurrent != null && !stillCurrent())
+                {
+                    return Array.Empty<BoneBinding>();
+                }
+                if (track?.Curves == null || track.Curves.Length != 7)
+                {
+                    throw new InvalidDataException("Cached VMD bone curve layout is invalid.");
+                }
+                var target = root.Find(track.Path);
+                if (target != null)
+                {
+                    result.Add(new BoneBinding
+                    {
+                        target = target,
+                        curves = track.Curves.Select(FromCurveDto).ToArray(),
+                        baselinePosition = target.localPosition,
+                        baselineRotation = target.localRotation
+                    });
+                }
+                await budget.YieldIfNeeded();
+            }
+            return result.ToArray();
+        }
+
+        private static async Task<MorphBinding[]> BuildMorphBindingsAsync(
+            Transform root,
+            IEnumerable<VmdPreparedMorphTrackDto> tracks,
+            UMTFrameBudget budget,
+            Func<bool> stillCurrent)
+        {
+            var result = new List<MorphBinding>();
+            foreach (var track in tracks ?? Array.Empty<VmdPreparedMorphTrackDto>())
+            {
+                if (stillCurrent != null && !stillCurrent())
+                {
+                    return Array.Empty<MorphBinding>();
+                }
+                if (track?.Curve == null)
+                {
+                    throw new InvalidDataException("Cached VMD morph curve is invalid.");
+                }
+                var target = root.Find(track.Path);
+                var renderer = target == null ? null : target.GetComponent<SkinnedMeshRenderer>();
+                var blendShapeIndex = renderer == null || renderer.sharedMesh == null
+                    ? -1
+                    : renderer.sharedMesh.GetBlendShapeIndex(track.Name);
+                if (blendShapeIndex >= 0)
+                {
+                    result.Add(new MorphBinding
+                    {
+                        renderer = renderer,
+                        blendShapeIndex = blendShapeIndex,
+                        curve = FromCurveDto(track.Curve),
+                        baselineWeight = renderer.GetBlendShapeWeight(blendShapeIndex)
+                    });
+                }
+                await budget.YieldIfNeeded();
+            }
+            return result.ToArray();
+        }
+
+        private static VmdPreparedCurveDto ToCurveDto(AnimationCurve curve)
+        {
+            if (curve == null)
+            {
+                return null;
+            }
+            var keys = curve.keys;
+            var result = new VmdPreparedKeyframeDto[keys.Length];
+            for (var index = 0; index < keys.Length; index++)
+            {
+                result[index] = new VmdPreparedKeyframeDto
+                {
+                    Time = keys[index].time,
+                    Value = keys[index].value,
+                    InTangent = keys[index].inTangent,
+                    OutTangent = keys[index].outTangent,
+                    InWeight = keys[index].inWeight,
+                    OutWeight = keys[index].outWeight,
+                    WeightedMode = (int)keys[index].weightedMode
+                };
+            }
+            return new VmdPreparedCurveDto
+            {
+                PreWrapMode = (int)curve.preWrapMode,
+                PostWrapMode = (int)curve.postWrapMode,
+                Keys = result
+            };
+        }
+
+        private static AnimationCurve FromCurveDto(VmdPreparedCurveDto curve)
+        {
+            if (curve == null)
+            {
+                return null;
+            }
+            var keys = new Keyframe[curve.Keys.Length];
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var source = curve.Keys[index];
+                keys[index] = new Keyframe(
+                    source.Time,
+                    source.Value,
+                    source.InTangent,
+                    source.OutTangent,
+                    source.InWeight,
+                    source.OutWeight)
+                {
+                    weightedMode = (WeightedMode)source.WeightedMode
+                };
+            }
+            return new AnimationCurve(keys)
+            {
+                preWrapMode = (WrapMode)curve.PreWrapMode,
+                postWrapMode = (WrapMode)curve.PostWrapMode
+            };
+        }
+
+        private static bool IsCachedClipCurrent(
+            VmdPreparedClipDto clip,
+            VmdActionInfo info,
+            string actionId)
+        {
+            return clip != null && info != null &&
+                string.Equals(clip.ActionId, actionId, StringComparison.Ordinal) &&
+                clip.SourceByteLength == info.ByteLength &&
+                clip.SourceKeyframeCount == info.KeyframeCount &&
+                clip.LastFrame == info.LastFrame &&
+                FloatBits(clip.DurationSeconds) == FloatBits(info.DurationSeconds) &&
+                clip.HasFacialTrack == info.HasFacialTrack;
+        }
+
+        private static string BuildAnimationBindingFingerprint(Transform root)
+        {
+            if (root == null)
+            {
+                return string.Empty;
+            }
+            var entries = new List<string>();
+            CollectBindingFingerprintEntries(root, string.Empty, entries);
+            entries.Sort(StringComparer.Ordinal);
+            return ComputeSha256Hex(Encoding.UTF8.GetBytes(string.Join("\n", entries)));
+        }
+
+        private static void CollectBindingFingerprintEntries(
+            Transform current,
+            string path,
+            ICollection<string> entries)
+        {
+            entries.Add("T:" + path.Length + ":" + path);
+            var renderer = current.GetComponent<SkinnedMeshRenderer>();
+            if (renderer != null && renderer.sharedMesh != null)
+            {
+                var mesh = renderer.sharedMesh;
+                entries.Add("R:" + path.Length + ":" + path + ":" + mesh.blendShapeCount);
+                for (var index = 0; index < mesh.blendShapeCount; index++)
+                {
+                    var name = mesh.GetBlendShapeName(index) ?? string.Empty;
+                    entries.Add("B:" + path.Length + ":" + path + ":" + name.Length + ":" + name);
+                }
+            }
+            for (var index = 0; index < current.childCount; index++)
+            {
+                var child = current.GetChild(index);
+                var childPath = string.IsNullOrEmpty(path)
+                    ? child.name
+                    : path + "/" + child.name;
+                CollectBindingFingerprintEntries(child, childPath, entries);
+            }
+        }
+
+        private static string NormalizeSha256(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length != 64 ||
+                value.Any(character => !Uri.IsHexDigit(character)))
+            {
+                return string.Empty;
+            }
+            return value.ToLowerInvariant();
+        }
+
+        private static string ComputeFileSha256(string path)
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                81920,
+                FileOptions.SequentialScan);
+            using var sha256 = SHA256.Create();
+            return ToLowerHex(sha256.ComputeHash(stream));
+        }
+
+        private static string ComputeSha256Hex(byte[] value)
+        {
+            using var sha256 = SHA256.Create();
+            return ToLowerHex(sha256.ComputeHash(value));
+        }
+
+        private static string ToLowerHex(byte[] value)
+        {
+            var builder = new StringBuilder(value.Length * 2);
+            foreach (var item in value)
+            {
+                builder.Append(item.ToString("x2"));
+            }
+            return builder.ToString();
+        }
+
+        private static void AppendCacheKeyPart(StringBuilder builder, string name, string value)
+        {
+            value ??= string.Empty;
+            builder.Append(name).Append('=').Append(value.Length).Append(':').Append(value).Append('|');
+        }
+
+        private static int FloatBits(float value)
+        {
+            return BitConverter.ToInt32(BitConverter.GetBytes(value), 0);
+        }
+
+        private static string BuildMorphTrackKey(string path, string name)
+        {
+            return (path ?? string.Empty).Length + ":" + (path ?? string.Empty) +
+                (name ?? string.Empty).Length + ":" + (name ?? string.Empty);
+        }
+
         private static string BuildSourceCacheKey(string motionPath, string facialPath)
         {
             var motion = new FileInfo(motionPath ?? string.Empty);
@@ -1580,7 +2249,7 @@ namespace QuestMmdPlayer
                 }
                 var target = root.Find(morphs.paths[index]);
                 var renderer = target == null ? null : target.GetComponent<SkinnedMeshRenderer>();
-                var blendShapeIndex = renderer?.sharedMesh == null
+                var blendShapeIndex = renderer == null || renderer.sharedMesh == null
                     ? -1
                     : renderer.sharedMesh.GetBlendShapeIndex(morphs.names[index]);
                 if (blendShapeIndex < 0)

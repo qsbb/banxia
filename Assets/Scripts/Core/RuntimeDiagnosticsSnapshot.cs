@@ -419,6 +419,12 @@ namespace QuestMmdPlayer
         public int ActionCacheHits { get; }
         public int ActionCacheMisses { get; }
         public int ActionCacheEvictions { get; }
+        public int DiskActionCacheHits { get; }
+        public int DiskActionCacheMisses { get; }
+        public int DiskActionCacheInvalid { get; }
+        public bool LastActionUsedDiskCache { get; }
+        public int LastDiskCacheReadMs { get; }
+        public int LastDiskCacheRebuildMs { get; }
         public int LastActionPrepareMs { get; }
         public bool FullBodyMotionBusy { get; }
         public bool ConversationPresentationActive { get; }
@@ -457,6 +463,12 @@ namespace QuestMmdPlayer
             ActionCacheHits = vmd == null ? 0 : vmd.CacheHitCount;
             ActionCacheMisses = vmd == null ? 0 : vmd.CacheMissCount;
             ActionCacheEvictions = vmd == null ? 0 : vmd.CacheEvictionCount;
+            DiskActionCacheHits = vmd == null ? 0 : vmd.DiskCacheHitCount;
+            DiskActionCacheMisses = vmd == null ? 0 : vmd.DiskCacheMissCount;
+            DiskActionCacheInvalid = vmd == null ? 0 : vmd.DiskCacheInvalidCount;
+            LastActionUsedDiskCache = vmd != null && vmd.LastPrepareUsedDiskCache;
+            LastDiskCacheReadMs = vmd == null ? -1 : vmd.LastPrepareDiskReadMilliseconds;
+            LastDiskCacheRebuildMs = vmd == null ? -1 : vmd.LastPrepareDiskRebuildMilliseconds;
             LastActionPrepareMs = vmd == null ? -1 : vmd.LastPrepareMilliseconds;
             FullBodyMotionBusy = AvatarActionPlaying || VmdLoading || VmdPlaying || HoldingEndPose || BlendingOut;
             ConversationPresentationActive = conversation != null && conversation.State != ConversationState.Idle;

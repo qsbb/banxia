@@ -5,6 +5,8 @@ using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using QuestMmdPlayer.Editor;
 using UnityEditor;
@@ -547,6 +549,66 @@ namespace QuestMmdPlayer.Tests
             Assert.That(
                 RuntimeMmdModelLoader.ShouldCountLoadFrame(false, 41, 40),
                 Is.False);
+        }
+
+        [Test]
+        public void ModelContentFingerprintMatchesPmxBytes()
+        {
+            temporaryDirectory = Path.Combine(
+                Path.GetTempPath(),
+                "banxia-model-fingerprint-" + System.Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(temporaryDirectory);
+            var modelPath = Path.Combine(temporaryDirectory, "model.pmx");
+            var bytes = Encoding.UTF8.GetBytes("PMX fingerprint fixture\0with binary data");
+            File.WriteAllBytes(modelPath, bytes);
+
+            string expected;
+            using (var sha256 = SHA256.Create())
+            {
+                expected = System.BitConverter.ToString(sha256.ComputeHash(bytes))
+                    .Replace("-", string.Empty);
+            }
+
+            var compute = typeof(RuntimeMmdModelLoader).GetMethod(
+                "ComputeFileSha256Async",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(compute, Is.Not.Null);
+            var actual = Task.Run(async () =>
+            {
+                var task = (Task<string>)compute.Invoke(
+                    null,
+                    new object[] { modelPath, null, CancellationToken.None });
+                return await task;
+            }).GetAwaiter().GetResult();
+
+            Assert.That(actual, Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void UnloadWithoutCurrentModelClearsModelContentFingerprint()
+        {
+            var host = new GameObject("Model fingerprint lifecycle test");
+            try
+            {
+                var loader = host.AddComponent<RuntimeMmdModelLoader>();
+                var fingerprintProperty = typeof(RuntimeMmdModelLoader).GetProperty(
+                    "CurrentModelContentSha256",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                Assert.That(fingerprintProperty, Is.Not.Null);
+                fingerprintProperty.SetValue(loader, new string('A', 64));
+
+                var unload = typeof(RuntimeMmdModelLoader).GetMethod(
+                    "UnloadCurrentModel",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.That(unload, Is.Not.Null);
+                unload.Invoke(loader, null);
+
+                Assert.That(loader.CurrentModelContentSha256, Is.Empty);
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
         }
 
         private static IReadOnlyList<RuntimeMmdModelInfo> DiscoverInstalledModels(string root)

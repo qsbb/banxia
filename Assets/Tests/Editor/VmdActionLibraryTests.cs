@@ -182,6 +182,10 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(library.CacheHitCount, Is.Zero);
                 Assert.That(library.CacheMissCount, Is.Zero);
                 Assert.That(library.CacheEvictionCount, Is.Zero);
+                Assert.That(library.DiskCacheHitCount, Is.Zero);
+                Assert.That(library.DiskCacheMissCount, Is.Zero);
+                Assert.That(library.DiskCacheInvalidCount, Is.Zero);
+                Assert.That(library.LastPrepareUsedDiskCache, Is.False);
                 Assert.That(library.LastPrepareMilliseconds, Is.EqualTo(-1));
             }
             finally
@@ -373,6 +377,32 @@ namespace QuestMmdPlayer.Tests
             Assert.That(VmdActionLibrary.SelectNextDance(actions, "dance_alpha").Id, Is.EqualTo("dance_beta"));
             Assert.That(VmdActionLibrary.SelectNextDance(actions, "dance_beta").Id, Is.EqualTo("greeting_motion"));
             Assert.That(VmdActionLibrary.SelectNextDance(actions, "missing").Id, Is.EqualTo("dance_alpha"));
+        }
+
+        [Test]
+        public void BindingFingerprintTracksRuntimeHierarchyChanges()
+        {
+            var root = new GameObject("Fingerprint root");
+            try
+            {
+                new GameObject("Bone A").transform.SetParent(root.transform, false);
+                var method = typeof(VmdActionLibrary).GetMethod(
+                    "BuildAnimationBindingFingerprint",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                Assert.That(method, Is.Not.Null);
+
+                var first = (string)method.Invoke(null, new object[] { root.transform });
+                root.transform.GetChild(0).name = "Bone B";
+                var second = (string)method.Invoke(null, new object[] { root.transform });
+
+                Assert.That(first, Has.Length.EqualTo(64));
+                Assert.That(second, Has.Length.EqualTo(64));
+                Assert.That(second, Is.Not.EqualTo(first));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
         }
         private static void WriteVmd(string path, uint[] boneFrames, uint[] morphFrames)
         {

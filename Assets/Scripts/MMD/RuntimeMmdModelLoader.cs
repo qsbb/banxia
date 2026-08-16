@@ -80,7 +80,14 @@ namespace QuestMmdPlayer
             internal long length;
             internal long lastWriteUtcTicks;
             internal PMXModel model;
+            internal string contentSha256;
             internal float lastUsedAt;
+        }
+
+        private sealed class ImportedModelArtifacts
+        {
+            internal PMXImportResult result;
+            internal string contentSha256;
         }
 
         public event Action<AvatarController> AvatarLoaded;
@@ -94,6 +101,7 @@ namespace QuestMmdPlayer
         public PMXModel CurrentMmdModel => currentResult == null ? null : currentResult.model;
         public bool IsLoading { get; private set; }
         public string CurrentModelPath { get; private set; }
+        public string CurrentModelContentSha256 { get; private set; } = string.Empty;
         public RuntimeModelLoadPhase LoadPhase { get; private set; } = RuntimeModelLoadPhase.Idle;
         public RuntimeModelLoadPhase LastFailurePhase { get; private set; } = RuntimeModelLoadPhase.Idle;
         public int LastLoadMilliseconds { get; private set; } = -1;
@@ -479,6 +487,46 @@ namespace QuestMmdPlayer
             }
         }
 
+        internal static async Task<string> ComputeFileSha256Async(
+            string path,
+            UMTFrameBudget frameBudget,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentException("A PMX file path is required.", nameof(path));
+            }
+
+            var buffer = new byte[64 * 1024];
+            using (var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                buffer.Length,
+                true))
+            using (var sha256 = SHA256.Create())
+            {
+                int read;
+                while ((read = await stream.ReadAsync(
+                           buffer,
+                           0,
+                           buffer.Length,
+                           cancellationToken)) > 0)
+                {
+                    sha256.TransformBlock(buffer, 0, read, buffer, 0);
+                    if (frameBudget != null)
+                    {
+                        await frameBudget.YieldIfNeeded();
+                    }
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                sha256.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                return BitConverter.ToString(sha256.Hash).Replace("-", string.Empty);
+            }
+        }
+
         internal static string ResolveDisplayName(string modelPath)
         {
             var fileName = Path.GetFileNameWithoutExtension(modelPath) ?? string.Empty;
@@ -769,7 +817,8 @@ namespace QuestMmdPlayer
                 await new UMTFrameBudget(0d).YieldIfNeeded();
                 token.ThrowIfCancellationRequested();
                 loadMetricsStartFrame = Time.frameCount;
-                importedResult = await ImportAsync(pmxPath, textureBaseDirectory, token);
+                var importedArtifacts = await ImportAsync(pmxPath, textureBaseDirectory, token);
+                importedResult = importedArtifacts.result;
                 token.ThrowIfCancellationRequested();
 
                 var modelRoot = importedResult.root;
@@ -783,6 +832,7 @@ namespace QuestMmdPlayer
                 currentResult = importedResult;
                 currentAvatar = avatar;
                 CurrentModelPath = pmxPath;
+                CurrentModelContentSha256 = importedArtifacts.contentSha256;
                 RememberSelectedModel(pmxPath);
                 importedResult = null;
                 importedAvatarHost = null;
@@ -807,6 +857,10 @@ namespace QuestMmdPlayer
             {
                 if (generation == loadGeneration)
                 {
+                    if (currentResult == null)
+                    {
+                        CurrentModelContentSha256 = string.Empty;
+                    }
                     LastFailurePhase = LoadPhase;
                     LoadPhase = RuntimeModelLoadPhase.Cancelled;
                     LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
@@ -820,6 +874,10 @@ namespace QuestMmdPlayer
             {
                 if (generation == loadGeneration)
                 {
+                    if (currentResult == null)
+                    {
+                        CurrentModelContentSha256 = string.Empty;
+                    }
                     LastFailurePhase = LoadPhase;
                     LoadPhase = RuntimeModelLoadPhase.Failed;
                     LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
@@ -867,13 +925,19 @@ namespace QuestMmdPlayer
             loadCancellation?.Cancel();
         }
 
-        private async Task<PMXImportResult> ImportAsync(string pmxPath, string textureBaseDirectory, CancellationToken token)
+        private async Task<ImportedModelArtifacts> ImportAsync(
+            string pmxPath,
+            string textureBaseDirectory,
+            CancellationToken token)
         {
             var budget = new UMTFrameBudget(frameBudgetMilliseconds);
             PMXModel model;
+            string contentSha256;
             var readStartedAt = Time.realtimeSinceStartup;
-            if (!TryGetParsedModel(pmxPath, out model))
+            if (!TryGetParsedModel(pmxPath, out model, out contentSha256))
             {
+                contentSha256 = await ComputeFileSha256Async(pmxPath, budget, token);
+                token.ThrowIfCancellationRequested();
                 using (var stream = File.OpenRead(pmxPath))
                 {
                     model = await PMXReader.ReadAsync(
@@ -884,7 +948,7 @@ namespace QuestMmdPlayer
                 }
                 token.ThrowIfCancellationRequested();
                 LastReadMilliseconds = ElapsedMilliseconds(readStartedAt);
-                StoreParsedModel(pmxPath, model);
+                StoreParsedModel(pmxPath, model, contentSha256);
             }
             else
             {
@@ -947,7 +1011,11 @@ namespace QuestMmdPlayer
                 }
             }
 
-            return result;
+            return new ImportedModelArtifacts
+            {
+                result = result,
+                contentSha256 = contentSha256
+            };
         }
 
         private UMTResources ResolveRuntimeUmtResources()
@@ -1047,9 +1115,13 @@ namespace QuestMmdPlayer
             return NormalizeAndroidStorageAlias(Path.GetFullPath(path));
         }
 
-        private bool TryGetParsedModel(string pmxPath, out PMXModel model)
+        private bool TryGetParsedModel(
+            string pmxPath,
+            out PMXModel model,
+            out string contentSha256)
         {
             model = null;
+            contentSha256 = string.Empty;
             FileInfo fileInfo;
             try
             {
@@ -1075,22 +1147,24 @@ namespace QuestMmdPlayer
                 if (!string.Equals(entry.path, fullPath, StringComparison.OrdinalIgnoreCase) ||
                     entry.length != fileInfo.Length ||
                     entry.lastWriteUtcTicks != fileInfo.LastWriteTimeUtc.Ticks ||
-                    entry.model == null)
+                    entry.model == null ||
+                    string.IsNullOrEmpty(entry.contentSha256))
                 {
                     continue;
                 }
 
                 entry.lastUsedAt = Time.realtimeSinceStartup;
                 model = entry.model;
+                contentSha256 = entry.contentSha256;
                 Debug.Log("[ModelCache] hit name=" + ResolveDisplayName(fullPath));
                 return true;
             }
             return false;
         }
 
-        private void StoreParsedModel(string pmxPath, PMXModel model)
+        private void StoreParsedModel(string pmxPath, PMXModel model, string contentSha256)
         {
-            if (model == null)
+            if (model == null || string.IsNullOrEmpty(contentSha256))
             {
                 return;
             }
@@ -1128,6 +1202,7 @@ namespace QuestMmdPlayer
                 length = fileInfo.Length,
                 lastWriteUtcTicks = fileInfo.LastWriteTimeUtc.Ticks,
                 model = model,
+                contentSha256 = contentSha256,
                 lastUsedAt = Time.realtimeSinceStartup
             });
             TrimParsedModelCache();
@@ -1258,6 +1333,7 @@ namespace QuestMmdPlayer
             {
                 currentAvatar = null;
                 CurrentModelPath = null;
+                CurrentModelContentSha256 = string.Empty;
                 return;
             }
 
@@ -1271,6 +1347,7 @@ namespace QuestMmdPlayer
             currentResult = null;
             currentAvatar = null;
             CurrentModelPath = null;
+            CurrentModelContentSha256 = string.Empty;
         }
 
         internal static void DestroyImportResult(PMXImportResult result, GameObject avatarHost = null)
