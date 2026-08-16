@@ -421,6 +421,10 @@ namespace QuestMmdPlayer
                 case "configuration_invalid": return "后端绑定配置无效";
                 case "vmd_request": return "开始准备导入动作";
                 case "vmd_cache_hit": return "命中动作内存缓存";
+                case "vmd_read_completed": return "动作文件读取完成";
+                case "vmd_motion_converted": return "身体动作转换完成";
+                case "vmd_facial_converted": return "脸部动作转换完成";
+                case "vmd_bindings_ready": return "动作骨骼与表情绑定完成";
                 case "vmd_playback_cached": return "缓存动作已开始播放";
                 case "vmd_playback_prepared": return "动作转换完成并开始播放";
                 case "vmd_end_pose_hold": return "动作结束姿势保持中";

@@ -190,6 +190,74 @@ namespace QuestMmdPlayer.Tests
             }
         }
 
+        [Test]
+        public void QuestActionPreparationKeepsAHeadroomSizedFrameSlice()
+        {
+            var host = new GameObject("VMD frame budget policy");
+            try
+            {
+                var library = host.AddComponent<VmdActionLibrary>();
+                var field = typeof(VmdActionLibrary).GetField(
+                    "frameBudgetMilliseconds",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+
+                Assert.That(field, Is.Not.Null);
+                Assert.That((float)field.GetValue(library), Is.InRange(.5f, 3f));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void FacialTrackConversionDoesNotRebakeBodyPhysics()
+        {
+            var motion = InvokeConversionOptions("CreateMotionConversionOptions", 30f, .2f);
+            var facial = InvokeConversionOptions("CreateFacialConversionOptions", 30f);
+
+            Assert.That(motion.bakeIKToFK, Is.True);
+            Assert.That(motion.bakePhysicsToFK, Is.True);
+            Assert.That(facial.bakeIKToFK, Is.False);
+            Assert.That(facial.bakePhysicsToFK, Is.False);
+        }
+
+        [Test]
+        public void PreparationPhysicsLeaseRestoresOnlyStateItChanged()
+        {
+            var owner = new GameObject("VMD preparation physics policy");
+            try
+            {
+                var manager = owner.AddComponent<MMDTransformManager>();
+                var suspend = typeof(VmdActionLibrary).GetMethod(
+                    "SuspendLivePhysicsForPreparation",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                var restore = typeof(VmdActionLibrary).GetMethod(
+                    "RestoreLivePhysicsAfterPreparation",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+
+                manager.livePhysics = true;
+                var owned = (bool)suspend.Invoke(null, new object[] { manager });
+                Assert.That(owned, Is.True);
+                Assert.That(manager.livePhysics, Is.False);
+                var restoreArguments = new object[] { manager, owned };
+                restore.Invoke(null, restoreArguments);
+                Assert.That(manager.livePhysics, Is.True);
+                Assert.That((bool)restoreArguments[1], Is.False);
+
+                manager.livePhysics = false;
+                owned = (bool)suspend.Invoke(null, new object[] { manager });
+                Assert.That(owned, Is.False);
+                restoreArguments = new object[] { manager, owned };
+                restore.Invoke(null, restoreArguments);
+                Assert.That(manager.livePhysics, Is.False);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+            }
+        }
+
         [TestCase(10f, 10.125f, 125)]
         [TestCase(2f, 1f, 0)]
         public void ModelLoadElapsedTimeIsBounded(float startedAt, float now, int expected)
@@ -251,6 +319,17 @@ namespace QuestMmdPlayer.Tests
                 writer.Write(frame);
                 writer.Write(1f);
             }
+        }
+
+        private static VMDAnimationClipOptions InvokeConversionOptions(
+            string methodName,
+            params object[] arguments)
+        {
+            var method = typeof(VmdActionLibrary).GetMethod(
+                methodName,
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            return (VMDAnimationClipOptions)method.Invoke(null, arguments);
         }
 
         private static void WriteFixedAscii(BinaryWriter writer, string value, int length)

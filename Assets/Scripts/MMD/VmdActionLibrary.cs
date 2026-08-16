@@ -404,7 +404,11 @@ namespace QuestMmdPlayer
     public sealed class VmdActionLibrary : MonoBehaviour
     {
         [SerializeField] private VmdActionLimits limits = new VmdActionLimits();
-        [SerializeField, Range(1f, 16f)] private float frameBudgetMilliseconds = 10f;
+        // Leave enough of Quest's 13.89 ms (72 Hz) frame for rendering and the
+        // live avatar. The original player used a 3 ms slice; 10 ms caused the
+        // VMD converter and a joint-heavy model's Bullet world to share a long
+        // frame even though average CPU/GPU utilization stayed low.
+        [SerializeField, Range(.5f, 8f)] private float frameBudgetMilliseconds = 2f;
         [SerializeField, Range(.25f, 2f)] private float endPoseHoldSeconds = 1f;
         [SerializeField, Range(.35f, 1.2f)] private float exitBlendSeconds = .65f;
         [SerializeField, Range(.05f, 1.2f)] private float physicsWarmUpDuration = .2f;
@@ -442,6 +446,7 @@ namespace QuestMmdPlayer
         private Transform boundRoot;
         private AvatarController boundAvatar;
         private MMDTransformManager transformManager;
+        private PMXAnimationPaths animationPaths;
         private BoneBinding[] boneBindings = Array.Empty<BoneBinding>();
         private MorphBinding[] morphBindings = Array.Empty<MorphBinding>();
         private int generation;
@@ -475,6 +480,12 @@ namespace QuestMmdPlayer
         public int CacheMissCount { get; private set; }
         public int CacheEvictionCount { get; private set; }
         public int LastPrepareMilliseconds { get; private set; } = -1;
+        public int LastPrepareReadMilliseconds { get; private set; } = -1;
+        public int LastPrepareMotionConversionMilliseconds { get; private set; } = -1;
+        public int LastPrepareFacialConversionMilliseconds { get; private set; } = -1;
+        public int LastPrepareBindingMilliseconds { get; private set; } = -1;
+        public int LastPrepareYieldCount { get; private set; }
+        public bool LastPrepareSuspendedLivePhysics { get; private set; }
         public bool IsPrepared(string actionId) => !string.IsNullOrEmpty(actionId) && preparedActions.ContainsKey(actionId);
 
         private sealed class BoneBinding
@@ -682,6 +693,7 @@ namespace QuestMmdPlayer
             boundRoot = modelRoot;
             boundAvatar = avatar;
             transformManager = modelRoot.GetComponent<MMDTransformManager>();
+            animationPaths = new PMXAnimationPaths();
             diagnostics?.RecordStage("avatar_action", "ready", "vmd_model_bound");
         }
 
@@ -694,6 +706,7 @@ namespace QuestMmdPlayer
             boundRoot = null;
             boundAvatar = null;
             transformManager = null;
+            animationPaths = null;
             lastPlayedActionId = string.Empty;
             PlaybackPhase = VmdPlaybackPhase.Idle;
         }
@@ -726,8 +739,18 @@ namespace QuestMmdPlayer
             var requestGeneration = generation;
             var requestModel = boundModel;
             var requestRoot = boundRoot;
+            var requestTransformManager = transformManager;
+            var requestAnimationPaths = animationPaths;
             VMDAnimation motionAnimation = null;
             VMDAnimation facialAnimation = null;
+            UMTFrameBudget preparationBudget = null;
+            var preparationSuspendedLivePhysics = false;
+            LastPrepareReadMilliseconds = -1;
+            LastPrepareMotionConversionMilliseconds = -1;
+            LastPrepareFacialConversionMilliseconds = -1;
+            LastPrepareBindingMilliseconds = -1;
+            LastPrepareYieldCount = 0;
+            LastPrepareSuspendedLivePhysics = false;
             await conversionGate.WaitAsync();
             try
             {
@@ -750,6 +773,9 @@ namespace QuestMmdPlayer
                 {
                     CacheMissCount++;
                     preparedActions.Remove(actionId);
+                    preparationSuspendedLivePhysics = SuspendLivePhysicsForPreparation(
+                        requestTransformManager);
+                    LastPrepareSuspendedLivePhysics = preparationSuspendedLivePhysics;
                     info = VmdActionFilePolicy.Inspect(source.motionPath, actionId, limits);
                     if (!string.IsNullOrEmpty(source.facialPath))
                     {
@@ -769,46 +795,85 @@ namespace QuestMmdPlayer
                     }
 
                     ProgressChanged?.Invoke("正在读取 " + info.DisplayName);
-                    var budget = new UMTFrameBudget(frameBudgetMilliseconds);
+                    preparationBudget = new UMTFrameBudget(frameBudgetMilliseconds);
+                    var stageStartedAt = Time.realtimeSinceStartup;
                     using (var stream = new FileStream(source.motionPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                     {
-                        motionAnimation = await VMDReader.ReadAsync(budget, stream);
+                        motionAnimation = await VMDReader.ReadAsync(preparationBudget, stream);
                     }
                     if (!string.IsNullOrEmpty(source.facialPath))
                     {
                         using (var stream = new FileStream(source.facialPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                         {
-                            facialAnimation = await VMDReader.ReadAsync(budget, stream);
+                            facialAnimation = await VMDReader.ReadAsync(preparationBudget, stream);
                         }
                     }
+                    LastPrepareReadMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                    diagnostics?.RecordStage(
+                        "avatar_action",
+                        "completed",
+                        "vmd_read_completed",
+                        elapsedMs: LastPrepareReadMilliseconds);
                     if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
                     {
                         return false;
                     }
 
                     ProgressChanged?.Invoke("正在适配骨骼与表情");
-                    var options = new VMDAnimationClipOptions
-                    {
-                        frameRate = limits.frameRate,
-                        bakeIKToFK = true,
-                        bakePhysicsToFK = true,
-                        physicsWarmUpDuration = Mathf.Clamp(physicsWarmUpDuration, .05f, 1.2f)
-                    };
+                    var options = CreateMotionConversionOptions(
+                        limits.frameRate,
+                        physicsWarmUpDuration);
+                    stageStartedAt = Time.realtimeSinceStartup;
                     var clipData = await VMDAnimationClipConverter.ConvertAsync(
-                        budget, motionAnimation, requestModel, null, options);
-                    var facialClipData = facialAnimation == null
-                        ? null
-                        : await VMDAnimationClipConverter.ConvertAsync(
-                            budget, facialAnimation, requestModel, null, options);
+                        preparationBudget,
+                        motionAnimation,
+                        requestModel,
+                        requestAnimationPaths,
+                        options);
+                    LastPrepareMotionConversionMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                    diagnostics?.RecordStage(
+                        "avatar_action",
+                        "completed",
+                        "vmd_motion_converted",
+                        elapsedMs: LastPrepareMotionConversionMilliseconds);
+                    VMDModelClipData facialClipData = null;
+                    if (facialAnimation != null)
+                    {
+                        stageStartedAt = Time.realtimeSinceStartup;
+                        // A facial-only VMD does not need another full-body IK and
+                        // Bullet bake. The old shared options repeated the most
+                        // expensive stage solely to obtain morph curves.
+                        facialClipData = await VMDAnimationClipConverter.ConvertAsync(
+                            preparationBudget,
+                            facialAnimation,
+                            requestModel,
+                            requestAnimationPaths,
+                            CreateFacialConversionOptions(limits.frameRate));
+                        LastPrepareFacialConversionMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                        diagnostics?.RecordStage(
+                            "avatar_action",
+                            "completed",
+                            "vmd_facial_converted",
+                            elapsedMs: LastPrepareFacialConversionMilliseconds);
+                    }
                     if (!IsRequestCurrent(requestGeneration, requestModel, requestRoot))
                     {
                         return false;
                     }
 
+                    stageStartedAt = Time.realtimeSinceStartup;
                     nextBones = BuildBoneBindings(requestRoot, clipData);
                     nextMorphs = MergeMorphBindings(
                         BuildMorphBindings(requestRoot, clipData),
                         BuildMorphBindings(requestRoot, facialClipData));
+                    LastPrepareBindingMilliseconds = ElapsedMilliseconds(stageStartedAt);
+                    LastPrepareYieldCount = preparationBudget.YieldCount;
+                    diagnostics?.RecordStage(
+                        "avatar_action",
+                        "completed",
+                        "vmd_bindings_ready",
+                        elapsedMs: LastPrepareBindingMilliseconds,
+                        eventCount: LastPrepareYieldCount);
                     if (nextBones.Length == 0 && nextMorphs.Length == 0)
                     {
                         throw new InvalidDataException("VMD action has no tracks compatible with the current model.");
@@ -828,6 +893,9 @@ namespace QuestMmdPlayer
                 {
                     return false;
                 }
+                RestoreLivePhysicsAfterPreparation(
+                    requestTransformManager,
+                    ref preparationSuspendedLivePhysics);
                 CompleteReturnToIdle();
                 boneBindings = nextBones;
                 morphBindings = nextMorphs;
@@ -843,6 +911,12 @@ namespace QuestMmdPlayer
                 Debug.Log(
                     "[VmdActionLibrary] Playback ready: action=" + info.Id +
                     " cache=" + usedPreparedCache +
+                    " yields=" + LastPrepareYieldCount +
+                    " read_ms=" + LastPrepareReadMilliseconds +
+                    " motion_convert_ms=" + LastPrepareMotionConversionMilliseconds +
+                    " facial_convert_ms=" + LastPrepareFacialConversionMilliseconds +
+                    " binding_ms=" + LastPrepareBindingMilliseconds +
+                    " live_physics_paused=" + LastPrepareSuspendedLivePhysics +
                     " elapsed_ms=" + Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - operationStartedAt) * 1000f)),
                     this);
                 LastPrepareMilliseconds = Mathf.Max(
@@ -882,6 +956,9 @@ namespace QuestMmdPlayer
             }
             finally
             {
+                RestoreLivePhysicsAfterPreparation(
+                    requestTransformManager,
+                    ref preparationSuspendedLivePhysics);
                 if (motionAnimation != null)
                 {
                     Destroy(motionAnimation);
@@ -894,6 +971,66 @@ namespace QuestMmdPlayer
                 IsLoading = false;
                 PlaybackChanged?.Invoke();
             }
+        }
+
+        private static VMDAnimationClipOptions CreateMotionConversionOptions(
+            float frameRate,
+            float warmUpDuration)
+        {
+            return new VMDAnimationClipOptions
+            {
+                frameRate = Mathf.Max(.01f, frameRate),
+                bakeIKToFK = true,
+                bakePhysicsToFK = true,
+                physicsWarmUpDuration = Mathf.Clamp(warmUpDuration, .05f, 1.2f)
+            };
+        }
+
+        private static VMDAnimationClipOptions CreateFacialConversionOptions(float frameRate)
+        {
+            return new VMDAnimationClipOptions
+            {
+                frameRate = Mathf.Max(.01f, frameRate),
+                bakeIKToFK = false,
+                bakePhysicsToFK = false
+            };
+        }
+
+        private static bool SuspendLivePhysicsForPreparation(MMDTransformManager manager)
+        {
+            if (manager == null || !manager.livePhysics)
+            {
+                return false;
+            }
+
+            manager.physicsManager?.DiscardAccumulatedSimulationTime();
+            manager.livePhysics = false;
+            return true;
+        }
+
+        private static void RestoreLivePhysicsAfterPreparation(
+            MMDTransformManager manager,
+            ref bool suspendedByPreparation)
+        {
+            if (!suspendedByPreparation)
+            {
+                return;
+            }
+
+            suspendedByPreparation = false;
+            if (manager == null)
+            {
+                return;
+            }
+            manager.livePhysics = true;
+            manager.physicsManager?.DiscardAccumulatedSimulationTime();
+        }
+
+        private static int ElapsedMilliseconds(float startedAt)
+        {
+            return Mathf.Max(
+                0,
+                Mathf.RoundToInt((Time.realtimeSinceStartup - startedAt) * 1000f));
         }
 
         public async Task<bool> PlayRecommendedDanceAsync()

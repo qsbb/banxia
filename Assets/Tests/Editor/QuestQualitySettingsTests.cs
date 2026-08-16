@@ -37,6 +37,21 @@ namespace QuestMmdPlayer.Tests
         {
             Assert.That(QuestQualitySettings.NormalizeRefreshRate(refreshRate), Is.EqualTo(expected));
         }
+
+        [TestCase(60f, 72f, false)]
+        [TestCase(71.6f, 72f, true)]
+        [TestCase(72f, 72f, true)]
+        [TestCase(72.6f, 72f, false)]
+        [TestCase(float.NaN, 72f, false)]
+        public void TransientReportedRefreshRateCannotReplaceTheRequestedCadence(
+            float reported,
+            float requested,
+            bool expected)
+        {
+            Assert.That(
+                QuestQualitySettings.IsRequestedRefreshRateActive(reported, requested),
+                Is.EqualTo(expected));
+        }
     }
 }
 #endif

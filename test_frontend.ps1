@@ -45,6 +45,7 @@ $requiredFiles = @(
     "Assets/Scripts/Core/RuntimeDiagnosticsSnapshot.cs",
     "Assets/Scripts/Core/RuntimePerformanceMonitor.cs",
     "Assets/Scripts/Conversation/AvatarConversationPresenter.cs",
+    "Assets/Scripts/Conversation/AvatarMouthLatePass.cs",
     "Assets/Scripts/Conversation/ConversationController.cs",
     "Assets/Scripts/Conversation/ConversationStateMachine.cs",
     "Assets/Scripts/Conversation/QuestMicrophoneInput.cs",
@@ -115,6 +116,7 @@ $sourceChecks = @{
     "Assets/Scripts/MMD/VmdActionLibrary.cs" = @("VMDReader.ReadAsync", "VMDAnimationClipConverter.ConvertAsync", "BeginPhysicsArbitration", "StopAndReturnToIdle")
     "Assets/Scripts/MMD/RuntimeMmdModelLoader.cs" = @("SelectedModelPreference", "RestoreLastModelAsync", "ParsedModelCacheCapacity", "TrimParsedModelCache", "ModelCache")
     "Assets/Scripts/Conversation/AvatarConversationPresenter.cs" = @("ApplyIntent", "PlayRecommendedDance", "PlayActionFromSource")
+    "Assets/Scripts/Conversation/AvatarMouthLatePass.cs" = @("DefaultExecutionOrder(11000)", "ApplyMouthLatePass")
     "Assets/Scripts/Conversation/ConversationController.cs" = @("BeginVoiceInput", "PushVoiceAudio", "HandleTransportEvent", "backend_total")
     "Assets/Scripts/Backend/AstrBotBridge.cs" = @("TryIngestCommandJson", "CommandReceived", "sse_dispatch", "X-Embodiment-Bridge-Key", "BindSpatialContext", "UploadSpatialContext", "spatial/context", "SpatialRevisionPreferenceKey", "HasRoomData")
     "Assets/Scripts/Backend/AstrBotProtocol.cs" = @("SpatialContextRequest", "floor_count", "bed_count", "scene_capture_available", "ContentSignature")

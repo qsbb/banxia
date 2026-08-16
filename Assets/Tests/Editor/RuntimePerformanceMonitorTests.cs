@@ -6,6 +6,60 @@ namespace QuestMmdPlayer.Tests
     public sealed class RuntimePerformanceMonitorTests
     {
         [Test]
+        public void AndroidSystemSamplingCannotRunOnThePerSecondTelemetryCadence()
+        {
+            Assert.That(
+                RuntimePerformanceMonitor.AndroidSystemSampleIntervalSeconds,
+                Is.GreaterThanOrEqualTo(30f));
+        }
+
+        [Test]
+        public void AndroidSamplingDoesNotThrottlePerSecondXrTelemetry()
+        {
+            var nextSlow = 0f;
+            var nextAndroid = 0f;
+            var slowSamples = 0;
+            var androidSamples = 0;
+            const float frameSeconds = 1f / 72f;
+
+            for (var now = 0f; now <= 31f; now += frameSeconds)
+            {
+                RuntimePerformanceMonitor.ResolveSlowSamplingSchedule(
+                    now,
+                    true,
+                    ref nextSlow,
+                    ref nextAndroid,
+                    out var captureSlow,
+                    out var captureAndroid);
+                if (captureSlow) slowSamples++;
+                if (captureAndroid) androidSamples++;
+            }
+
+            Assert.That(slowSamples, Is.GreaterThanOrEqualTo(30));
+            Assert.That(androidSamples, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void DisablingDetailedSamplingDoesNotDisableXrTelemetrySchedule()
+        {
+            var nextSlow = 0f;
+            var nextAndroid = 0f;
+
+            RuntimePerformanceMonitor.ResolveSlowSamplingSchedule(
+                0f,
+                false,
+                ref nextSlow,
+                ref nextAndroid,
+                out var captureSlow,
+                out var captureAndroid);
+
+            Assert.That(captureSlow, Is.True);
+            Assert.That(captureAndroid, Is.False);
+            Assert.That(nextSlow, Is.EqualTo(1f));
+            Assert.That(nextAndroid, Is.Zero);
+        }
+
+        [Test]
         public void FrameStatisticsIgnoreInvalidSamplesAndCalculatePercentiles()
         {
             var samples = new[] { 10f, 20f, 30f, 40f, 50f, 0f, float.NaN };

@@ -8,6 +8,7 @@ namespace QuestMmdPlayer.Tests
     public sealed class VoiceConversationControllerTests
     {
         private GameObject owner;
+        private Mesh generatedMesh;
 
         [TearDown]
         public void TearDown()
@@ -15,6 +16,10 @@ namespace QuestMmdPlayer.Tests
             if (owner != null)
             {
                 UnityEngine.Object.DestroyImmediate(owner);
+            }
+            if (generatedMesh != null)
+            {
+                UnityEngine.Object.DestroyImmediate(generatedMesh);
             }
         }
 
@@ -670,6 +675,67 @@ namespace QuestMmdPlayer.Tests
             Assert.That(
                 AvatarConversationPresenter.GetExpressionWeight("笑い", "happy", 1f),
                 Is.EqualTo(38f).Within(.001f));
+        }
+
+        [Test]
+        public void ForestBerryMorphCatalogOnlyBindsCanonicalVowels()
+        {
+            owner = new GameObject("Forest berry mouth classification test");
+            var renderer = owner.AddComponent<SkinnedMeshRenderer>();
+            generatedMesh = new Mesh
+            {
+                vertices = new[] { Vector3.zero, Vector3.right, Vector3.up },
+                triangles = new[] { 0, 1, 2 }
+            };
+            var delta = new Vector3[3];
+            var names = new[]
+            {
+                "あ", "あ2", "あ3", "あ4", "い", "い2", "い3", "い4",
+                "う", "え", "え2", "お", "ん", "抿嘴", "口横広げ", "口上",
+                "口下", "口角上げ", "口角下げ", "笑い"
+            };
+            for (var index = 0; index < names.Length; index++)
+            {
+                generatedMesh.AddBlendShapeFrame(names[index], 100f, delta, delta, delta);
+            }
+            renderer.sharedMesh = generatedMesh;
+            var avatar = owner.AddComponent<AvatarController>();
+            avatar.Initialize(owner.transform);
+            var presenter = owner.AddComponent<AvatarConversationPresenter>();
+
+            presenter.Bind(avatar, null, null);
+
+            Assert.That(presenter.MatchedVisemeCount, Is.EqualTo(5));
+            Assert.That(owner.GetComponent<AvatarMouthLatePass>(), Is.Not.Null);
+            Assert.That(AvatarConversationPresenter.GetVisemeGroup("あ2"), Is.EqualTo(-1));
+            Assert.That(AvatarConversationPresenter.GetVisemeGroup("口上"), Is.EqualTo(-1));
+            Assert.That(AvatarConversationPresenter.GetVisemeGroup("笑い"), Is.EqualTo(-1));
+        }
+
+        [Test]
+        public void ForestBerryHappyExpressionPrefersOneAuthoredCalmMorph()
+        {
+            Assert.That(
+                AvatarConversationPresenter.GetExpressionPriority("なごみ", "happy"),
+                Is.GreaterThan(AvatarConversationPresenter.GetExpressionPriority("口角上げ", "happy")));
+            Assert.That(
+                AvatarConversationPresenter.GetExpressionPriority("口角上げ", "happy"),
+                Is.GreaterThan(AvatarConversationPresenter.GetExpressionPriority("笑い", "happy")));
+            Assert.That(AvatarConversationPresenter.GetExpressionPriority("まばたき", "happy"), Is.Zero);
+        }
+
+        [Test]
+        public void SpeechMouthLayerRunsAfterVmdAndBeforeTouchExpressions()
+        {
+            var mouthOrder = ((DefaultExecutionOrder)Attribute.GetCustomAttribute(
+                typeof(AvatarMouthLatePass), typeof(DefaultExecutionOrder))).order;
+            var vmdOrder = ((DefaultExecutionOrder)Attribute.GetCustomAttribute(
+                typeof(VmdActionLibrary), typeof(DefaultExecutionOrder))).order;
+            var touchOrder = ((DefaultExecutionOrder)Attribute.GetCustomAttribute(
+                typeof(AvatarHumanInteraction), typeof(DefaultExecutionOrder))).order;
+
+            Assert.That(mouthOrder, Is.GreaterThan(vmdOrder));
+            Assert.That(mouthOrder, Is.LessThan(touchOrder));
         }
 
         [Test]

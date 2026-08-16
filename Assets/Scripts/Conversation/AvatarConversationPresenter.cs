@@ -33,6 +33,7 @@ namespace QuestMmdPlayer
         private AvatarHumanInteraction humanInteraction;
         private Pcm16StreamAudioPlayer audioPlayer;
         private VmdActionLibrary vmdActions;
+        private AvatarMouthLatePass mouthLatePass;
         private AvatarPlacementService placement;
         private RuntimeDebugLog diagnostics;
         private readonly SemaphoreSlim danceRequestGate = new SemaphoreSlim(1, 1);
@@ -51,6 +52,7 @@ namespace QuestMmdPlayer
         private bool hasSmoothedHeadRotation;
         private bool mouthWasActive;
         private float smoothedMouthAmount;
+        private int fallbackVisemeGroup = -1;
         private string targetEmotion = "neutral";
         private float targetEmotionIntensity;
         private string manualExpression = "neutral";
@@ -65,7 +67,6 @@ namespace QuestMmdPlayer
         [SerializeField, Range(1f, 12f)] private float expressionBlendSpeed = 6f;
         [SerializeField, Range(1f, 24f)] private float mouthAttackSpeed = 11f;
         [SerializeField, Range(1f, 24f)] private float mouthReleaseSpeed = 7f;
-        [SerializeField, Range(2f, 10f)] private float visemeCyclesPerSecond = 5f;
 
         public int MatchedVisemeCount => visemes.Count;
         public string ManualExpression => manualExpression;
@@ -97,6 +98,12 @@ namespace QuestMmdPlayer
             humanInteraction = human;
             audioPlayer = streamPlayer;
             vmdActions = GetComponent<VmdActionLibrary>();
+            mouthLatePass = GetComponent<AvatarMouthLatePass>();
+            if (mouthLatePass == null)
+            {
+                mouthLatePass = gameObject.AddComponent<AvatarMouthLatePass>();
+            }
+            mouthLatePass.Initialize(this);
             SubscribeVmdLifecycle();
             placement = GetComponent<AvatarPlacementService>();
             diagnostics = GetComponent<RuntimeDebugLog>();
@@ -112,6 +119,7 @@ namespace QuestMmdPlayer
             lookAtMode = "none";
             mouthWasActive = false;
             smoothedMouthAmount = 0f;
+            fallbackVisemeGroup = -1;
             ClearSpeechTimeline();
             behavior.Reset(Time.unscaledTime, UnityEngine.Random.value);
 
@@ -691,10 +699,17 @@ namespace QuestMmdPlayer
             var gazeMode = ResolveGazeMode(state, idleAttention, conversationAttention, lookAtMode);
             ApplyGaze(gazeBlend, gazeMode);
 
-            var speechLevel = state == ConversationState.Speaking && audioPlayer != null ? audioPlayer.AudibleRms : 0f;
-            ApplyMouth(speechLevel);
             ApplyExpressions();
             UpdateIdleBehavior(semanticContact);
+        }
+
+        internal void ApplyMouthLatePass()
+        {
+            if (avatar == null) return;
+            var speechLevel = state == ConversationState.Speaking && audioPlayer != null
+                ? audioPlayer.AudibleRms
+                : 0f;
+            ApplyMouth(speechLevel);
         }
 
         private void UpdateIdleBehavior(bool semanticContact)
@@ -949,24 +964,18 @@ namespace QuestMmdPlayer
             }
 
             mouthWasActive = true;
-            var visemeClock = Time.unscaledTime * Mathf.Max(1f, visemeCyclesPerSecond);
-            var active = visemes.Count == 0 ? -1 : Mathf.FloorToInt(visemeClock) % visemes.Count;
-            var next = visemes.Count <= 1 ? active : (active + 1) % visemes.Count;
-            var crossfade = Mathf.SmoothStep(0f, 1f, visemeClock - Mathf.Floor(visemeClock));
             for (var i = 0; i < visemes.Count; i++)
             {
                 var viseme = visemes[i];
                 var influence = useTimeline
                     ? TimelineInfluence(viseme.Group, timelinePositionMs)
-                    : i == active
-                        ? 1f - crossfade
-                        : i == next
-                            ? crossfade
-                            : 0f;
+                    : viseme.Group == fallbackVisemeGroup ? 1f : 0f;
                 var add = amount * influence * 68f;
                 viseme.Renderer.SetBlendShapeWeight(viseme.Index, Mathf.Clamp(viseme.BaseWeight + add, 0f, 100f));
             }
-            if (jaw != null)
+            // A blend-shape vowel already opens the mouth. Rotating a jaw bone
+            // on top of it doubles the deformation on avatars that expose both.
+            if (jaw != null && visemes.Count == 0)
             {
                 jaw.localRotation = Quaternion.Slerp(
                     jawBaseRotation,
@@ -1047,7 +1056,8 @@ namespace QuestMmdPlayer
                 }
                 for (var i = 0; i < mesh.blendShapeCount; i++)
                 {
-                    if (!IsMouthShape(Normalize(mesh.GetBlendShapeName(i))))
+                    var group = GetVisemeGroup(mesh.GetBlendShapeName(i));
+                    if (group < 0)
                     {
                         continue;
                     }
@@ -1056,10 +1066,11 @@ namespace QuestMmdPlayer
                         Renderer = renderers[r],
                         Index = i,
                         BaseWeight = renderers[r].GetBlendShapeWeight(i),
-                        Group = GetVisemeGroup(mesh.GetBlendShapeName(i))
+                        Group = group
                     });
                 }
             }
+            fallbackVisemeGroup = SelectFallbackVisemeGroup(visemes);
         }
 
         private void CacheExpressions()
@@ -1104,12 +1115,15 @@ namespace QuestMmdPlayer
                 return;
             }
 
+            var primaryExpression = SelectPrimaryExpression(targetEmotion);
             var blinkPulse = Mathf.Pow(Mathf.Clamp01(Mathf.Sin(Time.unscaledTime * .66f + .8f)), 28f);
             var step = Time.unscaledDeltaTime * expressionBlendSpeed;
             for (var index = 0; index < expressions.Count; index++)
             {
                 var expression = expressions[index];
-                var target = GetExpressionWeight(expression.Name, targetEmotion, targetEmotionIntensity);
+                var target = index == primaryExpression
+                    ? GetExpressionWeight(expression.Name, targetEmotion, targetEmotionIntensity)
+                    : 0f;
                 if (IsBlinkShape(expression.Name))
                 {
                     target = Mathf.Max(target, blinkPulse * 72f);
@@ -1217,6 +1231,54 @@ namespace QuestMmdPlayer
             hasSmoothedHeadRotation = false;
         }
 
+        private int SelectPrimaryExpression(string emotion)
+        {
+            var selected = -1;
+            var selectedPriority = 0;
+            for (var index = 0; index < expressions.Count; index++)
+            {
+                if (IsBlinkShape(expressions[index].Name)) continue;
+                var priority = GetExpressionPriority(expressions[index].Name, emotion);
+                if (priority > selectedPriority)
+                {
+                    selected = index;
+                    selectedPriority = priority;
+                }
+            }
+            return selected;
+        }
+
+        public static int GetExpressionPriority(string shapeName, string emotion)
+        {
+            if (GetExpressionWeight(shapeName, emotion, 1f) <= 0f) return 0;
+            var name = Normalize(shapeName);
+            // Prefer a single authored whole-face or neutral smile morph over
+            // stacking left/right corners, mouth-open laughs and eye shapes.
+            if (ContainsAny(name, "smile", "happy", "微笑", "なごみ", "にっこり")) return 120;
+            if (ContainsAny(name, "sad", "sorrow", "angry", "anger", "surprise",
+                    "astonish", "blush", "shy", "embarrass", "悲しい", "怒り",
+                    "びっくり", "照れ", "赤面")) return 110;
+            if (ContainsAny(name, "口角上げ", "口角下げ")) return 100;
+            if (ContainsAny(name, "laugh", "笑い", "cry", "えーん")) return 90;
+            return 80;
+        }
+
+        private static int SelectFallbackVisemeGroup(List<Viseme> available)
+        {
+            // With no phoneme timeline, RMS only carries mouth openness. A
+            // stable A-like shape is truthful; cycling unrelated vowels is not.
+            var preference = new[] { 0, 4, 2, 3, 1 };
+            for (var candidateIndex = 0; candidateIndex < preference.Length; candidateIndex++)
+            {
+                for (var visemeIndex = 0; visemeIndex < available.Count; visemeIndex++)
+                {
+                    if (available[visemeIndex].Group == preference[candidateIndex])
+                        return preference[candidateIndex];
+                }
+            }
+            return -1;
+        }
+
         private void RestoreJaw()
         {
             if (jaw != null)
@@ -1255,12 +1317,7 @@ namespace QuestMmdPlayer
 
         private static bool IsMouthShape(string name)
         {
-            return name.Contains("mouth") || name.Contains("lip") || name.Contains("口") || name.Contains("あ") || name.Contains("い") || name.Contains("う") || name.Contains("え") || name.Contains("お") || name == "a" || name == "i" || name == "u" || name == "e" || name == "o"
-                || name == "aa" || name == "ih" || name == "ou" || name == "ee" || name == "oh"
-                || name == "\u3042" || name == "\u3044" || name == "\u3046" || name == "\u3048" || name == "\u304a"
-                || name == "\u53e3\u3042" || name == "\u53e3\u3044" || name == "\u53e3\u3046" || name == "\u53e3\u3048" || name == "\u53e3\u304a"
-                || name == "moutha" || name == "mouthi" || name == "mouthu" || name == "mouthe" || name == "moutho"
-                || name == "vrcvaa" || name == "vrcvih" || name == "vrcvou" || name == "vrcvee" || name == "vrcvoh";
+            return GetVisemeGroup(name) >= 0;
         }
 
         public static int GetVisemeGroup(string value)

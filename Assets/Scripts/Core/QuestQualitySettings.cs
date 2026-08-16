@@ -287,6 +287,9 @@ namespace QuestMmdPlayer
         private IEnumerator RequestPreferredRefreshRate()
         {
             var displays = new List<XRDisplaySubsystem>();
+            var requestAccepted = false;
+            var lastReportedRefreshRate = 0f;
+            ApplyFramePacing(PreferredRefreshRate);
             for (var attempt = 0; attempt < 120; attempt++)
             {
                 displays.Clear();
@@ -298,23 +301,41 @@ namespace QuestMmdPlayer
                     {
                         continue;
                     }
-                    var requested = display.TryRequestDisplayRefreshRate(PreferredRefreshRate);
-                    var actual = PreferredRefreshRate;
+                    if (!requestAccepted && attempt % 15 == 0)
+                    {
+                        requestAccepted = display.TryRequestDisplayRefreshRate(PreferredRefreshRate);
+                    }
                     if (display.TryGetDisplayRefreshRate(out var reported) &&
                         reported > 0f && !float.IsNaN(reported) && !float.IsInfinity(reported))
                     {
-                        actual = reported;
+                        lastReportedRefreshRate = reported;
+                        if (IsRequestedRefreshRateActive(reported, PreferredRefreshRate))
+                        {
+                            RefreshRateStatus = "已应用 " + reported.ToString("F0") +
+                                "Hz · 目标 " + ApplicationTargetFrameRate + "FPS";
+                            refreshRateRequest = null;
+                            yield break;
+                        }
                     }
-                    ApplyFramePacing(actual);
-                    RefreshRateStatus = requested
-                        ? "已请求 " + actual.ToString("F0") + "Hz · 目标 " + ApplicationTargetFrameRate + "FPS"
-                        : "运行时未接受 " + PreferredRefreshRate.ToString("F0") + "Hz 请求 · 目标 " + ApplicationTargetFrameRate + "FPS";
-                    refreshRateRequest = null;
-                    yield break;
+                    // TryGetDisplayRefreshRate can keep returning the old 60 Hz
+                    // value for several frames after a successful 72 Hz request.
+                    // Never feed that transient value back into targetFrameRate.
+                    RefreshRateStatus = requestAccepted
+                        ? "已请求 " + PreferredRefreshRate.ToString("F0") + "Hz，等待运行时切换" +
+                          (lastReportedRefreshRate > 0f
+                              ? " · 当前 " + lastReportedRefreshRate.ToString("F0") + "Hz"
+                              : string.Empty) +
+                          " · 目标 " + ApplicationTargetFrameRate + "FPS"
+                        : "运行时暂未接受 " + PreferredRefreshRate.ToString("F0") +
+                          "Hz 请求 · 目标 " + ApplicationTargetFrameRate + "FPS";
                 }
                 yield return null;
             }
-            RefreshRateStatus = "XR 显示器不可用";
+            RefreshRateStatus = lastReportedRefreshRate > 0f
+                ? "运行时未切换到 " + PreferredRefreshRate.ToString("F0") +
+                  "Hz · 当前 " + lastReportedRefreshRate.ToString("F0") +
+                  "Hz · 目标 " + ApplicationTargetFrameRate + "FPS"
+                : "XR 显示器不可用";
             ApplyFramePacing(PreferredRefreshRate);
             refreshRateRequest = null;
         }
@@ -334,6 +355,13 @@ namespace QuestMmdPlayer
                 return (int)PreferredRefreshRate;
             }
             return Mathf.Clamp(Mathf.RoundToInt(refreshRate), 30, 120);
+        }
+
+        public static bool IsRequestedRefreshRateActive(float reported, float requested)
+        {
+            return !float.IsNaN(reported) && !float.IsInfinity(reported) && reported > 0f &&
+                !float.IsNaN(requested) && !float.IsInfinity(requested) && requested > 0f &&
+                Mathf.Abs(reported - requested) <= .5f;
         }
 
         private static QuestQualityPreset ParsePreset(int value)

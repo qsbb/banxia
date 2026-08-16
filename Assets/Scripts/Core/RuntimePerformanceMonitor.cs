@@ -31,6 +31,7 @@ namespace QuestMmdPlayer
     {
         private const int FrameWindowCapacity = 240;
         private const float SlowSampleIntervalSeconds = 1f;
+        public const float AndroidSystemSampleIntervalSeconds = 30f;
         private const long BytesPerKilobyte = 1024L;
         private readonly float[] frameTimeWindow = new float[FrameWindowCapacity];
         private readonly float[] sortedFrameTimeWindow = new float[FrameWindowCapacity];
@@ -41,6 +42,7 @@ namespace QuestMmdPlayer
         private int frameTimeCount;
         private int frameTimeWriteIndex;
         private float nextSlowSampleAt;
+        private float nextAndroidSystemSampleAt;
         private int currentModelInstanceId;
         private RuntimeMmdModelLoader currentModelLoader;
         private MMDPhysicsManager currentPhysicsManager;
@@ -148,6 +150,7 @@ namespace QuestMmdPlayer
         private void OnEnable()
         {
             nextSlowSampleAt = 0f;
+            nextAndroidSystemSampleAt = 0f;
             currentModelInstanceId = int.MinValue;
             applicationFocused = true;
             CaptureHeadsetState();
@@ -182,19 +185,57 @@ namespace QuestMmdPlayer
                 CaptureFrameTiming();
             }
 
-            if (Time.unscaledTime < nextSlowSampleAt)
+            ResolveSlowSamplingSchedule(
+                Time.unscaledTime,
+                detailedSamplingEnabled,
+                ref nextSlowSampleAt,
+                ref nextAndroidSystemSampleAt,
+                out var captureSlowMetrics,
+                out var captureAndroidSystemMetrics);
+            if (!captureSlowMetrics)
             {
                 return;
             }
 
-            nextSlowSampleAt = Time.unscaledTime + SlowSampleIntervalSeconds;
             CaptureXrPerformanceMetrics();
             CaptureTargetFrameRate();
             if (detailedSamplingEnabled)
             {
                 CaptureMemoryAndGc();
-                CaptureAndroidMetrics();
+                if (captureAndroidSystemMetrics)
+                {
+                    // Debug.getPss walks process memory maps and the thermal
+                    // query crosses Binder. Running both every second on the
+                    // Unity thread made the performance panel reduce the FPS
+                    // it was measuring, especially with joint-heavy avatars.
+                    CaptureAndroidMetrics();
+                }
             }
+        }
+
+        public static void ResolveSlowSamplingSchedule(
+            float now,
+            bool detailedSampling,
+            ref float nextSlowSample,
+            ref float nextAndroidSystemSample,
+            out bool captureSlowMetrics,
+            out bool captureAndroidSystemMetrics)
+        {
+            captureSlowMetrics = now >= nextSlowSample;
+            captureAndroidSystemMetrics = false;
+            if (!captureSlowMetrics)
+            {
+                return;
+            }
+
+            nextSlowSample = now + SlowSampleIntervalSeconds;
+            if (!detailedSampling || now < nextAndroidSystemSample)
+            {
+                return;
+            }
+
+            nextAndroidSystemSample = now + AndroidSystemSampleIntervalSeconds;
+            captureAndroidSystemMetrics = true;
         }
 
         private void OnApplicationFocus(bool focused)
@@ -220,6 +261,10 @@ namespace QuestMmdPlayer
 
             detailedSamplingEnabled = enabled;
             nextSlowSampleAt = 0f;
+            if (enabled)
+            {
+                nextAndroidSystemSampleAt = 0f;
+            }
         }
 
         public void RecordFrameDurationMilliseconds(float frameMilliseconds)
