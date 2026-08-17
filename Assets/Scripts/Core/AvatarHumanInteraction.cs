@@ -735,12 +735,12 @@ namespace QuestMmdPlayer
                     trackedContactTarget - bones.head.position);
                 if (toHand.sqrMagnitude > .000001f)
                 {
-                    var direction = toHand.normalized;
-                    var scale = Mathf.Clamp01(toHand.magnitude / .45f);
+                    var contactDirection = toHand.normalized;
+                    var contactScale = Mathf.Clamp01(toHand.magnitude / .45f);
                     return Quaternion.Euler(
-                        Mathf.Clamp(-direction.y * 11f, -8f, 8f) * scale + settle * .08f,
-                        Mathf.Clamp(direction.x * 14f, -9f, 9f) * scale,
-                        Mathf.Clamp(-direction.x * 7f, -5f, 5f) * scale);
+                        Mathf.Clamp(-contactDirection.y * 11f, -8f, 8f) * contactScale + settle * .08f,
+                        Mathf.Clamp(contactDirection.x * 14f, -9f, 9f) * contactScale,
+                        Mathf.Clamp(-contactDirection.x * 7f, -5f, 5f) * contactScale);
                 }
             }
 

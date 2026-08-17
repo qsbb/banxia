@@ -106,7 +106,11 @@ namespace QuestMmdPlayer.Tests
             Evaluate(controller, 1.3f);
             Assert.That(controller.CurrentAction, Is.EqualTo("raise_leg"));
             Assert.That(Quaternion.Angle(Quaternion.identity, owner.transform.Find("RightUpperLeg").localRotation), Is.GreaterThan(8f));
-            Assert.That(Quaternion.Angle(Quaternion.identity, owner.transform.Find("RightLowerLeg").localRotation), Is.GreaterThan(12f));
+            Assert.That(
+                Quaternion.Angle(
+                    Quaternion.identity,
+                    owner.transform.Find("RightUpperLeg/RightLowerLeg").localRotation),
+                Is.GreaterThan(12f));
 
             Evaluate(controller, 3.4f);
             Assert.That(controller.CurrentAction, Is.EqualTo("idle"));
