@@ -513,6 +513,74 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void AvatarIntentStartsBackendWatchdogButRequiresTerminalEvent()
+        {
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, true, false, 34f, 0f, .1f, -1f, 35f, 30f, out _), Is.False);
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, true, false, 35f, 0f, .1f, -1f, 35f, 30f, out var terminalCode), Is.True);
+            Assert.That(terminalCode, Is.EqualTo("response_terminal_event_missing_timeout"));
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, true, true, 100f, 0f, .1f, -1f, 35f, 30f, out _), Is.False);
+        }
+
+        [Test]
+        public void ReplyProgressAfterAvatarIntentStillUsesStallTimeout()
+        {
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, true, false, 34f, 0f, .1f, 5f, 35f, 30f, out _), Is.False);
+            Assert.That(ConversationController.ShouldTimeoutResponse(
+                true, false, true, false, 35f, 0f, .1f, 5f, 35f, 30f, out var stallCode), Is.True);
+            Assert.That(stallCode, Is.EqualTo("response_event_stall_timeout"));
+        }
+
+        [Test]
+        public void StaleAvatarIntentDoesNotRefreshCurrentTurnWatchdog()
+        {
+            owner = new GameObject("Stale avatar intent watchdog test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.StartConversation("hello");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = "turn-stale",
+                Gesture = "wave"
+            });
+
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            Assert.That((bool)typeof(ConversationController)
+                .GetField("validAvatarIntentReceived", flags)?.GetValue(controller), Is.False);
+            Assert.That((float)typeof(ConversationController)
+                .GetField("firstBackendEventAt", flags)?.GetValue(controller), Is.EqualTo(-1f));
+
+            var currentTurn = controller.TurnId;
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = currentTurn,
+                Gesture = "wave"
+            });
+            var firstAt = (float)typeof(ConversationController)
+                .GetField("firstBackendEventAt", flags)?.GetValue(controller);
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.AvatarIntent,
+                TurnId = "turn-stale",
+                Gesture = "bow"
+            });
+
+            Assert.That((bool)typeof(ConversationController)
+                .GetField("validAvatarIntentReceived", flags)?.GetValue(controller), Is.True);
+            Assert.That((float)typeof(ConversationController)
+                .GetField("firstBackendEventAt", flags)?.GetValue(controller), Is.EqualTo(firstAt));
+        }
+
+        [Test]
         public void ResponseWatchdogStopsAfterReplyEndOrCancellation()
         {
             Assert.That(ConversationController.ShouldTimeoutResponse(

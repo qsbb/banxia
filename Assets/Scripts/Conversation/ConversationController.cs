@@ -31,7 +31,10 @@ namespace QuestMmdPlayer
         private float replyEndedAt = -1f;
         private float audioDoneAt = -1f;
         private float responseWaitStartedAt = -1f;
-        private float lastBackendProgressAt = -1f;
+        private float firstBackendEventAt = -1f;
+        private float lastReplyProgressAt = -1f;
+        private bool validAvatarIntentReceived;
+        private bool terminalEventReceived;
         private bool awaitingBackendResponse;
         private int replyAudioChunkCount;
         private string pendingLocalAction = string.Empty;
@@ -180,15 +183,20 @@ namespace QuestMmdPlayer
             if (ShouldTimeoutResponse(
                 awaitingBackendResponse,
                 stateMachine.ReplyEnded,
+                validAvatarIntentReceived,
+                terminalEventReceived,
                 Time.unscaledTime,
                 responseWaitStartedAt,
-                lastBackendProgressAt,
+                firstBackendEventAt,
+                lastReplyProgressAt,
                 firstResponseTimeoutSeconds,
                 responseStallTimeoutSeconds,
                 out var timeoutCode))
             {
                 FailActiveTurn(timeoutCode, timeoutCode == "response_first_event_timeout"
                     ? "Backend accepted the turn but sent no response event"
+                    : timeoutCode == "response_terminal_event_missing_timeout"
+                        ? "Backend emitted an avatar intent but no terminal response event"
                     : "Backend response stopped before reply.end");
             }
             if (sendInteractionEvents && lastInteraction != HumanInteractionKind.None &&
@@ -415,10 +423,6 @@ namespace QuestMmdPlayer
             if (message.Type == ConversationEventType.AsrFinal)
             {
                 TryQueueLocalAction(message.Text);
-            }
-            if (message.Type != ConversationEventType.AvatarIntent && !message.IsSyntheticTransportEvent)
-            {
-                lastBackendProgressAt = Time.unscaledTime;
             }
             RecordEventTiming(message);
 
@@ -828,7 +832,10 @@ namespace QuestMmdPlayer
             replyEndedAt = -1f;
             audioDoneAt = -1f;
             responseWaitStartedAt = -1f;
-            lastBackendProgressAt = -1f;
+            firstBackendEventAt = -1f;
+            lastReplyProgressAt = -1f;
+            validAvatarIntentReceived = false;
+            terminalEventReceived = false;
             awaitingBackendResponse = false;
             replyAudioChunkCount = 0;
             backendSttReported = false;
@@ -933,7 +940,10 @@ namespace QuestMmdPlayer
         private void BeginResponseWait(float now)
         {
             responseWaitStartedAt = now;
-            lastBackendProgressAt = -1f;
+            firstBackendEventAt = -1f;
+            lastReplyProgressAt = -1f;
+            validAvatarIntentReceived = false;
+            terminalEventReceived = false;
             awaitingBackendResponse = true;
         }
 
@@ -992,6 +1002,60 @@ namespace QuestMmdPlayer
             return true;
         }
 
+        public static bool ShouldTimeoutResponse(
+            bool awaiting,
+            bool replyEnded,
+            bool hasAvatarIntent,
+            bool terminalEventReceived,
+            float now,
+            float waitStartedAt,
+            float firstBackendEventAt,
+            float lastReplyProgressAt,
+            float firstEventTimeout,
+            float stallTimeout,
+            out string errorCode)
+        {
+            errorCode = string.Empty;
+            if (!awaiting || replyEnded || terminalEventReceived ||
+                waitStartedAt < 0f || now < waitStartedAt)
+            {
+                return false;
+            }
+
+            if (firstBackendEventAt < waitStartedAt)
+            {
+                if (now - waitStartedAt < Mathf.Max(1f, firstEventTimeout))
+                {
+                    return false;
+                }
+                errorCode = "response_first_event_timeout";
+                return true;
+            }
+
+            var hasReplyProgress = lastReplyProgressAt >= firstBackendEventAt;
+            if (hasReplyProgress && now - lastReplyProgressAt >= Mathf.Max(1f, stallTimeout))
+            {
+                errorCode = "response_event_stall_timeout";
+                return true;
+            }
+
+            if (hasAvatarIntent &&
+                now - waitStartedAt >= Mathf.Max(1f, firstEventTimeout))
+            {
+                errorCode = "response_terminal_event_missing_timeout";
+                return true;
+            }
+
+            if (!hasAvatarIntent &&
+                now - firstBackendEventAt >= Mathf.Max(1f, stallTimeout))
+            {
+                errorCode = "response_event_stall_timeout";
+                return true;
+            }
+
+            return false;
+        }
+
         private void BeginAudioStream()
         {
             presenter?.ClearSpeechTimeline();
@@ -1012,6 +1076,26 @@ namespace QuestMmdPlayer
             if (message.IsSyntheticTransportEvent)
             {
                 return;
+            }
+            if (firstBackendEventAt < 0f)
+            {
+                firstBackendEventAt = now;
+            }
+            if (message.Type == ConversationEventType.AvatarIntent)
+            {
+                validAvatarIntentReceived = true;
+            }
+            if (message.Type == ConversationEventType.ReplyTextDelta ||
+                message.Type == ConversationEventType.AudioChunk ||
+                message.Type == ConversationEventType.ReplyEnd ||
+                message.Type == ConversationEventType.Error)
+            {
+                lastReplyProgressAt = now;
+            }
+            if (message.Type == ConversationEventType.ReplyEnd ||
+                message.Type == ConversationEventType.Error)
+            {
+                terminalEventReceived = true;
             }
             if (firstEventAt < 0f)
             {
@@ -1098,7 +1182,12 @@ namespace QuestMmdPlayer
                 $"firstAudio={ElapsedMs(responseStart, firstAudioAt)}ms " +
                 $"playback={ElapsedMs(firstAudioAt, playbackStartedAt)}ms " +
                 $"replyEnd={ElapsedMs(responseStart, replyEndedAt)}ms " +
-                $"audioDone={ElapsedMs(responseStart, audioDoneAt)}ms chunks={replyAudioChunkCount}";
+                $"audioDone={ElapsedMs(responseStart, audioDoneAt)}ms " +
+                $"backendFirst={ElapsedMs(responseStart, firstBackendEventAt)}ms " +
+                $"replyProgress={ElapsedMs(responseStart, lastReplyProgressAt)}ms " +
+                $"avatarIntent={(validAvatarIntentReceived ? "yes" : "no")} " +
+                $"terminal={(terminalEventReceived ? "yes" : "no")} " +
+                $"chunks={replyAudioChunkCount}";
         }
 
         private void RecordBackendTiming(ConversationEvent message)

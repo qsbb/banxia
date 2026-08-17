@@ -401,6 +401,7 @@ namespace QuestMmdPlayer
                 case "voice_end_rejected": return "后端拒绝结束语音轮次";
                 case "no_speech_detected": return "没有检测到说话";
                 case "response_first_event_timeout": return "后端接收后没有返回首个事件";
+                case "response_terminal_event_missing_timeout": return "后端已返回动作但没有终帧事件";
                 case "response_event_stall_timeout": return "后端事件流在回复结束前停滞";
                 case "asr_final": return "录音结束到识别完成";
                 case "asr_to_first_text": return "识别完成到首段回复";
