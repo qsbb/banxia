@@ -343,6 +343,81 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PhysicalHeadContactOverridesBackendFixedReaction()
+        {
+            avatarObject = new GameObject("BackendHeadReactionAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("Head", "head");
+
+            serviceObject = new GameObject("BackendHeadReactionInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            interaction.ReportTrackedHandContact(
+                AvatarContactRegion.Head,
+                false,
+                new Vector3(.28f, .2f, 0f));
+
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(AvatarHumanInteraction).GetField("stateTime", flags)
+                ?.SetValue(interaction, 1f);
+            typeof(AvatarHumanInteraction).GetMethod("Update", flags)
+                ?.Invoke(interaction, null);
+            interaction.PlayReaction(HumanInteractionKind.HeadPat, 2f);
+            typeof(AvatarHumanInteraction).GetField("fade", flags)
+                ?.SetValue(interaction, 1f);
+            typeof(AvatarHumanInteraction).GetMethod("LateUpdate", flags)
+                ?.Invoke(interaction, null);
+            var head = avatarObject.transform.Find("Head");
+            Assert.That(head, Is.Not.Null);
+            var right = head.localRotation;
+
+            interaction.ReportTrackedHandContact(
+                AvatarContactRegion.Head,
+                false,
+                new Vector3(-.28f, .2f, 0f),
+                Vector3.zero);
+            typeof(AvatarHumanInteraction).GetMethod("LateUpdate", flags)
+                ?.Invoke(interaction, null);
+            var left = head.localRotation;
+
+            Assert.That(Quaternion.Angle(right, left), Is.GreaterThan(4f));
+        }
+
+        [Test]
+        public void ZeroPenetrationContactClearsPreviousAvatarYield()
+        {
+            avatarObject = new GameObject("ContactYieldRefreshAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("Head", "head");
+
+            serviceObject = new GameObject("ContactYieldRefreshInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            interaction.ReportTrackedHandContact(
+                AvatarContactRegion.Head,
+                false,
+                Vector3.right * .2f,
+                Vector3.right * .03f);
+            interaction.ReportTrackedHandContact(
+                AvatarContactRegion.Head,
+                false,
+                Vector3.left * .2f,
+                Vector3.zero);
+
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var push = (Vector3)(typeof(AvatarHumanInteraction)
+                .GetField("trackedContactPush", flags)
+                ?.GetValue(interaction) ?? Vector3.one);
+            Assert.That(push, Is.EqualTo(Vector3.zero));
+        }
+
+        [Test]
         public void ReactionTransitionUsesSmoothAsymmetricBlend()
         {
             var velocity = 0f;

@@ -553,8 +553,10 @@ namespace QuestMmdPlayer
             trackedContactKind = kind;
             trackedContactRegion = region;
             trackedContactTarget = point;
-            if (changed || avatarPush.sqrMagnitude > .0000001f || trackedContactUntil <= Time.unscaledTime)
-                trackedContactPush = Vector3.ClampMagnitude(avatarPush, maximumPhysicalYield);
+            // Every contact fact is authoritative, including a zero-penetration
+            // update. Do not keep a previous push direction after the hand has
+            // moved to a new contact point or is merely sweeping the surface.
+            trackedContactPush = Vector3.ClampMagnitude(avatarPush, maximumPhysicalYield);
             // Contact facts are normally refreshed every 100 ms. Keep a
             // bounded two-update grace period so one dropped XR frame cannot
             // repeatedly cancel and restart the physical blend.
@@ -655,7 +657,10 @@ namespace QuestMmdPlayer
         void ApplyBones(HumanInteractionKind kind, float amount)
         {
             var settle = Mathf.Sin(Time.unscaledTime * 2.15f);
-            var physical = currentInteractionIsPhysical && backendReactionUntil <= Time.unscaledTime;
+            // A live physical contact always wins over a queued backend reaction.
+            // The backend reaction can still provide the semantic kind/emotion,
+            // but must not replace the hand-directed pose with a fixed one.
+            var physical = currentInteractionIsPhysical;
             if (bones.upperBody != null)
             {
                 var bodyOffset = kind == HumanInteractionKind.HeadPat
