@@ -278,6 +278,24 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void NonDanceIntentWaitsForAvatarBindingInsteadOfInvalidState()
+        {
+            serviceObject = new GameObject("UnboundPresenterService");
+            var presenter = serviceObject.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(null, null, null);
+            var context = new AvatarActionExecutionContext("turn-raise-leg", "action-raise-leg", "raise_leg");
+
+            Assert.That(
+                presenter.ApplyIntent("neutral", "raise_leg", "user", 1f, 2000, context),
+                Is.True);
+
+            var pending = (bool)(typeof(AvatarConversationPresenter)
+                .GetField("pendingBootstrapIntent", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(presenter) ?? false);
+            Assert.That(pending, Is.True);
+        }
+
+        [Test]
         public void SensorEventAndBackendReactionAreSeparate()
         {
             avatarObject = new GameObject("TestAvatar");

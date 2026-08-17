@@ -81,6 +81,17 @@ namespace QuestMmdPlayer
         private AvatarActionExecutionContext pendingDanceContext;
         private bool pendingDanceRequest;
         private bool pendingDanceSelectNext;
+        private Coroutine pendingBootstrapExpiry;
+        private AvatarActionExecutionContext pendingBootstrapContext;
+        private string pendingBootstrapEmotion;
+        private string pendingBootstrapGesture;
+        private string pendingBootstrapLookAt;
+        private float pendingBootstrapIntensity;
+        private int pendingBootstrapDurationMs;
+        private AvatarActionParameters pendingBootstrapParameters;
+        private AvatarActionTransition pendingBootstrapTransition;
+        private string pendingBootstrapSource;
+        private bool pendingBootstrapIntent;
         private SpeechVisemeCue[] speechTimeline = Array.Empty<SpeechVisemeCue>();
         private bool speechTimelineMatchesAvatar;
         private readonly float[] visemeInfluences = new float[5];
@@ -105,10 +116,10 @@ namespace QuestMmdPlayer
 
         public void Bind(AvatarController target, AvatarHumanInteraction human, Pcm16StreamAudioPlayer streamPlayer)
         {
-            var preservePendingDance = pendingDanceRequest &&
-                activeTrackedAction != null &&
-                ReferenceEquals(activeTrackedAction, pendingDanceContext);
-            if (activeTrackedAction != null && !preservePendingDance)
+            var preservePendingAction = activeTrackedAction != null &&
+                ((pendingDanceRequest && ReferenceEquals(activeTrackedAction, pendingDanceContext)) ||
+                 (pendingBootstrapIntent && ReferenceEquals(activeTrackedAction, pendingBootstrapContext)));
+            if (activeTrackedAction != null && !preservePendingAction)
             {
                 EmitActionUpdate(
                     activeTrackedAction,
@@ -182,6 +193,7 @@ namespace QuestMmdPlayer
             CacheVisemes();
             CacheExpressions();
             FlushPendingDanceRequest();
+            FlushPendingBootstrapIntent();
             Debug.Log($"[ConversationPresenter] Bound mouth: visemes={visemes.Count}, expressions={expressions.Count}, jaw={(jaw == null ? "no" : "yes")}.", this);
         }
 
@@ -223,6 +235,20 @@ namespace QuestMmdPlayer
                             ? "[ConversationPresenter] dance_waiting_model_next: avatar binding not ready."
                             : "[ConversationPresenter] dance_waiting_model: avatar binding not ready.",
                         this);
+                    return true;
+                }
+                if (executionContext != null && IsQueueableBootstrapGesture(earlyGesture))
+                {
+                    QueuePendingBootstrapIntent(
+                        emotion,
+                        earlyGesture,
+                        lookAt,
+                        intensity,
+                        durationMs,
+                        executionContext,
+                        actionParameters,
+                        actionTransition,
+                        actionSource);
                     return true;
                 }
                 ReportRejected(executionContext, "avatar_unavailable");
@@ -642,6 +668,120 @@ namespace QuestMmdPlayer
         private bool ShouldWaitForDanceBinding()
         {
             return vmdActions == null || !vmdActions.BoundModel || avatar == null;
+        }
+
+        private static bool IsQueueableBootstrapGesture(string gesture)
+        {
+            switch (gesture)
+            {
+                case "wave":
+                case "bow":
+                case "nod":
+                case "sway":
+                case "raise_hand":
+                case "raise_leg":
+                case "turn_half":
+                case "crouch":
+                case "sit":
+                case "lie":
+                case "lie_down":
+                case "handshake":
+                case "head_pat":
+                case "cheek_pinch":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void QueuePendingBootstrapIntent(
+            string emotion,
+            string gesture,
+            string lookAt,
+            float intensity,
+            int durationMs,
+            AvatarActionExecutionContext executionContext,
+            AvatarActionParameters actionParameters,
+            AvatarActionTransition actionTransition,
+            string actionSource)
+        {
+            if (executionContext == null)
+            {
+                return;
+            }
+
+            PrepareTrackedAction(executionContext);
+            ReportAccepted(executionContext);
+            pendingBootstrapIntent = true;
+            pendingBootstrapContext = executionContext;
+            pendingBootstrapEmotion = emotion;
+            pendingBootstrapGesture = gesture;
+            pendingBootstrapLookAt = lookAt;
+            pendingBootstrapIntensity = intensity;
+            pendingBootstrapDurationMs = durationMs;
+            pendingBootstrapParameters = actionParameters;
+            pendingBootstrapTransition = actionTransition;
+            pendingBootstrapSource = actionSource;
+            diagnostics?.RecordStage("avatar_action", "queued", "action_waiting_model");
+            Debug.Log("[ConversationPresenter] action_waiting_model: preserving action until model binding.", this);
+
+            if (pendingBootstrapExpiry != null)
+            {
+                StopCoroutine(pendingBootstrapExpiry);
+            }
+            pendingBootstrapExpiry = StartCoroutine(ExpirePendingBootstrapIntent(executionContext, 20f));
+        }
+
+        private System.Collections.IEnumerator ExpirePendingBootstrapIntent(
+            AvatarActionExecutionContext executionContext,
+            float timeoutSeconds)
+        {
+            yield return new WaitForSecondsRealtime(Mathf.Max(.1f, timeoutSeconds));
+            pendingBootstrapExpiry = null;
+            if (!pendingBootstrapIntent || !ReferenceEquals(pendingBootstrapContext, executionContext))
+            {
+                yield break;
+            }
+
+            pendingBootstrapIntent = false;
+            pendingBootstrapContext = null;
+            diagnostics?.RecordStage("avatar_action", "limited", "action_model_bind_timeout");
+            ReportRejected(executionContext, "asset_missing");
+        }
+
+        private void FlushPendingBootstrapIntent()
+        {
+            if (!pendingBootstrapIntent || avatar == null)
+            {
+                return;
+            }
+
+            var context = pendingBootstrapContext;
+            var emotion = pendingBootstrapEmotion;
+            var gesture = pendingBootstrapGesture;
+            var lookAt = pendingBootstrapLookAt;
+            var intensity = pendingBootstrapIntensity;
+            var durationMs = pendingBootstrapDurationMs;
+            var parameters = pendingBootstrapParameters;
+            var transition = pendingBootstrapTransition;
+            var source = pendingBootstrapSource;
+            pendingBootstrapIntent = false;
+            pendingBootstrapContext = null;
+            pendingBootstrapParameters = null;
+            pendingBootstrapTransition = null;
+            pendingBootstrapExpiry = null;
+
+            diagnostics?.RecordStage("avatar_action", "processing", "action_model_bound_resume");
+            ApplyIntent(
+                emotion,
+                gesture,
+                lookAt,
+                intensity,
+                durationMs,
+                context,
+                parameters,
+                transition,
+                source);
         }
 
         public void InterruptTrackedAction(string turnId, string reasonCode = "user_interrupted")
