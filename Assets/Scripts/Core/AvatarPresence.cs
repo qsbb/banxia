@@ -249,6 +249,7 @@ namespace QuestMmdPlayer
                 case "bow":
                 case "nod":
                 case "sway":
+                case "raise_leg":
                 case "turn_half":
                 case "vmd":
                     return true;

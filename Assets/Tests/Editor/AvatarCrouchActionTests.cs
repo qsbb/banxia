@@ -85,6 +85,33 @@ namespace QuestMmdPlayer.Tests
             Assert.That(controller.CurrentAction, Is.EqualTo("idle"));
         }
 
+        [Test]
+        public void CompleteLegRigExecutesRaiseLegAndReturnsToIdle()
+        {
+            owner = new GameObject("Raise leg rig");
+            CreateBone("LowerBody", "下半身", owner.transform, new Vector3(0f, .9f, 0f));
+            CreateBone("UpperBody", "上半身", owner.transform, new Vector3(0f, 1.05f, 0f));
+            CreateBone("Head", "頭", owner.transform, new Vector3(0f, 1.55f, 0f));
+            CreateBone("LeftUpperLeg", "左大腿", owner.transform, new Vector3(-.1f, .9f, 0f));
+            CreateBone("LeftLowerLeg", "左ひざ", owner.transform.Find("LeftUpperLeg"), new Vector3(0f, -.42f, 0f));
+            CreateBone("LeftFoot", "左足首", owner.transform.Find("LeftUpperLeg/LeftLowerLeg"), new Vector3(0f, -.42f, .02f));
+            CreateBone("RightUpperLeg", "右大腿", owner.transform, new Vector3(.1f, .9f, 0f));
+            CreateBone("RightLowerLeg", "右ひざ", owner.transform.Find("RightUpperLeg"), new Vector3(0f, -.42f, 0f));
+            CreateBone("RightFoot", "右足首", owner.transform.Find("RightUpperLeg/RightLowerLeg"), new Vector3(0f, -.42f, .02f));
+            var controller = owner.AddComponent<AvatarController>();
+            controller.Initialize(owner.transform);
+
+            Assert.That(controller.SupportsRaiseLeg, Is.True);
+            Assert.That(controller.PlayActionFromSource("raise_leg", AvatarActionSource.Backend), Is.True);
+            Evaluate(controller, 1.3f);
+            Assert.That(controller.CurrentAction, Is.EqualTo("raise_leg"));
+            Assert.That(Quaternion.Angle(Quaternion.identity, owner.transform.Find("RightUpperLeg").localRotation), Is.GreaterThan(8f));
+            Assert.That(Quaternion.Angle(Quaternion.identity, owner.transform.Find("RightLowerLeg").localRotation), Is.GreaterThan(12f));
+
+            Evaluate(controller, 3.4f);
+            Assert.That(controller.CurrentAction, Is.EqualTo("idle"));
+        }
+
         private static void Evaluate(AvatarController controller, float actionClock)
         {
             var flags = BindingFlags.Instance | BindingFlags.NonPublic;

@@ -721,7 +721,30 @@ namespace QuestMmdPlayer
 
         private Quaternion PhysicalHeadOffset(float settle)
         {
-            if (avatar == null || smoothedContactPush.sqrMagnitude <= .0000001f)
+            if (avatar == null)
+                return Quaternion.Euler(-1.1f + settle * .15f, 0f, 0f);
+
+            // A hand can be touching the head without penetrating the proxy,
+            // so penetration-based yield is legitimately zero. In that case
+            // use the live contact point as a small gaze/tilt target instead
+            // of falling back to one fixed head-pat pose.
+            if (smoothedContactPush.sqrMagnitude <= .0000001f &&
+                trackedContactTarget != Vector3.zero && bones != null && bones.head != null)
+            {
+                var toHand = avatar.transform.InverseTransformDirection(
+                    trackedContactTarget - bones.head.position);
+                if (toHand.sqrMagnitude > .000001f)
+                {
+                    var direction = toHand.normalized;
+                    var scale = Mathf.Clamp01(toHand.magnitude / .45f);
+                    return Quaternion.Euler(
+                        Mathf.Clamp(-direction.y * 11f, -8f, 8f) * scale + settle * .08f,
+                        Mathf.Clamp(direction.x * 14f, -9f, 9f) * scale,
+                        Mathf.Clamp(-direction.x * 7f, -5f, 5f) * scale);
+                }
+            }
+
+            if (smoothedContactPush.sqrMagnitude <= .0000001f)
                 return Quaternion.Euler(-1.1f + settle * .15f, 0f, 0f);
             var local = avatar.transform.InverseTransformDirection(smoothedContactPush);
             var scale = Mathf.Clamp01(local.magnitude / Mathf.Max(.005f, maximumPhysicalYield));

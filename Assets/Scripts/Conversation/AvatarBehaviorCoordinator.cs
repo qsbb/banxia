@@ -54,7 +54,7 @@ namespace QuestMmdPlayer
 
             if (normalized != "wave" && normalized != "bow" && normalized != "dance" &&
                 normalized != "dance_next" && normalized != "nod" && normalized != "sway" &&
-                normalized != "raise_hand" && normalized != "turn_half" &&
+                normalized != "raise_hand" && normalized != "raise_leg" && normalized != "turn_half" &&
                 normalized != "crouch" &&
                 normalized != "refuse" && normalized != "step_back" &&
                 normalized != "sit" && normalized != "lie_down" && normalized != "idle")

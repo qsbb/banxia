@@ -244,6 +244,7 @@ namespace QuestMmdPlayer.Tests
 
         [TestCase("dance_next")]
         [TestCase("raise_hand")]
+        [TestCase("raise_leg")]
         [TestCase("turn_half")]
         [TestCase("crouch")]
         [TestCase("sit")]

@@ -1794,6 +1794,7 @@ namespace QuestMmdPlayer
                 case "nod": return "点头动作";
                 case "sway": return "轻摆动作";
                 case "raise_hand": return "抬手动作";
+                case "raise_leg": return "抬腿动作";
                 case "turn_half": return "转半圈动作";
                 case "refuse": return "拒绝动作";
                 case "step_back": return "后退动作";

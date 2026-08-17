@@ -134,6 +134,7 @@ namespace QuestMmdPlayer
         private const float SwayDuration = 3.4f;
         private const float DanceDuration = 6.4f;
         private const float RaiseHandDuration = 3.0f;
+        private const float RaiseLegDuration = 3.2f;
         private const float TurnHalfDuration = 3.2f;
         private const float RefuseDuration = 2.2f;
         private const float StepBackDuration = 2.0f;
@@ -163,6 +164,10 @@ namespace QuestMmdPlayer
         public string CurrentEmotion => currentEmotion;
         public bool IsPlaying => isPlaying;
         public bool SupportsCrouch => actionPoseCaptured && lowerBody != null &&
+            leftUpperLeg != null && rightUpperLeg != null &&
+            leftLowerLeg != null && rightLowerLeg != null &&
+            leftFoot != null && rightFoot != null;
+        public bool SupportsRaiseLeg => actionPoseCaptured && lowerBody != null &&
             leftUpperLeg != null && rightUpperLeg != null &&
             leftLowerLeg != null && rightLowerLeg != null &&
             leftFoot != null && rightFoot != null;
@@ -246,6 +251,14 @@ namespace QuestMmdPlayer
             {
                 ApplyRaiseHand();
                 if (actionClock >= RaiseHandDuration)
+                {
+                    PlayActionFromSource("idle", AvatarActionSource.System);
+                }
+            }
+            else if (currentAction == "raise_leg")
+            {
+                ApplyRaiseLeg();
+                if (actionClock >= RaiseLegDuration)
                 {
                     PlayActionFromSource("idle", AvatarActionSource.System);
                 }
@@ -504,6 +517,26 @@ namespace QuestMmdPlayer
             SetRotation(rightUpperArm, rightUpperArmBase, Quaternion.Euler(-7f, -5f, 42f), blend);
             SetRotation(rightLowerArm, rightLowerArmBase, Quaternion.Euler(0f, -10f, -46f), blend);
             SetRotation(rightHand, rightHandBase, Quaternion.Euler(2f, 4f, 4f), blend);
+        }
+
+        private void ApplyRaiseLeg()
+        {
+            if (!actionPoseCaptured)
+            {
+                CaptureActionPose();
+            }
+
+            var blend = ActionBlend(actionClock, RaiseLegDuration, .62f);
+            // Keep the left foot planted and lift the right leg in a compact,
+            // balance-friendly pose. The action is deliberately deterministic
+            // so it works without an imported animation clip.
+            SetRotation(upperBody, upperBodyBase, Quaternion.Euler(0f, -2f, -4f), blend);
+            SetRotation(head, headBase, Quaternion.Euler(1.5f, 2f, 1f), blend);
+            SetRotation(leftUpperLeg, leftUpperLegBase, Quaternion.Euler(2f, 0f, 1f), blend);
+            SetRotation(leftLowerLeg, leftLowerLegBase, Quaternion.Euler(-3f, 0f, 0f), blend);
+            SetRotation(rightUpperLeg, rightUpperLegBase, Quaternion.Euler(-24f, 6f, 4f), blend);
+            SetRotation(rightLowerLeg, rightLowerLegBase, Quaternion.Euler(48f, 0f, 0f), blend);
+            SetRotation(rightFoot, rightFootBase, Quaternion.Euler(-22f, -3f, 0f), blend);
         }
 
         private void ApplyTurnHalf()
@@ -1061,6 +1094,12 @@ namespace QuestMmdPlayer
             if (normalized == "crouch" && !SupportsCrouch)
             {
                 Debug.Log("[AvatarAction] rejected=crouch source=" + source +
+                    " current=" + currentAction + " reason=asset_missing", this);
+                return false;
+            }
+            if (normalized == "raise_leg" && !SupportsRaiseLeg)
+            {
+                Debug.Log("[AvatarAction] rejected=raise_leg source=" + source +
                     " current=" + currentAction + " reason=asset_missing", this);
                 return false;
             }

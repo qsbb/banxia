@@ -134,7 +134,7 @@ namespace QuestMmdPlayer
         public const string Version = "1.0";
         private static readonly string[] ExecutableActions =
         {
-            "wave", "bow", "dance", "dance_next", "raise_hand", "turn_half",
+            "wave", "bow", "dance", "dance_next", "raise_hand", "raise_leg", "turn_half",
             "crouch", "sit", "lie", "nod", "sway", "handshake", "head_pat",
             "cheek_pinch", "refuse", "step_back"
         };
@@ -359,6 +359,7 @@ namespace QuestMmdPlayer
                 case "nod":
                 case "sway":
                 case "raise_hand":
+                case "raise_leg":
                 case "turn_half":
                 case "crouch":
                 case "sit":

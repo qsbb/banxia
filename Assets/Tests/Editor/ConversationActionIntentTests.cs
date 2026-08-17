@@ -12,6 +12,7 @@ namespace QuestMmdPlayer.Tests
         [TestCase("点点头", "nod")]
         [TestCase("换个舞蹈吧", "dance_next")]
         [TestCase("把右手抬起来", "raise_hand")]
+        [TestCase("请抬起单腿", "raise_leg")]
         [TestCase("转半圈看看", "turn_half")]
         [TestCase("帮我跳个舞", "dance")]
         [TestCase("让她随便跳个舞", "dance")]

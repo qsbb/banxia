@@ -63,6 +63,11 @@ namespace QuestMmdPlayer
                 action = "raise_hand";
                 return true;
             }
+            if (ContainsAny(value, "抬起单腿", "抬起一条腿", "抬腿", "抬起腿", "单腿站立", "raise one leg", "lift one leg", "raise your leg", "lift your leg"))
+            {
+                action = "raise_leg";
+                return true;
+            }
             if (ContainsAny(value, "转半圈", "转身", "转个身", "转一百八十度", "turn around", "half turn"))
             {
                 action = "turn_half";

@@ -314,6 +314,35 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PhysicalHeadContactPointChangesHeadOffsetWithoutPenetration()
+        {
+            avatarObject = new GameObject("ContactPointHeadAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            CreateBone("Head", "head");
+
+            serviceObject = new GameObject("ContactPointHeadInteraction");
+            serviceObject.AddComponent<AvatarTouchInteraction>();
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(AvatarHumanInteraction).GetField("trackedContactTarget", flags)
+                ?.SetValue(interaction, Vector3.right * .28f);
+            typeof(AvatarHumanInteraction).GetField("smoothedContactPush", flags)
+                ?.SetValue(interaction, Vector3.zero);
+            var offsetMethod = typeof(AvatarHumanInteraction)
+                .GetMethod("PhysicalHeadOffset", flags);
+
+            var right = (Quaternion)offsetMethod.Invoke(interaction, new object[] { 0f });
+            typeof(AvatarHumanInteraction).GetField("trackedContactTarget", flags)
+                ?.SetValue(interaction, Vector3.left * .28f);
+            var left = (Quaternion)offsetMethod.Invoke(interaction, new object[] { 0f });
+
+            Assert.That(Quaternion.Angle(right, left), Is.GreaterThan(4f));
+        }
+
+        [Test]
         public void ReactionTransitionUsesSmoothAsymmetricBlend()
         {
             var velocity = 0f;

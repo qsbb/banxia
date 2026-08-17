@@ -330,7 +330,7 @@ namespace QuestMmdPlayer
             else if (acceptedGesture == "wave" || acceptedGesture == "bow" ||
                 acceptedGesture == "dance" || acceptedGesture == "dance_next" ||
                 acceptedGesture == "nod" || acceptedGesture == "sway" ||
-                acceptedGesture == "raise_hand" || acceptedGesture == "turn_half" ||
+                acceptedGesture == "raise_hand" || acceptedGesture == "raise_leg" || acceptedGesture == "turn_half" ||
                 acceptedGesture == "crouch" ||
                 acceptedGesture == "refuse" || acceptedGesture == "step_back" ||
                 acceptedGesture == "idle")
@@ -1031,6 +1031,7 @@ namespace QuestMmdPlayer
                 case "wave":
                 case "sway":
                 case "raise_hand":
+                case "raise_leg":
                 case "crouch":
                 case "step_back":
                     return .78f;
