@@ -118,6 +118,90 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ConnectedLockedHairOrSkirtChainRestoresStableReinforcement()
+        {
+            MMDPhysicsManager.ConfigureRuntimeQuality(60, 2, 1);
+            var joints = new PMXJoint[81];
+            for (var index = 0; index < 4; index++)
+            {
+                joints[index].rigidBodyAIndex = index;
+                joints[index].rigidBodyBIndex = index + 1;
+            }
+
+            Assert.That(
+                MMDPhysicsManager.RequiresFullLockedTranslationReinforcement(
+                    joints,
+                    5),
+                Is.True);
+            Assert.That(
+                MMDPhysicsManager.ResolveLockedTranslationReinforcement(
+                    joints,
+                    5),
+                Is.EqualTo(2));
+        }
+
+        [Test]
+        public void IndependentLockedJointsKeepHeavyModelReduction()
+        {
+            MMDPhysicsManager.ConfigureRuntimeQuality(60, 2, 1);
+            var joints = new PMXJoint[81];
+            for (var index = 0; index < joints.Length; index++)
+            {
+                joints[index].rigidBodyAIndex = index * 2;
+                joints[index].rigidBodyBIndex = index * 2 + 1;
+            }
+
+            Assert.That(
+                MMDPhysicsManager.RequiresFullLockedTranslationReinforcement(
+                    joints,
+                    joints.Length * 2),
+                Is.False);
+            Assert.That(
+                MMDPhysicsManager.ResolveLockedTranslationReinforcement(
+                    joints,
+                    joints.Length * 2),
+                Is.EqualTo(1));
+        }
+
+        [Test]
+        public void OptionalRealForestBerryUsesTopologyBasedStabilityProtection()
+        {
+            var pmxPath = System.Environment.GetEnvironmentVariable(
+                "BANXIA_TEST_FOREST_BERRY_PMX");
+            if (string.IsNullOrWhiteSpace(pmxPath) || !File.Exists(pmxPath))
+            {
+                Assert.Ignore(
+                    "BANXIA_TEST_FOREST_BERRY_PMX is not configured for this run.");
+            }
+
+            PMXModel model = null;
+            try
+            {
+                using (var stream = File.OpenRead(pmxPath))
+                {
+                    model = PMXReader.Read(stream, true);
+                }
+                Assert.That(
+                    MMDPhysicsManager.RequiresFullLockedTranslationReinforcement(
+                        model.joints,
+                        model.rigidBodies.Length),
+                    Is.True);
+                Assert.That(
+                    MMDPhysicsManager.ResolveLockedTranslationReinforcement(
+                        model.joints,
+                        model.rigidBodies.Length),
+                    Is.EqualTo(2));
+            }
+            finally
+            {
+                if (model != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(model);
+                }
+            }
+        }
+
+        [Test]
         public void PerformancePolicyCanRemoveHeavyModelReinforcementOnly()
         {
             try

@@ -981,6 +981,23 @@ namespace QuestMmdPlayer
                 " eyeBones=" + eyeBoneCount +
                 " pipeline=umt_pmx_direct" +
                 " readMs=" + LastReadMilliseconds);
+            var stabilitySensitivePhysics =
+                MMDPhysicsManager.RequiresFullLockedTranslationReinforcement(
+                    model.joints,
+                    model.rigidBodies == null ? 0 : model.rigidBodies.Length);
+            var selectedReinforcement =
+                MMDPhysicsManager.ResolveLockedTranslationReinforcement(
+                    model.joints,
+                    model.rigidBodies == null ? 0 : model.rigidBodies.Length);
+            Debug.Log(
+                "[MmdPhysicsAdapter] 物理策略：关节=" +
+                (model.joints == null ? 0 : model.joints.Length) +
+                "，刚体=" +
+                (model.rigidBodies == null ? 0 : model.rigidBodies.Length) +
+                "，锁定链稳定保护=" +
+                (stabilitySensitivePhysics ? "开启" : "不需要") +
+                "，强化=" + selectedReinforcement + "。",
+                this);
 
             token.ThrowIfCancellationRequested();
             PreserveOriginalNames(model);

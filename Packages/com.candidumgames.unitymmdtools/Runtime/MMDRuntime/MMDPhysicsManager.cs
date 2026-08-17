@@ -24,6 +24,11 @@ namespace UMT
         private const int k_DefaultSimulationFrequencyHz = 120;
         private const int k_DefaultMaxSubStepsPerFrame = 4;
         private const int k_DefaultLockedTranslationReinforceCount = 2;
+        // Long chains whose translation rows are fully locked (the common
+        // hair/skirt construction in PMX models) amplify solver residuals.
+        // Heavy-model CPU reduction is only safe when no such chain exists.
+        private const int k_StabilitySensitiveLockedComponentJointCount = 4;
+        private const float k_LockedTranslationEpsilon = 0.00001f;
         private static int s_SimulationFrequencyHz = k_DefaultSimulationFrequencyHz;
         private static int s_MaxSubStepsPerFrame = k_DefaultMaxSubStepsPerFrame;
         private static int s_LockedTranslationReinforceCount = k_DefaultLockedTranslationReinforceCount;
@@ -86,6 +91,8 @@ namespace UMT
             internal int simulationFrequencyHz;
             /// <summary>Per-frame substep cap captured when this native context was built.</summary>
             internal int maximumSubstepsPerFrame;
+            /// <summary>Effective locked-translation reinforcement selected for this model.</summary>
+            internal int lockedTranslationReinforceCount;
             /// <summary>Requests a velocity-clearing kinetic resync on the next physics pass.</summary>
             [MarshalAs(UnmanagedType.U1)]
             internal bool resetKineticInterpolation;
@@ -124,6 +131,9 @@ namespace UMT
         public static int maximumSubstepsPerFrame => s_MaxSubStepsPerFrame;
         /// <summary>Additional locked-translation constraints configured for newly built contexts.</summary>
         public static int lockedTranslationReinforceCount => s_LockedTranslationReinforceCount;
+        /// <summary>Effective locked-translation reinforcement used by this model's active context.</summary>
+        public int activeLockedTranslationReinforceCount =>
+            m_PhysicsSolverContext.lockedTranslationReinforceCount;
         /// <summary>Whether runtime stepping is paused while bone-driven bodies continue to synchronize.</summary>
         public bool simulationSuspended => m_SimulationSuspended;
 
@@ -202,6 +212,24 @@ namespace UMT
         }
 
         /// <summary>
+        /// Requests a clean simulation seed from the model's current bone pose.
+        /// Use this after a period where bones advanced while live physics was
+        /// disabled; retaining the old dynamic bodies would otherwise make the
+        /// constraints violently pull hair and clothing toward stale poses.
+        /// </summary>
+        public void ReseedFromCurrentPose()
+        {
+            m_PhysicsSolverContext.timeAccumulator = 0.0f;
+            m_PhysicsSolverContext.lastSubstepCount = 0;
+            m_PhysicsSolverContext.lastDroppedSimulationSeconds = 0.0f;
+            m_PhysicsSolverContext.resetKineticInterpolation = false;
+            m_PhysicsSolverContext.initialPoseApplied = false;
+        }
+
+        /// <summary>Diagnostic surface used by regression tests and runtime logs.</summary>
+        public bool initialPoseSeedPending => !m_PhysicsSolverContext.initialPoseApplied;
+
+        /// <summary>
         /// Writes each rigid body's world transform onto its owner object's Unity transform.
         /// </summary>
         [BurstCompile]
@@ -238,8 +266,12 @@ namespace UMT
         internal void Initialize()
         {
             DisposePhysics();
+            var reinforcement = ResolveLockedTranslationReinforcement(
+                joints,
+                rigidBodies == null ? 0 : rigidBodies.Length);
             m_PhysicsSolverContext.bulletPhysicsContext = CreateConfiguredBulletPhysics(
-                ResolveLockedTranslationReinforcement(joints == null ? 0 : joints.Length));
+                reinforcement);
+            m_PhysicsSolverContext.lockedTranslationReinforceCount = reinforcement;
             ApplyRuntimePolicy(ref m_PhysicsSolverContext);
 
             RebuildRuntimeData();
@@ -366,8 +398,12 @@ namespace UMT
             }
 
             DisposePhysicsContext(ref runtimeContext);
+            var reinforcement = ResolveLockedTranslationReinforcement(
+                model.joints,
+                model.rigidBodies == null ? 0 : model.rigidBodies.Length);
             runtimeContext.bulletPhysicsContext = CreateConfiguredBulletPhysics(
-                ResolveLockedTranslationReinforcement(model.joints == null ? 0 : model.joints.Length));
+                reinforcement);
+            runtimeContext.lockedTranslationReinforceCount = reinforcement;
             ApplyRuntimePolicy(ref runtimeContext);
             ResizePersistent(ref runtimeContext.rigidBodySimulationData, model.rigidBodies.Length);
             ResizePersistent(ref runtimeContext.worldTransforms, model.rigidBodies.Length);
@@ -455,6 +491,180 @@ namespace UMT
             return jointCount > 80
                 ? math.min(1, s_LockedTranslationReinforceCount)
                 : k_DefaultLockedTranslationReinforceCount;
+        }
+
+        /// <summary>
+        /// Selects reinforcement from the actual PMX joint topology. A joint
+        /// count alone is not enough: a large model with independent joints is
+        /// cheap to stabilize, while a long fully-locked hair/skirt component
+        /// needs the extra convergence even when the global profile requests a
+        /// reduced heavy-model setting.
+        /// </summary>
+        public static int ResolveLockedTranslationReinforcement(
+            PMXJoint[] modelJoints,
+            int rigidBodyCount)
+        {
+            var jointCount = modelJoints == null ? 0 : modelJoints.Length;
+            if (RequiresFullLockedTranslationReinforcement(modelJoints, rigidBodyCount))
+            {
+                return k_DefaultLockedTranslationReinforceCount;
+            }
+            return ResolveLockedTranslationReinforcement(jointCount);
+        }
+
+        /// <summary>Runtime-component overload of the topology-aware policy.</summary>
+        public static int ResolveLockedTranslationReinforcement(
+            MMDJoint[] modelJoints,
+            int rigidBodyCount)
+        {
+            var jointCount = modelJoints == null ? 0 : modelJoints.Length;
+            if (RequiresFullLockedTranslationReinforcement(modelJoints, rigidBodyCount))
+            {
+                return k_DefaultLockedTranslationReinforceCount;
+            }
+            return ResolveLockedTranslationReinforcement(jointCount);
+        }
+
+        /// <summary>
+        /// Returns true when the model contains a connected component with at
+        /// least four fully locked translation joints. This is deliberately
+        /// topology-based so future PMX imports receive the same stability
+        /// treatment without a model-name or file-hash allowlist.
+        /// </summary>
+        public static bool RequiresFullLockedTranslationReinforcement(
+            PMXJoint[] modelJoints,
+            int rigidBodyCount)
+        {
+            if (modelJoints == null || rigidBodyCount <= 1)
+            {
+                return false;
+            }
+
+            var first = new int[modelJoints.Length];
+            var second = new int[modelJoints.Length];
+            var lockedCount = 0;
+            for (var index = 0; index < modelJoints.Length; index++)
+            {
+                var joint = modelJoints[index];
+                if (!IsFullyLockedTranslation(joint.translationLimitMin, joint.translationLimitMax) ||
+                    joint.rigidBodyAIndex < 0 ||
+                    joint.rigidBodyAIndex >= rigidBodyCount ||
+                    joint.rigidBodyBIndex < 0 ||
+                    joint.rigidBodyBIndex >= rigidBodyCount ||
+                    joint.rigidBodyAIndex == joint.rigidBodyBIndex)
+                {
+                    continue;
+                }
+                first[lockedCount] = joint.rigidBodyAIndex;
+                second[lockedCount] = joint.rigidBodyBIndex;
+                lockedCount++;
+            }
+            return HasLockedComponentWithAtLeastFourJoints(
+                first,
+                second,
+                lockedCount,
+                rigidBodyCount);
+        }
+
+        /// <summary>Runtime-component counterpart used after Unity objects are built.</summary>
+        public static bool RequiresFullLockedTranslationReinforcement(
+            MMDJoint[] modelJoints,
+            int rigidBodyCount)
+        {
+            if (modelJoints == null || rigidBodyCount <= 1)
+            {
+                return false;
+            }
+
+            var first = new int[modelJoints.Length];
+            var second = new int[modelJoints.Length];
+            var lockedCount = 0;
+            for (var index = 0; index < modelJoints.Length; index++)
+            {
+                var joint = modelJoints[index];
+                if (!IsFullyLockedTranslation(joint.translationLimitMin, joint.translationLimitMax) ||
+                    joint.rigidBodyAIndex < 0 ||
+                    joint.rigidBodyAIndex >= rigidBodyCount ||
+                    joint.rigidBodyBIndex < 0 ||
+                    joint.rigidBodyBIndex >= rigidBodyCount ||
+                    joint.rigidBodyAIndex == joint.rigidBodyBIndex)
+                {
+                    continue;
+                }
+                first[lockedCount] = joint.rigidBodyAIndex;
+                second[lockedCount] = joint.rigidBodyBIndex;
+                lockedCount++;
+            }
+            return HasLockedComponentWithAtLeastFourJoints(
+                first,
+                second,
+                lockedCount,
+                rigidBodyCount);
+        }
+
+        private static bool IsFullyLockedTranslation(float3 minimum, float3 maximum)
+        {
+            return math.all(math.abs(minimum) <= k_LockedTranslationEpsilon) &&
+                math.all(math.abs(maximum) <= k_LockedTranslationEpsilon);
+        }
+
+        private static bool HasLockedComponentWithAtLeastFourJoints(
+            int[] first,
+            int[] second,
+            int edgeCount,
+            int rigidBodyCount)
+        {
+            if (edgeCount < k_StabilitySensitiveLockedComponentJointCount)
+            {
+                return false;
+            }
+
+            var parent = new int[rigidBodyCount];
+            var componentEdges = new int[rigidBodyCount];
+            for (var index = 0; index < parent.Length; index++)
+            {
+                parent[index] = index;
+            }
+            for (var index = 0; index < edgeCount; index++)
+            {
+                Union(parent, first[index], second[index]);
+            }
+            for (var index = 0; index < edgeCount; index++)
+            {
+                var root = Find(parent, first[index]);
+                componentEdges[root]++;
+                if (componentEdges[root] >= k_StabilitySensitiveLockedComponentJointCount)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static int Find(int[] parent, int value)
+        {
+            var root = value;
+            while (parent[root] != root)
+            {
+                root = parent[root];
+            }
+            while (parent[value] != value)
+            {
+                var next = parent[value];
+                parent[value] = root;
+                value = next;
+            }
+            return root;
+        }
+
+        private static void Union(int[] parent, int first, int second)
+        {
+            var firstRoot = Find(parent, first);
+            var secondRoot = Find(parent, second);
+            if (firstRoot != secondRoot)
+            {
+                parent[secondRoot] = firstRoot;
+            }
         }
 
         private static void ApplyRuntimePolicy(ref PhysicsSolverContext runtimeContext)

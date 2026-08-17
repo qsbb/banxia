@@ -361,12 +361,24 @@ namespace QuestMmdPlayer.Tests
             try
             {
                 var manager = owner.AddComponent<MMDTransformManager>();
+                var physics = owner.AddComponent<MMDPhysicsManager>();
+                manager.physicsManager = physics;
                 var suspend = typeof(VmdActionLibrary).GetMethod(
                     "SuspendLivePhysicsForPreparation",
                     BindingFlags.Static | BindingFlags.NonPublic);
                 var restore = typeof(VmdActionLibrary).GetMethod(
                     "RestoreLivePhysicsAfterPreparation",
                     BindingFlags.Static | BindingFlags.NonPublic);
+                var contextField = typeof(MMDPhysicsManager).GetField(
+                    "m_PhysicsSolverContext",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                var boxedContext = contextField.GetValue(physics);
+                var initialPoseField = boxedContext.GetType().GetField(
+                    "initialPoseApplied",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                initialPoseField.SetValue(boxedContext, true);
+                contextField.SetValue(physics, boxedContext);
+                Assert.That(physics.initialPoseSeedPending, Is.False);
 
                 manager.livePhysics = true;
                 var owned = (bool)suspend.Invoke(null, new object[] { manager });
@@ -376,6 +388,7 @@ namespace QuestMmdPlayer.Tests
                 restore.Invoke(null, restoreArguments);
                 Assert.That(manager.livePhysics, Is.True);
                 Assert.That((bool)restoreArguments[1], Is.False);
+                Assert.That(physics.initialPoseSeedPending, Is.True);
 
                 manager.livePhysics = false;
                 owned = (bool)suspend.Invoke(null, new object[] { manager });

@@ -1342,7 +1342,13 @@ namespace QuestMmdPlayer
                 return;
             }
             manager.livePhysics = true;
-            manager.physicsManager?.DiscardAccumulatedSimulationTime();
+            if (manager.physicsManager != null)
+            {
+                manager.physicsManager.ReseedFromCurrentPose();
+                Debug.Log(
+                    "[VmdActionLibrary] 实时物理已从当前骨架重新播种，头发和衣物速度已清除。",
+                    manager.physicsManager);
+            }
         }
 
         private static int ElapsedMilliseconds(float startedAt)
