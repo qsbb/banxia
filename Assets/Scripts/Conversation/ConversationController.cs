@@ -127,6 +127,7 @@ namespace QuestMmdPlayer
 
         private void OnDisable()
         {
+            RecordVoiceInterruption("system_disable", "lifecycle");
             presenter?.InterruptTrackedAction(stateMachine.TurnId, "system_interrupted");
             if (sendInteractionEvents && lastInteraction != HumanInteractionKind.None)
             {
@@ -239,7 +240,7 @@ namespace QuestMmdPlayer
                 return false;
             }
 
-            CancelCurrentTurn(false);
+            CancelCurrentTurn(false, "barge_in");
             BeginAudioStream();
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
@@ -320,7 +321,7 @@ namespace QuestMmdPlayer
             }
 
             var text = string.IsNullOrWhiteSpace(userText) ? "你好，能听见我吗？" : userText.Trim();
-            CancelCurrentTurn(false);
+            CancelCurrentTurn(false, "new_text_turn");
             BeginAudioStream();
             LastErrorCode = string.Empty;
             latestInteractionEventId = string.Empty;
@@ -345,6 +346,7 @@ namespace QuestMmdPlayer
                 return;
             }
 
+            RecordVoiceInterruption("user_interrupt", "explicit");
             awaitingBackendResponse = false;
             pendingLocalAction = string.Empty;
             presenter?.InterruptTrackedAction(stateMachine.TurnId, "user_interrupted");
@@ -495,6 +497,10 @@ namespace QuestMmdPlayer
                     backendActionReceived |= actionApplied && IsExecutableAvatarAction(message.Gesture);
                     break;
                 case ConversationEventType.Error:
+                    if (IsPipelineStoppedError(message.ErrorCode))
+                    {
+                        RecordVoiceInterruption("pipeline_stopped", "transport_error");
+                    }
                     StopAudioStream();
                     LastErrorCode = string.IsNullOrWhiteSpace(message.ErrorCode)
                         ? "conversation_error"
@@ -748,7 +754,7 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void CancelCurrentTurn(bool showInterrupted)
+        private void CancelCurrentTurn(bool showInterrupted, string interruptionReason = "turn_cancelled")
         {
             awaitingBackendResponse = false;
             if (showInterrupted)
@@ -761,6 +767,7 @@ namespace QuestMmdPlayer
                 return;
             }
 
+            RecordVoiceInterruption(interruptionReason, "turn_replace");
             transport?.Interrupt(stateMachine.TurnId);
             StopAudioStream();
             if (showInterrupted)
@@ -956,6 +963,7 @@ namespace QuestMmdPlayer
             }
 
             var turnId = stateMachine.TurnId;
+            RecordVoiceInterruption(code, "watchdog");
             pendingLocalAction = string.Empty;
             awaitingBackendResponse = false;
             LastErrorCode = code;
@@ -964,6 +972,15 @@ namespace QuestMmdPlayer
             errorUntil = Time.unscaledTime + 1.25f;
             NotifyStateChanged();
             RecordStage("reply", "failed", code);
+            if (IsNoResponseCode(code))
+            {
+                Debug.LogWarning(
+                    "[Conversation] No response: code=" + code +
+                    "; message=" + message +
+                    "; timing=" + BuildTimingStatus(Time.unscaledTime),
+                    this);
+                diagnostics?.Record("VoiceInput", "No response: code=" + code);
+            }
             Debug.LogWarning("[Conversation] Voice/transport error code=" + code +
                 "; bridge=" + TransportStatus + "; timing=" + BuildTimingStatus(Time.unscaledTime), this);
         }
@@ -1067,6 +1084,49 @@ namespace QuestMmdPlayer
             audioPlayer?.StopAndClear();
             presenter?.ClearSpeechTimeline();
             activePlaybackGeneration = -1;
+        }
+
+        private static bool IsPipelineStoppedError(string errorCode)
+        {
+            return string.Equals(errorCode, "astrbot_pipeline_event_stopped", StringComparison.Ordinal) ||
+                string.Equals(errorCode, "pipeline_stopped", StringComparison.Ordinal);
+        }
+
+        private static bool IsNoResponseCode(string code)
+        {
+            return string.Equals(code, "empty_backend_reply", StringComparison.Ordinal) ||
+                string.Equals(code, "response_first_event_timeout", StringComparison.Ordinal) ||
+                string.Equals(code, "response_event_stall_timeout", StringComparison.Ordinal) ||
+                string.Equals(code, "response_terminal_event_missing_timeout", StringComparison.Ordinal);
+        }
+
+        private void RecordVoiceInterruption(string reason, string source)
+        {
+            var hasAudio = audioPlayer != null &&
+                (audioPlayer.PlaybackStarted || audioPlayer.QueuedChunkCount > 0 || audioPlayer.BufferedSeconds > 0f);
+            var hasTurn = stateMachine.State != ConversationState.Idle || awaitingBackendResponse || hasAudio;
+            if (!hasTurn)
+            {
+                return;
+            }
+
+            var safeReason = string.IsNullOrWhiteSpace(reason) ? "unspecified" : reason.Trim();
+            var safeSource = string.IsNullOrWhiteSpace(source) ? "runtime" : source.Trim();
+            var queueDepth = audioPlayer == null ? -1 : audioPlayer.QueuedChunkCount;
+            var bufferedMs = audioPlayer == null ? -1 : Mathf.RoundToInt(audioPlayer.BufferedSeconds * 1000f);
+            var trace = RuntimeDebugLog.TraceLabel(stateMachine.TurnId);
+            var details = $"reason={safeReason} source={safeSource} turn={trace} state={stateMachine.State} " +
+                $"awaiting={awaitingBackendResponse} transport={TransportStatus} queue_depth={queueDepth} buffered_ms={bufferedMs}";
+            Debug.LogWarning("[Conversation] Voice interrupted: " + details, this);
+            diagnostics?.Record("VoiceInput", "Voice interrupted: " + details);
+            RecordStage(
+                "interrupt",
+                "completed",
+                "voice_interrupted_" + safeReason,
+                eventCount: 1,
+                queueDepth: queueDepth,
+                bufferedMs: bufferedMs,
+                traceId: trace);
         }
 
         private void RecordEventTiming(ConversationEvent message)

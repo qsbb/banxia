@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
@@ -30,7 +31,7 @@ namespace QuestMmdPlayer
     public sealed class Pcm16StreamAudioPlayer : MonoBehaviour
     {
         private readonly object gate = new object();
-        private readonly Queue<float[]> buffers = new Queue<float[]>();
+        private readonly Queue<AudioBuffer> buffers = new Queue<AudioBuffer>();
         private readonly Queue<ScheduledRms> scheduledRms = new Queue<ScheduledRms>();
 
         private readonly struct ScheduledRms
@@ -45,9 +46,22 @@ namespace QuestMmdPlayer
             public float Value { get; }
         }
 
+        private readonly struct AudioBuffer
+        {
+            public AudioBuffer(float[] samples, int length)
+            {
+                Samples = samples;
+                Length = length;
+            }
+
+            public float[] Samples { get; }
+            public int Length { get; }
+        }
+
         private AudioSource audioSource;
         private AudioClip streamClip;
-        private float[] currentBuffer;
+        private AudioBuffer currentBuffer;
+        private bool hasCurrentBuffer;
         private int currentOffset;
         private int queuedSamples;
         private int sampleRate = 24000;
@@ -66,6 +80,10 @@ namespace QuestMmdPlayer
         private long firstAudioCallbackAtTicks;
         private bool playbackTelemetryReported;
         private int playbackStartBufferedMs;
+        private int enqueuedChunkCount;
+        private int peakQueuedChunkCount;
+        private float maximumEnqueueMs;
+        private float nextSlowEnqueueLogAt;
         [SerializeField, Range(.04f, .4f)] private float startupBufferSeconds = .12f;
         [SerializeField, Range(.02f, .5f)] private float outputTailSafetySeconds = .22f;
 
@@ -88,7 +106,7 @@ namespace QuestMmdPlayer
             get
             {
                 lock (gate) return buffers.Count +
-                    (currentBuffer != null && currentOffset < currentBuffer.Length ? 1 : 0);
+                    (hasCurrentBuffer && currentOffset < currentBuffer.Length ? 1 : 0);
             }
         }
         public string DiagnosticStatus => $"buffer {BufferedSeconds:F2}s | started {PlaybackStarted} | underflows {UnderflowCount}";
@@ -183,6 +201,11 @@ namespace QuestMmdPlayer
         public void MarkStreamCompleted()
         {
             Volatile.Write(ref streamCompletedFlag, 1);
+            Debug.Log(
+                $"[PcmStream] Stream summary chunks={enqueuedChunkCount} " +
+                $"peak_queue={peakQueuedChunkCount} max_enqueue_ms={maximumEnqueueMs:F2} " +
+                $"underflows={UnderflowCount}",
+                this);
             TryStartPlayback();
         }
         public void Enqueue(short[] pcm16, int sourceSampleRate)
@@ -193,7 +216,8 @@ namespace QuestMmdPlayer
             }
 
             EnsureStream(sourceSampleRate);
-            var converted = new float[pcm16.Length];
+            var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            var converted = ArrayPool<float>.Shared.Rent(pcm16.Length);
             for (var i = 0; i < pcm16.Length; i++)
             {
                 converted[i] = pcm16[i] / 32768f;
@@ -201,8 +225,22 @@ namespace QuestMmdPlayer
 
             lock (gate)
             {
-                buffers.Enqueue(converted);
-                queuedSamples += converted.Length;
+                buffers.Enqueue(new AudioBuffer(converted, pcm16.Length));
+                queuedSamples += pcm16.Length;
+                enqueuedChunkCount++;
+                peakQueuedChunkCount = Mathf.Max(peakQueuedChunkCount, buffers.Count +
+                    (hasCurrentBuffer ? 1 : 0));
+            }
+            var enqueueMs = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - startedAt) *
+                1000d / System.Diagnostics.Stopwatch.Frequency);
+            maximumEnqueueMs = Mathf.Max(maximumEnqueueMs, enqueueMs);
+            if (enqueueMs >= 4f && Time.unscaledTime >= nextSlowEnqueueLogAt)
+            {
+                nextSlowEnqueueLogAt = Time.unscaledTime + 1f;
+                Debug.LogWarning(
+                    $"[PcmStream] Slow PCM enqueue: elapsed_ms={enqueueMs:F2} samples={pcm16.Length} " +
+                    $"queue_depth={QueuedChunkCount}",
+                    this);
             }
             TryStartPlayback();
         }
@@ -221,8 +259,9 @@ namespace QuestMmdPlayer
             }
             lock (gate)
             {
-                buffers.Clear();
-                currentBuffer = null;
+                ReturnQueuedBuffers();
+                currentBuffer = default;
+                hasCurrentBuffer = false;
                 currentOffset = 0;
                 queuedSamples = 0;
                 latestRms = 0f;
@@ -237,6 +276,9 @@ namespace QuestMmdPlayer
                 Interlocked.Exchange(ref firstAudioCallbackAtTicks, 0L);
                 playbackTelemetryReported = false;
                 playbackStartBufferedMs = 0;
+                enqueuedChunkCount = 0;
+                peakQueuedChunkCount = 0;
+                maximumEnqueueMs = 0f;
             }
         }
 
@@ -279,21 +321,22 @@ namespace QuestMmdPlayer
                 var write = 0;
                 while (write < data.Length)
                 {
-                    if (currentBuffer == null || currentOffset >= currentBuffer.Length)
+                    if (!hasCurrentBuffer || currentOffset >= currentBuffer.Length)
                     {
+                        ReturnCurrentBuffer();
                         if (buffers.Count == 0)
                         {
-                            currentBuffer = null;
                             break;
                         }
                         currentBuffer = buffers.Dequeue();
+                        hasCurrentBuffer = true;
                         currentOffset = 0;
                     }
 
                     var count = Mathf.Min(data.Length - write, currentBuffer.Length - currentOffset);
                     for (var i = 0; i < count; i++)
                     {
-                        var sample = currentBuffer[currentOffset + i];
+                        var sample = currentBuffer.Samples[currentOffset + i];
                         data[write + i] = sample;
                         sumSquares += sample * sample;
                     }
@@ -330,6 +373,30 @@ namespace QuestMmdPlayer
                         AudioSettings.dspTime + callbackSeconds + outputLatencySeconds + outputTailSafetySeconds);
                 }
             }
+        }
+
+        private void ReturnQueuedBuffers()
+        {
+            ReturnCurrentBuffer();
+            while (buffers.Count > 0)
+            {
+                var buffer = buffers.Dequeue();
+                if (buffer.Samples != null)
+                {
+                    ArrayPool<float>.Shared.Return(buffer.Samples);
+                }
+            }
+        }
+
+        private void ReturnCurrentBuffer()
+        {
+            if (hasCurrentBuffer && currentBuffer.Samples != null)
+            {
+                ArrayPool<float>.Shared.Return(currentBuffer.Samples);
+            }
+            currentBuffer = default;
+            hasCurrentBuffer = false;
+            currentOffset = 0;
         }
 
         private void UpdateAudibleRms()

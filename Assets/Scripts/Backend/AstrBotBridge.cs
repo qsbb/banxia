@@ -61,7 +61,10 @@ namespace QuestMmdPlayer
         [SerializeField] private string configurationFileName = DefaultConfigurationFileName;
         [SerializeField] private float reconnectDelaySeconds = 1.5f;
         [SerializeField] private int requestTimeoutSeconds = 15;
-        [SerializeField, Range(8, 256)] private int maxIncomingFramesPerUpdate = 64;
+        // Keep SSE work below the Quest frame budget. Audio chunks remain
+        // ordered, but are spread across frames so PCM conversion cannot stall
+        // gaze, tracking, or rendering in one large burst.
+        [SerializeField, Range(8, 64)] private int maxIncomingFramesPerUpdate = 24;
         [SerializeField, Range(1f, 30f)] private float spatialContextUploadIntervalSeconds = 2f;
 
         private readonly ConcurrentQueue<SseEventFrame> incomingFrames = new ConcurrentQueue<SseEventFrame>();
@@ -109,6 +112,7 @@ namespace QuestMmdPlayer
         private int sseFramesDispatched;
         private int sseQueueDepthPeak;
         private int sseQueueDelayMaxMs;
+        private float nextSsePressureLogAt;
         private const string SpatialRevisionPreferenceKey = "banxia.spatial.revision.v1";
         private RoomUnderstandingService spatialContextSource;
         private SpatialContextRequest pendingSpatialContext;
@@ -177,9 +181,13 @@ namespace QuestMmdPlayer
                 MarkEventStreamReady();
             }
 
-            var remainingFrameBudget = Mathf.Clamp(maxIncomingFramesPerUpdate, 8, 256);
+            var configuredBudget = Mathf.Clamp(maxIncomingFramesPerUpdate, 8, 64);
+            var queueDepthAtFrameStart = incomingFrames.Count;
+            var remainingFrameBudget = configuredBudget;
+            var dispatchedThisFrame = 0;
             while (remainingFrameBudget-- > 0 && incomingFrames.TryDequeue(out var frame))
             {
+                dispatchedThisFrame++;
                 var queueDelayMs = ElapsedMs(frame.ReceivedAtTicks);
                 if (AstrBotProtocol.TryMapSseEvent(sessionId, frame.EventName, frame.Data, out var message, out var error))
                 {
@@ -218,6 +226,30 @@ namespace QuestMmdPlayer
                 else if (!error.Contains("stale session"))
                 {
                     Debug.LogWarning("[AstrBotBridge] Ignored invalid SSE event: " + error);
+                }
+            }
+            if (queueDepthAtFrameStart > configuredBudget ||
+                (dispatchedThisFrame >= configuredBudget && incomingFrames.Count > 0))
+            {
+                UpdateMaximum(ref sseQueueDepthPeak, queueDepthAtFrameStart);
+                if (Time.unscaledTime >= nextSsePressureLogAt)
+                {
+                    nextSsePressureLogAt = Time.unscaledTime + 1f;
+                    var pressureTrace = string.IsNullOrEmpty(currentTraceId)
+                        ? string.Empty
+                        : currentTraceId;
+                    RecordStage(
+                        "sse_dispatch",
+                        "limited",
+                        "queue_pressure",
+                        eventCount: dispatchedThisFrame,
+                        traceId: pressureTrace,
+                        queueDepth: incomingFrames.Count);
+                    Debug.LogWarning(
+                        $"[AstrBotBridge] SSE queue pressure: start={queueDepthAtFrameStart} " +
+                        $"dispatched={dispatchedThisFrame} budget={configuredBudget} remaining={incomingFrames.Count} " +
+                        $"trace={pressureTrace}",
+                        this);
                 }
             }
             TryStartSpatialContextUpload();

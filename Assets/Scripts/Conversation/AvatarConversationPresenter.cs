@@ -67,6 +67,7 @@ namespace QuestMmdPlayer
         private float lastVisibleMouthAmount;
         private float lastTimelinePositionMs;
         private float lastTimelinePeak;
+        private string lastGazeDiagnostic = string.Empty;
         private int fallbackVisemeGroup = -1;
         private string targetEmotion = "neutral";
         private float targetEmotionIntensity;
@@ -997,6 +998,7 @@ namespace QuestMmdPlayer
                 (lookAtMode != "none" || idleAttention || conversationAttention);
             gazeBlend = Mathf.MoveTowards(gazeBlend, wantsAttention ? 1f : 0f, Time.unscaledDeltaTime * (idleAttention ? idleGazeBlendSpeed : 3.5f));
             var gazeMode = ResolveGazeMode(state, idleAttention, conversationAttention, lookAtMode);
+            RecordGazeDiagnostic(semanticContact, wantsAttention, gazeMode);
             ApplyGaze(gazeBlend, gazeMode);
 
             ApplyExpressions();
@@ -1084,6 +1086,29 @@ namespace QuestMmdPlayer
                 AvatarActionReceiptPhase.Interrupted,
                 "runtime",
                 "superseded");
+        }
+
+        private void RecordGazeDiagnostic(bool semanticContact, bool wantsAttention, string gazeMode)
+        {
+            var cameraAvailable = Camera.main != null;
+            var owner = semanticContact
+                ? "physical_contact"
+                : !cameraAvailable
+                    ? "camera_missing"
+                    : wantsAttention
+                        ? "conversation_or_idle"
+                        : "released";
+            var action = avatar == null ? "none" : avatar.CurrentAction;
+            var signature = $"owner={owner}|state={state}|mode={gazeMode}|action={action}|" +
+                $"semantic_contact={semanticContact}|camera={cameraAvailable}";
+            if (string.Equals(signature, lastGazeDiagnostic, StringComparison.Ordinal))
+            {
+                return;
+            }
+            lastGazeDiagnostic = signature;
+            diagnostics?.Record(
+                "ConversationPresenter",
+                "Gaze " + signature.Replace('|', ' ') + $" blend={gazeBlend:F2}");
         }
 
         private void OnDestroy()

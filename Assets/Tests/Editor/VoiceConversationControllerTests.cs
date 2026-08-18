@@ -150,6 +150,46 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void BargeInWritesStructuredVoiceInterruptionLog()
+        {
+            owner = new GameObject("Voice interruption diagnostics test");
+            var diagnostics = owner.AddComponent<RuntimeDebugLog>();
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.StartConversation("hello");
+
+            Assert.IsTrue(controller.BeginVoiceInput());
+
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("Voice interrupted"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("reason=barge_in"));
+            Assert.That(diagnostics.GetRecentTimelineText(30), Does.Contain("voice_interrupted_barge_in"));
+        }
+
+        [Test]
+        public void PipelineStopWritesStructuredVoiceInterruptionLog()
+        {
+            owner = new GameObject("Pipeline interruption diagnostics test");
+            var diagnostics = owner.AddComponent<RuntimeDebugLog>();
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            Assert.IsTrue(controller.BeginVoiceInput());
+            Assert.IsTrue(controller.EndVoiceInput());
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.Error,
+                TurnId = controller.TurnId,
+                ErrorCode = "astrbot_pipeline_event_stopped"
+            });
+
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("Voice interrupted"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("reason=pipeline_stopped"));
+            Assert.That(diagnostics.GetRecentTimelineText(30), Does.Contain("voice_interrupted_pipeline_stopped"));
+        }
+
+        [Test]
         public void SyntheticTransportAckDoesNotCountAsFirstBackendEvent()
         {
             owner = new GameObject("Synthetic transport timing test");
