@@ -12,6 +12,9 @@ namespace QuestMmdPlayer
     public sealed class QuestMicrophoneInput : MonoBehaviour
     {
         private const int TargetSampleRate = 16000;
+        private const int CaptureBudgetMillisecondsPerUpdate = 120;
+        private const int MaxEncodedChunksPerUpdate = 2;
+        private const int StopCaptureBudgetMilliseconds = 240;
         private const string AlwaysListeningPreferenceKey = "banxia.voice.always_listening";
 
         [SerializeField, Range(40, 100)] private int chunkMilliseconds = 80;
@@ -52,6 +55,9 @@ namespace QuestMmdPlayer
         private int pcmEncodeCount;
         private int pcmEncodeTotalMs;
         private int pcmEncodeMaxMs;
+        private float[] interleavedCaptureBuffer = System.Array.Empty<float>();
+        private float nextCapturePressureLogAt;
+        private bool automaticBargeInGuardLogged;
 
         public bool IsRecording { get; private set; }
         public bool IsMonitoring { get; private set; }
@@ -381,7 +387,9 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            CaptureAvailableFrames();
+            CaptureAvailableFrames(
+                Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, StopCaptureBudgetMilliseconds),
+                MaxEncodedChunksPerUpdate * 2);
             if (!IsRecording)
             {
                 return;
@@ -474,7 +482,7 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void CaptureAvailableFrames()
+        private void CaptureAvailableFrames(int frameBudget = -1, int chunkBudget = -1)
         {
             if (!IsMonitoring || recordingClip == null)
             {
@@ -488,18 +496,63 @@ namespace QuestMmdPlayer
             }
             if (current > lastPosition)
             {
-                AppendFrames(lastPosition, current - lastPosition);
+                var available = current - lastPosition;
+                var frames = LimitCaptureFrames(available, frameBudget);
+                AppendRingFrames(frames);
             }
             else
             {
-                AppendFrames(lastPosition, recordingClip.samples - lastPosition);
-                if (current > 0)
-                {
-                    AppendFrames(0, current);
-                }
+                var available = recordingClip.samples - lastPosition + current;
+                var frames = LimitCaptureFrames(available, frameBudget);
+                AppendRingFrames(frames);
             }
-            lastPosition = current;
-            FlushFullChunks();
+            FlushFullChunks(chunkBudget > 0 ? chunkBudget : MaxEncodedChunksPerUpdate);
+        }
+
+        private int LimitCaptureFrames(int available, int frameBudget)
+        {
+            if (available <= 0)
+            {
+                return 0;
+            }
+            var budget = frameBudget > 0
+                ? frameBudget
+                : Pcm16CaptureUtility.FramesForDuration(
+                    sourceSampleRate,
+                    CaptureBudgetMillisecondsPerUpdate);
+            var limited = Mathf.Min(available, Mathf.Max(1, budget));
+            if (available > limited && Time.unscaledTime >= nextCapturePressureLogAt)
+            {
+                nextCapturePressureLogAt = Time.unscaledTime + 1f;
+                diagnostics?.RecordStage(
+                    "audio_capture",
+                    "limited",
+                    "capture_queue_pressure",
+                    eventCount: available,
+                    queueDepth: available - limited);
+                Debug.LogWarning(
+                    $"[VoiceInput] Capture queue pressure: available_frames={available} " +
+                    $"processed_frames={limited} remaining_frames={available - limited}",
+                    this);
+            }
+            return limited;
+        }
+
+        private void AppendRingFrames(int frameCount)
+        {
+            if (recordingClip == null || frameCount <= 0)
+            {
+                return;
+            }
+
+            var first = Mathf.Min(frameCount, recordingClip.samples - lastPosition);
+            AppendFrames(lastPosition, first);
+            var remaining = frameCount - first;
+            if (remaining > 0)
+            {
+                AppendFrames(0, remaining);
+            }
+            lastPosition = (lastPosition + frameCount) % recordingClip.samples;
         }
 
         private void AppendFrames(int offset, int frameCount)
@@ -509,8 +562,12 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            var interleaved = new float[frameCount * sourceChannels];
-            if (!recordingClip.GetData(interleaved, offset))
+            var requiredSamples = frameCount * sourceChannels;
+            if (interleavedCaptureBuffer.Length < requiredSamples)
+            {
+                interleavedCaptureBuffer = new float[requiredSamples];
+            }
+            if (!recordingClip.GetData(interleavedCaptureBuffer, offset))
             {
                 Status = "Microphone read failed";
                 return;
@@ -520,18 +577,24 @@ namespace QuestMmdPlayer
                 var sum = 0f;
                 for (var channel = 0; channel < sourceChannels; channel++)
                 {
-                    sum += interleaved[frame * sourceChannels + channel];
+                    sum += interleavedCaptureBuffer[frame * sourceChannels + channel];
                 }
                 pendingMono.Add(sum / sourceChannels);
             }
         }
 
-        private void FlushFullChunks()
+        private void FlushFullChunks(int chunkBudget = -1)
         {
             var sourceFrames = Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, chunkMilliseconds);
             var chunkSeconds = sourceSampleRate <= 0 ? 0f : sourceFrames / (float)sourceSampleRate;
+            var chunksProcessed = 0;
             while (IsMonitoring && sourceFrames > 0 && pendingMono.Count >= sourceFrames)
             {
+                if (chunkBudget > 0 && chunksProcessed >= chunkBudget)
+                {
+                    return;
+                }
+                chunksProcessed++;
                 if (IsRecording)
                 {
                     if (!SendSourceFrames(sourceFrames))
@@ -548,9 +611,24 @@ namespace QuestMmdPlayer
                 var level = CalculateRms(pendingMono, sourceFrames);
                 InputLevel = level;
                 var canActivate = alwaysListening && conversation != null &&
-                    conversation.CanStartVoiceInput;
+                    ShouldAllowAutomaticVoiceActivation(
+                        conversation.State,
+                        conversation.CanStartVoiceInput);
                 if (!canActivate)
                 {
+                    if (alwaysListening && conversation != null &&
+                        conversation.State == ConversationState.Speaking &&
+                        !automaticBargeInGuardLogged)
+                    {
+                        automaticBargeInGuardLogged = true;
+                        diagnostics?.RecordStage(
+                            "microphone",
+                            "limited",
+                            "tts_echo_barge_in_suppressed");
+                        Debug.Log(
+                            "[VoiceInput] Automatic barge-in suppressed while TTS is speaking; explicit input remains available.",
+                            this);
+                    }
                     pendingMono.RemoveRange(0, sourceFrames);
                     preRollMono.Clear();
                     activityGate?.ResetActivation();
@@ -559,6 +637,7 @@ namespace QuestMmdPlayer
                         : alwaysListening ? "Listening | backend offline" : "Microphone ready";
                     continue;
                 }
+                automaticBargeInGuardLogged = false;
 
                 AppendPreRoll(sourceFrames);
                 var activate = activityGate != null && activityGate.Observe(level, chunkSeconds, true);
@@ -574,9 +653,13 @@ namespace QuestMmdPlayer
 
         private void AppendPreRoll(int frameCount)
         {
-            preRollMono.AddRange(pendingMono.GetRange(0, frameCount));
-            pendingMono.RemoveRange(0, frameCount);
-            var maximum = Mathf.Max(frameCount, Mathf.RoundToInt(sourceSampleRate * voicePreRollSeconds));
+            var count = Mathf.Min(frameCount, pendingMono.Count);
+            for (var index = 0; index < count; index++)
+            {
+                preRollMono.Add(pendingMono[index]);
+            }
+            pendingMono.RemoveRange(0, count);
+            var maximum = Mathf.Max(count, Mathf.RoundToInt(sourceSampleRate * voicePreRollSeconds));
             if (preRollMono.Count > maximum)
             {
                 preRollMono.RemoveRange(0, preRollMono.Count - maximum);
@@ -598,6 +681,17 @@ namespace QuestMmdPlayer
             return Mathf.Sqrt(sumSquares / usable);
         }
 
+        public static bool ShouldAllowAutomaticVoiceActivation(
+            ConversationState conversationState,
+            bool canStartVoiceInput)
+        {
+            // Quest speakers can leak TTS into the microphone. Automatic VAD
+            // must not treat that echo as a new user turn. Explicit button or
+            // tracked-hand capture still calls StartRecording directly and can
+            // deliberately interrupt a spoken reply.
+            return canStartVoiceInput && conversationState != ConversationState.Speaking;
+        }
+
         private bool FlushRemainder()
         {
             var minimumFrames = Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, 40);
@@ -612,10 +706,28 @@ namespace QuestMmdPlayer
 
         private bool SendSourceFrames(int frameCount)
         {
-            var source = pendingMono.GetRange(0, frameCount);
-            pendingMono.RemoveRange(0, frameCount);
+            var sourceCount = Mathf.Min(frameCount, pendingMono.Count);
+            if (sourceCount <= 0)
+            {
+                return true;
+            }
+
+            var sumSquares = 0f;
+            for (var index = 0; index < sourceCount; index++)
+            {
+                var sample = pendingMono[index];
+                sumSquares += sample * sample;
+            }
+            InputLevel = Mathf.Sqrt(sumSquares / sourceCount);
+
             var encodeStartedAt = Stopwatch.GetTimestamp();
-            var pcm16 = Pcm16CaptureUtility.ResampleAndEncode(source, sourceSampleRate, TargetSampleRate);
+            var pcm16 = Pcm16CaptureUtility.ResampleAndEncode(
+                pendingMono,
+                0,
+                sourceCount,
+                sourceSampleRate,
+                TargetSampleRate);
+            pendingMono.RemoveRange(0, sourceCount);
             var encodeMs = Mathf.Clamp(
                 (int)System.Math.Round((Stopwatch.GetTimestamp() - encodeStartedAt) * 1000d / Stopwatch.Frequency),
                 0,
@@ -628,12 +740,6 @@ namespace QuestMmdPlayer
                 return true;
             }
 
-            var sumSquares = 0f;
-            for (var index = 0; index < source.Count; index++)
-            {
-                sumSquares += source[index] * source[index];
-            }
-            InputLevel = Mathf.Sqrt(sumSquares / source.Count);
             if (activityGate == null ? InputLevel >= voiceSilenceRms : activityGate.IsSpeech(InputLevel))
             {
                 detectedSpeech = true;

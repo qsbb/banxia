@@ -36,6 +36,23 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void OffsetEncodingMatchesTheSelectedCaptureWindow()
+        {
+            var source = new[] { -1f, -0.5f, 0f, 0.5f, 1f };
+
+            var encoded = Pcm16CaptureUtility.ResampleAndEncode(
+                source,
+                1,
+                3,
+                16000,
+                16000);
+
+            CollectionAssert.AreEqual(
+                new byte[] { 0x00, 0xc0, 0x00, 0x00, 0x00, 0x40 },
+                encoded);
+        }
+
+        [Test]
         public void VoiceGateCalibratesThenRequiresSustainedSpeech()
         {
             var gate = new VoiceActivityGate(.008f, .024f, .16f, .24f);
@@ -54,6 +71,23 @@ namespace QuestMmdPlayer.Tests
 
             Assert.IsFalse(gate.Observe(.08f, .2f, false));
             Assert.That(gate.ActivationProgress, Is.EqualTo(0f));
+        }
+
+        [TestCase(ConversationState.Speaking, true, false)]
+        [TestCase(ConversationState.Thinking, true, true)]
+        [TestCase(ConversationState.Listening, true, true)]
+        [TestCase(ConversationState.Idle, true, true)]
+        [TestCase(ConversationState.Idle, false, false)]
+        public void AutomaticVadCannotBargeInOnTheAppsOwnTts(
+            ConversationState state,
+            bool canStartVoiceInput,
+            bool expected)
+        {
+            Assert.That(
+                QuestMicrophoneInput.ShouldAllowAutomaticVoiceActivation(
+                    state,
+                    canStartVoiceInput),
+                Is.EqualTo(expected));
         }
 
         [Test]
