@@ -45,7 +45,7 @@ namespace QuestMmdPlayer.Tests
                     true,
                     "away"));
             Assert.AreEqual(
-                "away",
+                "user",
                 AvatarConversationPresenter.ResolveGazeMode(
                     ConversationState.Speaking,
                     false,
@@ -65,6 +65,8 @@ namespace QuestMmdPlayer.Tests
                 ConversationState.Speaking, true, true), Is.False);
             Assert.That(AvatarConversationPresenter.ResolveGazeMode(
                 ConversationState.Speaking, false, true, "none"), Is.EqualTo("user"));
+            Assert.That(AvatarConversationPresenter.ResolveGazeMode(
+                ConversationState.Speaking, false, true, "away"), Is.EqualTo("user"));
         }
 
         [Test]

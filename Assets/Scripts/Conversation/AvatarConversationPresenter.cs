@@ -1152,7 +1152,10 @@ namespace QuestMmdPlayer
             {
                 return "user";
             }
-            if (conversationAttention && normalized == "none") return "user";
+            // A stale or expressive backend look_at must not cancel eye contact
+            // in the middle of a live conversation. Physical contact still
+            // disables conversationAttention before this resolver is called.
+            if (conversationAttention) return "user";
             return idleAttention && normalized == "none" ? "user" : normalized;
         }
 
