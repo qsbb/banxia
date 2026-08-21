@@ -506,10 +506,12 @@ namespace QuestMmdPlayer
                 return false;
             }
 
-            var copy = new byte[pcm16.Length];
-            Buffer.BlockCopy(pcm16, 0, copy, 0, pcm16.Length);
-            outgoingAudioChunks.Enqueue(copy);
-            queuedInputAudioBytes += copy.Length;
+            // QueueAudioChunk takes ownership of the freshly encoded buffer.
+            // ConversationController never reuses or mutates pcm16, so copying
+            // it here only creates another short-lived allocation on the Quest
+            // main thread for every 80 ms capture chunk.
+            outgoingAudioChunks.Enqueue(pcm16);
+            queuedInputAudioBytes += pcm16.Length;
             audioQueuedPeakBytes = Mathf.Max(audioQueuedPeakBytes, queuedInputAudioBytes);
             return true;
         }
@@ -1153,16 +1155,14 @@ namespace QuestMmdPlayer
             }
 
             var limit = Mathf.Max(2, maximumBytes) & ~1;
-            var selected = new List<byte[]>();
             var total = 0;
             while (chunks.Count > 0)
             {
                 var next = chunks.Peek();
-                if (selected.Count > 0 && total + next.Length > limit)
+                if (total > 0 && total + next.Length > limit)
                 {
                     break;
                 }
-                selected.Add(chunks.Dequeue());
                 total += next.Length;
                 if (total >= limit)
                 {
@@ -1172,8 +1172,9 @@ namespace QuestMmdPlayer
 
             var merged = new byte[total];
             var offset = 0;
-            foreach (var chunk in selected)
+            while (offset < total && chunks.Count > 0)
             {
+                var chunk = chunks.Dequeue();
                 Buffer.BlockCopy(chunk, 0, merged, offset, chunk.Length);
                 offset += chunk.Length;
             }

@@ -448,6 +448,19 @@ namespace QuestMmdPlayer.Tests
             Assert.That(chunks.Count, Is.EqualTo(1));
         }
 
+        [Test]
+        public void AudioUploadBatchKeepsChunkOrderWhenMergingOwnedBuffers()
+        {
+            var chunks = new System.Collections.Generic.Queue<byte[]>();
+            chunks.Enqueue(new byte[] { 1, 2 });
+            chunks.Enqueue(new byte[] { 3, 4 });
+
+            var batch = AstrBotBridge.DequeueAudioBatch(chunks, 4);
+
+            Assert.That(batch, Is.EqualTo(new byte[] { 1, 2, 3, 4 }));
+            Assert.That(chunks, Is.Empty);
+        }
+
         [TestCase("turn/start", 0, true, 1, true)]
         [TestCase("audio/end", 20, true, 1, true)]
         [TestCase("audio/chunk", 0, true, 1, true)]
