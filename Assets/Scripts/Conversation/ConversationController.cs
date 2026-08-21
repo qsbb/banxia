@@ -289,7 +289,27 @@ namespace QuestMmdPlayer
             Debug.Log(accepted
                 ? "[Conversation] Voice input end accepted."
                 : "[Conversation] Voice input end rejected.", this);
-            if (!accepted) RecordStage("audio_upload", "failed", "voice_end_rejected");
+            if (!accepted)
+            {
+                var code = transport == null ? "bridge_disconnected" : "voice_end_rejected";
+                RecordVoiceInterruption(code, "transport_error");
+                LastErrorCode = code;
+                transport?.Interrupt(stateMachine.TurnId);
+                stateMachine.Fail("Voice input could not be ended");
+                StopAudioStream();
+                errorUntil = Time.unscaledTime + 1.25f;
+                NotifyStateChanged();
+                RecordStage("audio_upload", "failed", code);
+                var trace = RuntimeDebugLog.TraceLabel(stateMachine.TurnId);
+                var timing = BuildTimingStatus(Time.unscaledTime);
+                Debug.LogWarning(
+                    "[Conversation] No response: code=" + code +
+                    " trace=" + trace + "; message=Voice input could not be ended; timing=" + timing,
+                    this);
+                diagnostics?.Record(
+                    "VoiceInput",
+                    "No response: code=" + code + " trace=" + trace + " timing=" + timing);
+            }
             return accepted;
         }
 
@@ -1138,6 +1158,7 @@ namespace QuestMmdPlayer
                 string.Equals(code, "stt_empty", StringComparison.Ordinal) ||
                 string.Equals(code, "stt_unavailable", StringComparison.Ordinal) ||
                 string.Equals(code, "stt_failed", StringComparison.Ordinal) ||
+                string.Equals(code, "voice_end_rejected", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_not_woken", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_reply_capture_empty", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_no_response", StringComparison.Ordinal) ||
@@ -1147,6 +1168,7 @@ namespace QuestMmdPlayer
 
         private void RecordVoiceInterruption(string reason, string source)
         {
+            diagnostics = diagnostics != null ? diagnostics : GetComponent<RuntimeDebugLog>();
             var hasAudio = audioPlayer != null &&
                 (audioPlayer.PlaybackStarted || audioPlayer.QueuedChunkCount > 0 || audioPlayer.BufferedSeconds > 0f);
             var hasTurn = stateMachine.State != ConversationState.Idle || awaitingBackendResponse || hasAudio;
