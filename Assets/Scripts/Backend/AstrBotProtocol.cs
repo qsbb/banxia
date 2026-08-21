@@ -96,38 +96,66 @@ namespace QuestMmdPlayer
 
         private void ProcessLine()
         {
-            var current = line.ToString();
-            line.Clear();
-            if (current.Length == 0)
+            if (line.Length == 0)
             {
                 Dispatch();
                 return;
             }
-            if (current[0] == ':')
+            if (line[0] == ':')
             {
+                line.Clear();
                 return;
             }
 
-            var separator = current.IndexOf(':');
-            var field = separator < 0 ? current : current.Substring(0, separator);
-            var value = separator < 0 ? string.Empty : current.Substring(separator + 1);
-            if (value.StartsWith(" ", StringComparison.Ordinal))
+            var separator = -1;
+            for (var index = 0; index < line.Length; index++)
             {
-                value = value.Substring(1);
+                if (line[index] == ':')
+                {
+                    separator = index;
+                    break;
+                }
             }
 
-            if (field == "event")
+            var valueStart = separator < 0 ? line.Length : separator + 1;
+            if (valueStart < line.Length && line[valueStart] == ' ')
             {
-                eventName = value;
+                valueStart++;
             }
-            else if (field == "data")
+            if (IsField(line, separator, "event"))
+            {
+                eventName = valueStart < line.Length
+                    ? line.ToString(valueStart, line.Length - valueStart)
+                    : string.Empty;
+            }
+            else if (IsField(line, separator, "data"))
             {
                 if (data.Length > 0)
                 {
                     data.Append('\n');
                 }
-                data.Append(value);
+                if (valueStart < line.Length)
+                {
+                    data.Append(line, valueStart, line.Length - valueStart);
+                }
             }
+            line.Clear();
+        }
+
+        private static bool IsField(StringBuilder value, int separator, string expected)
+        {
+            if (separator != expected.Length)
+            {
+                return false;
+            }
+            for (var index = 0; index < expected.Length; index++)
+            {
+                if (value[index] != expected[index])
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private void Dispatch()
