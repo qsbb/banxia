@@ -274,6 +274,39 @@ namespace QuestMmdPlayer
             out ConversationEvent message,
             out string error)
         {
+            return TryMapSseEventCore(
+                expectedSessionId,
+                eventName,
+                json,
+                false,
+                out message,
+                out error);
+        }
+
+        internal static bool TryMapSseEventPooled(
+            string expectedSessionId,
+            string eventName,
+            string json,
+            out ConversationEvent message,
+            out string error)
+        {
+            return TryMapSseEventCore(
+                expectedSessionId,
+                eventName,
+                json,
+                true,
+                out message,
+                out error);
+        }
+
+        private static bool TryMapSseEventCore(
+            string expectedSessionId,
+            string eventName,
+            string json,
+            bool poolAudio,
+            out ConversationEvent message,
+            out string error)
+        {
             message = null;
             error = string.Empty;
             if (string.IsNullOrWhiteSpace(eventName) || string.IsNullOrWhiteSpace(json))
@@ -322,12 +355,14 @@ namespace QuestMmdPlayer
                     message = Basic(payload, ConversationEventType.ReplyTextDelta);
                     break;
                 case "reply.audio.chunk":
-                    if (!TryDecodeAudio(payload, out var samples, out error))
+                    if (!TryDecodeAudio(payload, poolAudio, out var samples, out var sampleCount, out error))
                     {
                         return false;
                     }
                     message = Basic(payload, ConversationEventType.AudioChunk);
                     message.Pcm16 = samples;
+                    message.Pcm16Length = sampleCount;
+                    message.Pcm16FromPool = poolAudio;
                     message.SampleRate = payload.sample_rate;
                     break;
                 case "reply.speech.timeline":
@@ -548,9 +583,15 @@ namespace QuestMmdPlayer
             return value <= 0 ? -1 : Mathf.Clamp(value, 1, 3600000);
         }
 
-        private static bool TryDecodeAudio(BridgeSsePayload payload, out short[] samples, out string error)
+        private static bool TryDecodeAudio(
+            BridgeSsePayload payload,
+            bool poolAudio,
+            out short[] samples,
+            out int sampleCount,
+            out string error)
         {
             samples = null;
+            sampleCount = 0;
             error = string.Empty;
             if (payload.format != "pcm16" || payload.sample_rate != 24000 || payload.channels != 1)
             {
@@ -589,14 +630,17 @@ namespace QuestMmdPlayer
                     return false;
                 }
 
-                samples = new short[byteCount / 2];
+                sampleCount = byteCount / 2;
+                samples = poolAudio
+                    ? ArrayPool<short>.Shared.Rent(sampleCount)
+                    : new short[sampleCount];
                 if (BitConverter.IsLittleEndian)
                 {
                     Buffer.BlockCopy(bytes, 0, samples, 0, byteCount);
                 }
                 else
                 {
-                    for (var index = 0; index < samples.Length; index++)
+                    for (var index = 0; index < sampleCount; index++)
                     {
                         var offset = index * 2;
                         samples[index] = unchecked((short)(bytes[offset] | (bytes[offset + 1] << 8)));

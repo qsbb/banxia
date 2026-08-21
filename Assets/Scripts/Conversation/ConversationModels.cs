@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 
 namespace QuestMmdPlayer
@@ -40,6 +41,8 @@ namespace QuestMmdPlayer
         public float Intensity;
         public int DurationMs;
         public short[] Pcm16;
+        public int Pcm16Length;
+        internal bool Pcm16FromPool;
         public int SampleRate;
         public SpeechVisemeCue[] VisemeTimeline;
         public string ActionId;
@@ -59,6 +62,17 @@ namespace QuestMmdPlayer
         public long TransportDispatchedAtTicks;
         /// <summary>Optional aggregate timings supplied by the bridge server.</summary>
         public BackendTimingSnapshot BackendTiming;
+
+        public void ReleasePcm16()
+        {
+            if (Pcm16FromPool && Pcm16 != null)
+            {
+                ArrayPool<short>.Shared.Return(Pcm16);
+            }
+            Pcm16 = null;
+            Pcm16Length = 0;
+            Pcm16FromPool = false;
+        }
     }
 
     public sealed class AvatarActionParameters

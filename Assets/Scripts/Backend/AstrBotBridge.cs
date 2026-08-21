@@ -201,10 +201,11 @@ namespace QuestMmdPlayer
                     continue;
                 }
                 var queueDelayMs = ElapsedMs(frame.ReceivedAtTicks);
-                if (AstrBotProtocol.TryMapSseEvent(sessionId, frame.EventName, frame.Data, out var message, out var error))
+                if (AstrBotProtocol.TryMapSseEventPooled(sessionId, frame.EventName, frame.Data, out var message, out var error))
                 {
                     if (!ShouldDispatchTurn(message, activeTurnId))
                     {
+                        message.ReleasePcm16();
                         continue;
                     }
                     message.TransportReceivedAtTicks = frame.ReceivedAtTicks;
@@ -237,7 +238,14 @@ namespace QuestMmdPlayer
                             queueDepth: Volatile.Read(ref sseQueueDepthPeak));
                     }
                     message.TransportDispatchedAtTicks = DiagnosticTimestamp();
-                    EventReceived?.Invoke(message);
+                    try
+                    {
+                        EventReceived?.Invoke(message);
+                    }
+                    finally
+                    {
+                        message.ReleasePcm16();
+                    }
                 }
                 else if (!error.Contains("stale session"))
                 {
@@ -1880,7 +1888,7 @@ namespace QuestMmdPlayer
                     break;
                 case ConversationEventType.AudioChunk:
                     receivedReplyAudioChunks++;
-                    receivedReplyAudioBytes += message.Pcm16 == null ? 0 : message.Pcm16.Length * 2;
+                    receivedReplyAudioBytes += message.Pcm16 == null ? 0 : message.Pcm16Length * 2;
                     break;
                 case ConversationEventType.Error:
                     var code = string.IsNullOrWhiteSpace(message.ErrorCode)

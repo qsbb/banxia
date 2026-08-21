@@ -402,7 +402,9 @@ namespace QuestMmdPlayer.Tests
 
             Assert.That(mapped, Is.True, error);
             Assert.That(message.Pcm16, Is.EqualTo(new short[] { 0x1234, -52 }));
+            Assert.That(message.Pcm16Length, Is.EqualTo(2));
             Assert.That(message.SampleRate, Is.EqualTo(24000));
+            message.ReleasePcm16();
         }
 
         [Test]

@@ -91,6 +91,32 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void AutomaticVadAllowsUserVoiceAboveAudibleTts()
+        {
+            Assert.IsTrue(
+                QuestMicrophoneInput.ShouldAllowAutomaticVoiceActivation(
+                    ConversationState.Speaking,
+                    true,
+                    microphoneRms: .12f,
+                    playbackRms: .02f,
+                    playbackMultiplier: 2.25f,
+                    minimumRms: .018f));
+        }
+
+        [Test]
+        public void AutomaticVadRejectsMicrophoneSignalThatMatchesAudibleTts()
+        {
+            Assert.IsFalse(
+                QuestMicrophoneInput.ShouldAllowAutomaticVoiceActivation(
+                    ConversationState.Speaking,
+                    true,
+                    microphoneRms: .04f,
+                    playbackRms: .02f,
+                    playbackMultiplier: 2.25f,
+                    minimumRms: .018f));
+        }
+
+        [Test]
         public void VoiceGateKeepsShortCommandSyllablesAcrossOneQuietChunk()
         {
             var gate = new VoiceActivityGate(.006f, .018f, .12f, 0f);

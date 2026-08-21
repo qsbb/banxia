@@ -34,6 +34,8 @@ namespace QuestMmdPlayer
         [SerializeField] private bool alwaysListening = true;
         [SerializeField, Range(.12f, .6f)] private float voicePreRollSeconds = .32f;
         [SerializeField, Range(.08f, .4f)] private float voiceActivationSeconds = .12f;
+        [SerializeField, Range(1.1f, 5f)] private float ttsEchoRmsMultiplier = 2.25f;
+        [SerializeField, Range(.005f, .12f)] private float ttsEchoMinimumRms = .018f;
 
         private readonly List<float> pendingMono = new List<float>(4096);
         private readonly List<float> preRollMono = new List<float>(8192);
@@ -526,33 +528,6 @@ namespace QuestMmdPlayer
                 ? current - lastPosition
                 : recordingClip.samples - lastPosition + current;
             var frames = LimitCaptureFrames(available, frameBudget);
-            if (ShouldDiscardUnrecordedCapture(conversation == null
-                    ? ConversationState.Idle
-                    : conversation.State,
-                IsRecording))
-            {
-                // TTS echo cannot open an automatic turn. Avoid synchronously
-                // copying and down-mixing a full AudioClip window on the Unity
-                // main thread while the avatar is speaking. Explicit capture
-                // (button or tracked pinch) sets IsRecording before the next
-                // update and therefore still reads the microphone normally.
-                if (!automaticCaptureDiscardLogged)
-                {
-                    automaticCaptureDiscardLogged = true;
-                    RecordMicrophoneStage("limited", "tts_echo_capture_discarded");
-                    Debug.Log(
-                        "[VoiceInput] Automatic microphone samples discarded while TTS is speaking; " +
-                        "explicit capture remains available.",
-                        this);
-                }
-                lastPosition = (lastPosition + frames) % recordingClip.samples;
-                pendingMono.Clear();
-                preRollMono.Clear();
-                activityGate?.ResetActivation();
-                InputLevel = 0f;
-                return;
-            }
-
             automaticCaptureDiscardLogged = false;
             AppendRingFrames(frames);
             FlushFullChunks(chunkBudget > 0 ? chunkBudget : MaxEncodedChunksPerUpdate);
@@ -701,7 +676,11 @@ namespace QuestMmdPlayer
                 var canActivate = alwaysListening && conversation != null &&
                     ShouldAllowAutomaticVoiceActivation(
                         conversation.State,
-                        conversation.CanStartVoiceInput);
+                        conversation.CanStartVoiceInput,
+                        level,
+                        conversation.AudiblePlaybackRms,
+                        ttsEchoRmsMultiplier,
+                        ttsEchoMinimumRms);
                 if (!canActivate)
                 {
                     if (alwaysListening && conversation != null &&
@@ -714,11 +693,14 @@ namespace QuestMmdPlayer
                             "limited",
                             "tts_echo_barge_in_suppressed");
                         Debug.Log(
-                            "[VoiceInput] Automatic barge-in suppressed while TTS is speaking; explicit input remains available.",
+                            "[VoiceInput] Automatic barge-in held by echo gate; explicit input remains available.",
                             this);
                     }
-                    pendingMono.RemoveRange(0, sourceFrames);
-                    preRollMono.Clear();
+                    // Keep a bounded pre-roll while the reply is audible. If
+                    // the user crosses the echo gate on a later chunk, this
+                    // gives the new turn its first syllable without sending
+                    // any audio to the backend prematurely.
+                    AppendPreRoll(sourceFrames);
                     activityGate?.ResetActivation();
                     Status = alwaysListening && conversation != null && conversation.State != ConversationState.Idle
                         ? "Listening for speech during reply"
@@ -778,6 +760,36 @@ namespace QuestMmdPlayer
             // tracked-hand capture still calls StartRecording directly and can
             // deliberately interrupt a spoken reply.
             return canStartVoiceInput && conversationState != ConversationState.Speaking;
+        }
+
+        /// <summary>
+        /// Automatic VAD is allowed during TTS only when the microphone signal
+        /// is materially louder than the currently audible TTS estimate. This
+        /// is a conservative client-side gate; explicit input remains a
+        /// deliberate override and can always interrupt a reply.
+        /// </summary>
+        public static bool ShouldAllowAutomaticVoiceActivation(
+            ConversationState conversationState,
+            bool canStartVoiceInput,
+            float microphoneRms,
+            float playbackRms,
+            float playbackMultiplier,
+            float minimumRms)
+        {
+            if (!canStartVoiceInput)
+            {
+                return false;
+            }
+            if (conversationState != ConversationState.Speaking)
+            {
+                return true;
+            }
+
+            var mic = Mathf.Max(0f, microphoneRms);
+            var playback = Mathf.Max(0f, playbackRms);
+            var multiplier = Mathf.Max(1.1f, playbackMultiplier);
+            var floor = Mathf.Max(.001f, minimumRms);
+            return mic >= Mathf.Max(floor, playback * multiplier + floor * .25f);
         }
 
         private bool FlushRemainder()

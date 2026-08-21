@@ -9,17 +9,32 @@ namespace QuestMmdPlayer
     public readonly struct PlaybackTelemetry
     {
         public PlaybackTelemetry(int generation, int bufferedMs, int callbackDelayMs, int underflowCount)
+            : this(generation, bufferedMs, callbackDelayMs, underflowCount, 0, false)
+        {
+        }
+
+        public PlaybackTelemetry(
+            int generation,
+            int bufferedMs,
+            int callbackDelayMs,
+            int underflowCount,
+            int playedMs,
+            bool progress)
         {
             Generation = generation;
             BufferedMs = bufferedMs;
             CallbackDelayMs = callbackDelayMs;
             UnderflowCount = underflowCount;
+            PlayedMs = playedMs;
+            IsProgress = progress;
         }
 
         public int Generation { get; }
         public int BufferedMs { get; }
         public int CallbackDelayMs { get; }
         public int UnderflowCount { get; }
+        public int PlayedMs { get; }
+        public bool IsProgress { get; }
     }
 
     /// <summary>
@@ -84,6 +99,7 @@ namespace QuestMmdPlayer
         private int peakQueuedChunkCount;
         private float maximumEnqueueMs;
         private float nextSlowEnqueueLogAt;
+        private double nextProgressReportDspTime;
         [SerializeField, Range(.04f, .4f)] private float startupBufferSeconds = .12f;
         [SerializeField, Range(.02f, .5f)] private float outputTailSafetySeconds = .22f;
 
@@ -178,6 +194,7 @@ namespace QuestMmdPlayer
             TryStartPlayback();
             UpdateAudibleRms();
             ReportPlaybackTelemetry();
+            ReportPlaybackProgress();
             if (audioSource != null && audioSource.isPlaying && StreamCompleted && IsDrained)
             {
                 audioSource.Stop();
@@ -208,25 +225,27 @@ namespace QuestMmdPlayer
                 this);
             TryStartPlayback();
         }
-        public void Enqueue(short[] pcm16, int sourceSampleRate)
+        public void Enqueue(short[] pcm16, int sourceSampleRate, int sampleCount = -1)
         {
-            if (pcm16 == null || pcm16.Length == 0 || sourceSampleRate <= 0)
+            var length = sampleCount > 0 ? Mathf.Min(sampleCount, pcm16 == null ? 0 : pcm16.Length) :
+                pcm16 == null ? 0 : pcm16.Length;
+            if (length == 0 || sourceSampleRate <= 0)
             {
                 return;
             }
 
             EnsureStream(sourceSampleRate);
             var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            var converted = ArrayPool<float>.Shared.Rent(pcm16.Length);
-            for (var i = 0; i < pcm16.Length; i++)
+            var converted = ArrayPool<float>.Shared.Rent(length);
+            for (var i = 0; i < length; i++)
             {
                 converted[i] = pcm16[i] / 32768f;
             }
 
             lock (gate)
             {
-                buffers.Enqueue(new AudioBuffer(converted, pcm16.Length));
-                queuedSamples += pcm16.Length;
+                buffers.Enqueue(new AudioBuffer(converted, length));
+                queuedSamples += length;
                 enqueuedChunkCount++;
                 peakQueuedChunkCount = Mathf.Max(peakQueuedChunkCount, buffers.Count +
                     (hasCurrentBuffer ? 1 : 0));
@@ -275,6 +294,7 @@ namespace QuestMmdPlayer
                 Interlocked.Exchange(ref playbackRequestedAtTicks, 0L);
                 Interlocked.Exchange(ref firstAudioCallbackAtTicks, 0L);
                 playbackTelemetryReported = false;
+                nextProgressReportDspTime = 0d;
                 playbackStartBufferedMs = 0;
                 enqueuedChunkCount = 0;
                 peakQueuedChunkCount = 0;
@@ -453,6 +473,7 @@ namespace QuestMmdPlayer
             Interlocked.Exchange(ref playbackRequestedAtTicks, System.Diagnostics.Stopwatch.GetTimestamp());
             Interlocked.Exchange(ref firstAudioCallbackAtTicks, 0L);
             playbackTelemetryReported = false;
+            nextProgressReportDspTime = AudioSettings.dspTime + .25d;
             playbackStartBufferedMs = Mathf.RoundToInt(buffered * 1000f / Mathf.Max(1, sampleRate));
             audioSource.Play();
         }
@@ -491,6 +512,29 @@ namespace QuestMmdPlayer
                 playbackStartBufferedMs,
                 Mathf.Clamp((int)Math.Round(elapsed), 0, 3600000),
                 UnderflowCount));
+        }
+
+        private void ReportPlaybackProgress()
+        {
+            if (!PlaybackStarted || audioSource == null || !audioSource.isPlaying ||
+                AudioSettings.dspTime < nextProgressReportDspTime)
+            {
+                return;
+            }
+
+            nextProgressReportDspTime = AudioSettings.dspTime + .25d;
+            int bufferedMs;
+            lock (gate)
+            {
+                bufferedMs = sampleRate <= 0 ? 0 : Mathf.RoundToInt(queuedSamples * 1000f / sampleRate);
+            }
+            PlaybackTelemetryReady?.Invoke(new PlaybackTelemetry(
+                Volatile.Read(ref playbackGeneration),
+                bufferedMs,
+                0,
+                UnderflowCount,
+                Mathf.RoundToInt(AudiblePlaybackSeconds * 1000f),
+                true));
         }
 
         private static void SetPosition(int position)

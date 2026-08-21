@@ -71,6 +71,8 @@ namespace QuestMmdPlayer
         public string LastErrorCode { get; private set; } = string.Empty;
         public string LastErrorMessage => stateMachine.ErrorMessage;
         public float BufferedAudioSeconds => audioPlayer == null ? 0f : audioPlayer.BufferedSeconds;
+        /// <summary>Estimated audible TTS RMS, used by the microphone echo gate.</summary>
+        public float AudiblePlaybackRms => audioPlayer == null ? 0f : audioPlayer.AudibleRms;
         // Capture stays armed while a reply is playing. A new VAD activation
         // is a deliberate barge-in: BeginVoiceInput cancels the current turn,
         // flushes playback, and starts a fresh generation.
@@ -482,7 +484,11 @@ namespace QuestMmdPlayer
             switch (message.Type)
             {
                 case ConversationEventType.AudioChunk:
-                    audioPlayer?.Enqueue(message.Pcm16, message.SampleRate);
+                {
+                    var pcmLength = message.Pcm16Length > 0
+                        ? message.Pcm16Length
+                        : message.Pcm16 == null ? 0 : message.Pcm16.Length;
+                    audioPlayer?.Enqueue(message.Pcm16, message.SampleRate, pcmLength);
                     if (replyAudioChunkCount == 1)
                     {
                         RecordStage(
@@ -490,11 +496,12 @@ namespace QuestMmdPlayer
                             "queued",
                             "first_pcm_chunk",
                             chunks: replyAudioChunkCount,
-                            bytes: message.Pcm16 == null ? 0 : message.Pcm16.Length * 2,
+                            bytes: pcmLength * 2,
                             queueDepth: audioPlayer == null ? -1 : audioPlayer.QueuedChunkCount,
                             bufferedMs: audioPlayer == null ? -1 : Mathf.RoundToInt(audioPlayer.BufferedSeconds * 1000f));
                     }
                     break;
+                }
                 case ConversationEventType.SpeechTimeline:
                     presenter?.SetSpeechTimeline(message.VisemeTimeline);
                     break;
@@ -1402,6 +1409,17 @@ namespace QuestMmdPlayer
         {
             if (telemetry.Generation != activePlaybackGeneration)
             {
+                return;
+            }
+            if (telemetry.IsProgress)
+            {
+                RecordStage(
+                    "audio_playback",
+                    "processing",
+                    "playback_progress",
+                    elapsedMs: telemetry.PlayedMs,
+                    bufferedMs: telemetry.BufferedMs,
+                    eventCount: telemetry.UnderflowCount);
                 return;
             }
             playbackStartedAt = Time.unscaledTime;
