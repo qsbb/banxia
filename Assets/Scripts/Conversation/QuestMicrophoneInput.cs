@@ -59,8 +59,12 @@ namespace QuestMmdPlayer
         private int pcmEncodeCount;
         private int pcmEncodeTotalMs;
         private int pcmEncodeMaxMs;
+        private int captureReadCount;
+        private int captureReadTotalMs;
+        private int captureReadMaxMs;
         private float[] interleavedCaptureBuffer = System.Array.Empty<float>();
         private float nextCapturePressureLogAt;
+        private float nextSlowCaptureReadLogAt;
         private bool automaticBargeInGuardLogged;
         private bool automaticCaptureDiscardLogged;
 
@@ -377,6 +381,9 @@ namespace QuestMmdPlayer
             pcmEncodeCount = 0;
             pcmEncodeTotalMs = 0;
             pcmEncodeMaxMs = 0;
+            captureReadCount = 0;
+            captureReadTotalMs = 0;
+            captureReadMaxMs = 0;
             Status = "Recording voice";
             RecordMicrophoneStage("processing", includePreRoll ? "speech_detected" : "manual_capture");
             Debug.Log(includePreRoll
@@ -441,6 +448,21 @@ namespace QuestMmdPlayer
                     elapsedMs: pcmEncodeTotalMs,
                     chunks: pcmEncodeCount,
                     bytes: LastTurnPcmBytes);
+                diagnostics?.RecordStage(
+                    "audio_capture",
+                    "completed",
+                    "capture_summary",
+                    elapsedMs: captureReadTotalMs,
+                    chunks: captureReadCount);
+                if (captureReadCount > 0)
+                {
+                    diagnostics?.RecordStage(
+                        "audio_capture",
+                        "completed",
+                        "capture_max_read",
+                        elapsedMs: captureReadMaxMs,
+                        chunks: captureReadCount);
+                }
                 if (pcmEncodeMaxMs > 0)
                 {
                     diagnostics?.RecordStage(
@@ -601,10 +623,34 @@ namespace QuestMmdPlayer
             {
                 interleavedCaptureBuffer = new float[requiredSamples];
             }
+            var readStartedAt = Stopwatch.GetTimestamp();
             if (!recordingClip.GetData(interleavedCaptureBuffer, offset))
             {
                 Status = "Microphone read failed";
                 return;
+            }
+            var readMs = Mathf.Clamp(
+                (int)System.Math.Round((Stopwatch.GetTimestamp() - readStartedAt) *
+                    1000d / Stopwatch.Frequency),
+                0,
+                3600000);
+            captureReadCount++;
+            captureReadTotalMs += readMs;
+            captureReadMaxMs = Mathf.Max(captureReadMaxMs, readMs);
+            if (readMs >= 4 && Time.unscaledTime >= nextSlowCaptureReadLogAt)
+            {
+                nextSlowCaptureReadLogAt = Time.unscaledTime + 1f;
+                diagnostics?.RecordStage(
+                    "audio_capture",
+                    "limited",
+                    "capture_read_slow",
+                    elapsedMs: readMs,
+                    eventCount: frameCount,
+                    bytes: requiredSamples * sizeof(float));
+                Debug.LogWarning(
+                    $"[VoiceInput] Slow microphone read: elapsed_ms={readMs} frames={frameCount} " +
+                    $"channels={sourceChannels}",
+                    this);
             }
             if (sourceChannels == 1)
             {

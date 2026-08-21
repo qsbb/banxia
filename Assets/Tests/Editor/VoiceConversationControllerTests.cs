@@ -303,6 +303,7 @@ namespace QuestMmdPlayer.Tests
             Assert.That(diagnostics.GetRecentText(30), Does.Contain("Voice interrupted"));
             Assert.That(diagnostics.GetRecentText(30), Does.Contain("刚刚又被打断了"));
             Assert.That(diagnostics.GetRecentText(30), Does.Contain("reason=audio_http_request_failed"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("No response: code=audio_http_request_failed"));
             Assert.That(diagnostics.GetRecentTimelineText(30),
                 Does.Contain("voice_interrupted_audio_http_request_failed"));
             Assert.AreEqual(1, transport.InterruptCount);

@@ -1189,6 +1189,9 @@ namespace QuestMmdPlayer
                 string.Equals(code, "stt_failed", StringComparison.Ordinal) ||
                 string.Equals(code, "audio_upload_backpressure", StringComparison.Ordinal) ||
                 string.Equals(code, "audio_upload_rejected", StringComparison.Ordinal) ||
+                string.Equals(code, "audio_http_request_failed", StringComparison.Ordinal) ||
+                string.Equals(code, "http_request_failed", StringComparison.Ordinal) ||
+                string.Equals(code, "bridge_disconnected", StringComparison.Ordinal) ||
                 string.Equals(code, "voice_end_rejected", StringComparison.Ordinal) ||
                 string.Equals(code, "voice_turn_rejected", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_not_woken", StringComparison.Ordinal) ||
