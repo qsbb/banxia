@@ -661,6 +661,7 @@ namespace QuestMmdPlayer.Tests
         public void EmptyReplyEndBecomesVisibleErrorInsteadOfSilentSuccess()
         {
             owner = new GameObject("Empty backend reply test");
+            var diagnostics = owner.AddComponent<RuntimeDebugLog>();
             var controller = owner.AddComponent<ConversationController>();
             var transport = owner.AddComponent<RecordingVoiceTransport>();
             controller.SetTransport(transport);
@@ -682,6 +683,9 @@ namespace QuestMmdPlayer.Tests
             Assert.That(controller.State, Is.EqualTo(ConversationState.Error));
             Assert.That(controller.LastErrorCode, Is.EqualTo("empty_backend_reply"));
             Assert.That(transport.InterruptCount, Is.EqualTo(1));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("No response: code=empty_backend_reply"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("trace="));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("timing="));
         }
 
         [Test]
