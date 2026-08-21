@@ -62,6 +62,30 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ActiveTurnSseDisconnectIsEmittedAsAConversationError()
+        {
+            var owner = new UnityEngine.GameObject("SSE disconnect error test");
+            var bridge = owner.AddComponent<AstrBotBridge>();
+            const string activeTurn = "turn-sse-disconnect";
+            typeof(AstrBotBridge)
+                .GetField("activeTurnId", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(bridge, activeTurn);
+
+            ConversationEvent received = null;
+            bridge.EventReceived += message => received = message;
+            typeof(AstrBotBridge)
+                .GetMethod("EmitActiveTurnError", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(bridge, new object[] { "sse_disconnected", "SSE disconnected" });
+
+            Assert.That(received, Is.Not.Null);
+            Assert.That(received.Type, Is.EqualTo(ConversationEventType.Error));
+            Assert.That(received.TurnId, Is.EqualTo(activeTurn));
+            Assert.That(received.ErrorCode, Is.EqualTo("sse_disconnected"));
+
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+
+        [Test]
         public void SseParserHandlesSplitUtf8AndComments()
         {
             var parser = new SseEventStreamParser();

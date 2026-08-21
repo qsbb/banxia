@@ -108,6 +108,7 @@ namespace QuestMmdPlayer
         private int receivedReplyAudioBytes;
         private bool receivedReplyText;
         private string receivedErrorCode = string.Empty;
+        private string activeTurnId = string.Empty;
         private string currentTraceId = string.Empty;
         private int sseFramesReceived;
         private int sseFramesDispatched;
@@ -452,6 +453,7 @@ namespace QuestMmdPlayer
                     : userText.Substring(0, Math.Min(userText.Length, 8192))
             };
             currentTraceId = RuntimeDebugLog.TraceLabel(turnId);
+            activeTurnId = turnId;
             ResetReceivedTurnCounters();
             RecordStage("eventbus", "processing");
             StartCoroutine(PostJson("turn/start", JsonUtility.ToJson(request), turnId, true));
@@ -479,6 +481,7 @@ namespace QuestMmdPlayer
             audioUploadStartedAt = Time.unscaledTime;
             audioUploadDiagnosticStartedAt = DiagnosticTimestamp();
             audioEndRequestedAt = -1f;
+            activeTurnId = turnId;
             audioUploadRoutine = StartCoroutine(UploadAudioTurn(turnId));
             SetStatus("Recording voice for AstrBot");
             ResetReceivedTurnCounters();
@@ -545,6 +548,10 @@ namespace QuestMmdPlayer
             if (string.Equals(turnId, audioUploadTurnId, StringComparison.Ordinal))
             {
                 CancelAudioUpload();
+            }
+            if (string.Equals(turnId, activeTurnId, StringComparison.Ordinal))
+            {
+                activeTurnId = string.Empty;
             }
             if (!CanSend(turnId, false))
             {
@@ -960,6 +967,7 @@ namespace QuestMmdPlayer
             {
                 if (request.responseCode == 404)
                 {
+                    EmitActiveTurnError("session_expired", "AstrBot session expired");
                     sessionReady = false;
                     sessionId = string.Empty;
                     SetStatus("AstrBot session expired; recreating");
@@ -972,6 +980,9 @@ namespace QuestMmdPlayer
                 }
                 else
                 {
+                    EmitActiveTurnError(
+                        "sse_disconnected",
+                        HttpFailure("SSE disconnected", request));
                     SetStatus(HttpFailure("SSE disconnected", request));
                     RecordStage(
                         "sse",
@@ -983,6 +994,34 @@ namespace QuestMmdPlayer
                 }
             }
             request.Dispose();
+        }
+
+        private void EmitActiveTurnError(string code, string text)
+        {
+            if (string.IsNullOrEmpty(activeTurnId))
+            {
+                return;
+            }
+
+            var turnId = activeTurnId;
+            activeTurnId = string.Empty;
+            var message = new ConversationEvent
+            {
+                Type = ConversationEventType.Error,
+                TurnId = turnId,
+                ErrorCode = code,
+                Text = string.IsNullOrWhiteSpace(text) ? code : text
+            };
+            RecordIncomingEvent(message, RuntimeDebugLog.TraceLabel(turnId));
+            EventReceived?.Invoke(message);
+        }
+
+        private void ClearActiveTurnIfMatches(string turnId)
+        {
+            if (string.Equals(turnId, activeTurnId, StringComparison.Ordinal))
+            {
+                activeTurnId = string.Empty;
+            }
         }
 
         private IEnumerator UploadAudioTurn(string turnId)
@@ -1133,6 +1172,7 @@ namespace QuestMmdPlayer
                 }
                 if (!succeeded && string.Equals(turnId, audioUploadTurnId, StringComparison.Ordinal))
                 {
+                    ClearActiveTurnIfMatches(turnId);
                     EventReceived?.Invoke(new ConversationEvent
                     {
                         Type = ConversationEventType.Error,
@@ -1286,6 +1326,7 @@ namespace QuestMmdPlayer
                 }
                 else if (!string.IsNullOrEmpty(turnId))
                 {
+                    ClearActiveTurnIfMatches(turnId);
                     EventReceived?.Invoke(new ConversationEvent
                     {
                         Type = ConversationEventType.Error,
@@ -1747,6 +1788,14 @@ namespace QuestMmdPlayer
                         eventCount: receivedTurnEventCount,
                         traceId: traceId);
                     break;
+            }
+            if (message.Type == ConversationEventType.ReplyEnd ||
+                message.Type == ConversationEventType.Error)
+            {
+                if (string.Equals(message.TurnId, activeTurnId, StringComparison.Ordinal))
+                {
+                    activeTurnId = string.Empty;
+                }
             }
         }
 
