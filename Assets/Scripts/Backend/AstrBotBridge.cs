@@ -65,6 +65,7 @@ namespace QuestMmdPlayer
         // ordered, but are spread across frames so PCM conversion cannot stall
         // gaze, tracking, or rendering in one large burst.
         [SerializeField, Range(8, 64)] private int maxIncomingFramesPerUpdate = 24;
+        [SerializeField, Range(1f, 8f)] private float maxSseDispatchMilliseconds = 3f;
         [SerializeField, Range(1f, 30f)] private float spatialContextUploadIntervalSeconds = 2f;
 
         private readonly ConcurrentQueue<SseEventFrame> incomingFrames = new ConcurrentQueue<SseEventFrame>();
@@ -185,7 +186,12 @@ namespace QuestMmdPlayer
             var queueDepthAtFrameStart = incomingFrames.Count;
             var remainingFrameBudget = configuredBudget;
             var dispatchedThisFrame = 0;
-            while (remainingFrameBudget-- > 0 && incomingFrames.TryDequeue(out var frame))
+            var dispatchStartedAt = Time.realtimeSinceStartup;
+            var dispatchBudgetMs = Mathf.Clamp(maxSseDispatchMilliseconds, 1f, 8f);
+            while (remainingFrameBudget-- > 0 &&
+                (dispatchedThisFrame == 0 ||
+                    (Time.realtimeSinceStartup - dispatchStartedAt) * 1000f < dispatchBudgetMs) &&
+                incomingFrames.TryDequeue(out var frame))
             {
                 dispatchedThisFrame++;
                 var queueDelayMs = ElapsedMs(frame.ReceivedAtTicks);

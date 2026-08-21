@@ -497,7 +497,8 @@ namespace QuestMmdPlayer
                     backendActionReceived |= actionApplied && IsExecutableAvatarAction(message.Gesture);
                     break;
                 case ConversationEventType.Error:
-                    if (IsPipelineStoppedError(message.ErrorCode))
+                    var pipelineStopped = IsPipelineStoppedError(message.ErrorCode);
+                    if (pipelineStopped)
                     {
                         RecordVoiceInterruption("pipeline_stopped", "transport_error");
                     }
@@ -505,6 +506,14 @@ namespace QuestMmdPlayer
                     LastErrorCode = string.IsNullOrWhiteSpace(message.ErrorCode)
                         ? "conversation_error"
                         : message.ErrorCode;
+                    if (!pipelineStopped)
+                    {
+                        // Every terminal transport error interrupts the active
+                        // voice turn, not only the explicit pipeline-stopped
+                        // variant. Keep one uniform, searchable interruption
+                        // record for upload, SSE, and backend failures.
+                        RecordVoiceInterruption(LastErrorCode, "transport_error");
+                    }
                     awaitingBackendResponse = false;
                     errorUntil = Time.unscaledTime + 1.25f;
                     RecordStage("reply", "failed", LastErrorCode);
@@ -1140,6 +1149,14 @@ namespace QuestMmdPlayer
             RecordBackendTiming(message);
             if (message.IsSyntheticTransportEvent)
             {
+                // PCM upload is complete when AstrBotBridge emits this marker.
+                // Start the backend watchdog there, without counting the
+                // synthetic event as the first real response event.
+                if (message.Type == ConversationEventType.Thinking && awaitingBackendResponse)
+                {
+                    responseWaitStartedAt = now;
+                    RecordStage("stt", "processing", "audio_upload_complete");
+                }
                 return;
             }
             if (firstBackendEventAt < 0f)

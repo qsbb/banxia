@@ -61,6 +61,9 @@ namespace QuestMmdPlayer
         // separate prevents gaze from erasing head choreography or accumulating.
         private Quaternion smoothedHeadRotation;
         private bool hasSmoothedHeadRotation;
+        private Quaternion authoredHeadRotation = Quaternion.identity;
+        private Quaternion presentedHeadRotation = Quaternion.identity;
+        private bool hasPresentedHeadRotation;
         private bool mouthWasActive;
         private float smoothedMouthAmount;
         private float lastAudibleRms;
@@ -159,6 +162,9 @@ namespace QuestMmdPlayer
             manualExpression = "neutral";
             gazeBlend = 0f;
             hasSmoothedHeadRotation = false;
+            authoredHeadRotation = Quaternion.identity;
+            presentedHeadRotation = Quaternion.identity;
+            hasPresentedHeadRotation = false;
             lookAtMode = "none";
             mouthWasActive = false;
             smoothedMouthAmount = 0f;
@@ -988,6 +994,13 @@ namespace QuestMmdPlayer
                 return;
             }
 
+            // The action/physics writers have produced this frame's authored
+            // pose by now. Restore the previous authored pose only when the
+            // head still contains our last presented value. If an action or
+            // physics writer replaced it this frame, that new value is already
+            // the correct base and must not be multiplied by the old inverse.
+            PrepareAuthoredHeadPose();
+
             var semanticContact = humanInteraction != null && humanInteraction.HasSemanticContact;
             var idleAttention = ShouldUseIdleUserGaze(state, semanticContact, gazeAtUserWhileIdle);
             var conversationAttention = ShouldUseConversationUserGaze(
@@ -1274,7 +1287,7 @@ namespace QuestMmdPlayer
                 // Keep composing the decaying local offset for this frame.
                 // Returning before this write would snap an authored action
                 // directly to its base pose when attention is released.
-                head.localRotation = head.localRotation * smoothedHeadRotation;
+                ApplyHeadGazeOffset();
                 return;
             }
 
@@ -1307,7 +1320,37 @@ namespace QuestMmdPlayer
                 gazeTrackingSpeed);
             // The base for this frame is the pose written by the active action
             // or imported VMD. Compose the attention offset on top of it.
-            head.localRotation = head.localRotation * smoothedHeadRotation;
+            ApplyHeadGazeOffset();
+        }
+
+        private void PrepareAuthoredHeadPose()
+        {
+            if (!hasPresentedHeadRotation || head == null)
+            {
+                return;
+            }
+
+            // Quaternion.Angle is intentionally tiny: an unchanged Transform
+            // compares exactly, while a VMD/action rewrite should be treated as
+            // an authored replacement even when the new pose is close by.
+            if (Quaternion.Angle(head.localRotation, presentedHeadRotation) <= .01f)
+            {
+                head.localRotation = authoredHeadRotation;
+            }
+            hasPresentedHeadRotation = false;
+        }
+
+        private void ApplyHeadGazeOffset()
+        {
+            if (head == null)
+            {
+                return;
+            }
+
+            authoredHeadRotation = head.localRotation;
+            head.localRotation = authoredHeadRotation * smoothedHeadRotation;
+            presentedHeadRotation = head.localRotation;
+            hasPresentedHeadRotation = true;
         }
 
         private void ApplyMouth(float rms)
@@ -1802,6 +1845,9 @@ namespace QuestMmdPlayer
             }
             smoothedHeadRotation = Quaternion.identity;
             hasSmoothedHeadRotation = false;
+            authoredHeadRotation = Quaternion.identity;
+            presentedHeadRotation = Quaternion.identity;
+            hasPresentedHeadRotation = false;
         }
 
         private int SelectPrimaryExpression(string emotion)

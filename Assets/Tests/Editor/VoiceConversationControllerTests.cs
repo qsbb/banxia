@@ -205,6 +205,31 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void TransportErrorWritesStructuredVoiceInterruptionLog()
+        {
+            owner = new GameObject("Transport error interruption diagnostics test");
+            var diagnostics = owner.AddComponent<RuntimeDebugLog>();
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            Assert.IsTrue(controller.BeginVoiceInput());
+            Assert.IsTrue(controller.EndVoiceInput());
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.Error,
+                TurnId = controller.TurnId,
+                ErrorCode = "audio_http_request_failed"
+            });
+
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("Voice interrupted"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("刚刚又被打断了"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("reason=audio_http_request_failed"));
+            Assert.That(diagnostics.GetRecentTimelineText(30),
+                Does.Contain("voice_interrupted_audio_http_request_failed"));
+        }
+
+        [Test]
         public void SyntheticTransportAckDoesNotCountAsFirstBackendEvent()
         {
             owner = new GameObject("Synthetic transport timing test");
@@ -228,6 +253,37 @@ namespace QuestMmdPlayer.Tests
                 Text = "hello"
             });
             Assert.That(controller.TurnTimingStatus, Does.Not.Contain("firstEvent=-ms"));
+        }
+
+        [Test]
+        public void SyntheticAudioUploadAckStartsBackendWatchdogClock()
+        {
+            owner = new GameObject("Synthetic upload timing test");
+            var diagnostics = owner.AddComponent<RuntimeDebugLog>();
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            Assert.IsTrue(controller.BeginVoiceInput());
+            Assert.IsTrue(controller.EndVoiceInput());
+
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var before = (float)typeof(ConversationController)
+                .GetField("responseWaitStartedAt", flags)
+                .GetValue(controller);
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.Thinking,
+                TurnId = controller.TurnId,
+                IsSyntheticTransportEvent = true
+            });
+
+            var after = (float)typeof(ConversationController)
+                .GetField("responseWaitStartedAt", flags)
+                .GetValue(controller);
+            Assert.That(after, Is.GreaterThanOrEqualTo(before));
+            Assert.That(controller.TurnTimingStatus, Does.Contain("firstEvent=-ms"));
+            Assert.That(diagnostics.GetRecentTimelineText(20), Does.Contain("audio_upload_complete"));
         }
 
         [Test]

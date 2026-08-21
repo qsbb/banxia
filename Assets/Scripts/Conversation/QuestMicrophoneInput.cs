@@ -12,9 +12,13 @@ namespace QuestMmdPlayer
     public sealed class QuestMicrophoneInput : MonoBehaviour
     {
         private const int TargetSampleRate = 16000;
-        private const int CaptureBudgetMillisecondsPerUpdate = 120;
-        private const int MaxEncodedChunksPerUpdate = 2;
-        private const int StopCaptureBudgetMilliseconds = 240;
+        // Keep microphone recovery work bounded so a delayed audio callback
+        // cannot turn the next Unity frame into a large GetData/down-mix spike.
+        // Any remaining samples stay in the ring-buffer backlog and are
+        // drained over subsequent frames in the same PCM order.
+        private const int CaptureBudgetMillisecondsPerUpdate = 40;
+        private const int MaxEncodedChunksPerUpdate = 1;
+        private const int StopCaptureBudgetMilliseconds = 120;
         private const string AlwaysListeningPreferenceKey = "banxia.voice.always_listening";
 
         [SerializeField, Range(40, 100)] private int chunkMilliseconds = 80;
@@ -600,6 +604,14 @@ namespace QuestMmdPlayer
             if (!recordingClip.GetData(interleavedCaptureBuffer, offset))
             {
                 Status = "Microphone read failed";
+                return;
+            }
+            if (sourceChannels == 1)
+            {
+                for (var frame = 0; frame < frameCount; frame++)
+                {
+                    pendingMono.Add(interleavedCaptureBuffer[frame]);
+                }
                 return;
             }
             for (var frame = 0; frame < frameCount; frame++)

@@ -176,6 +176,78 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PresenterDoesNotCompoundTheSameGazeOffsetAcrossFrames()
+        {
+            avatarObject = new GameObject("stable gaze avatar");
+            var headObject = new GameObject("Head");
+            headObject.transform.SetParent(avatarObject.transform, false);
+            headObject.AddComponent<MMDBoneTransform>().boneName = "頭";
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var presenter = avatarObject.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(controller, null, null);
+            presenter.SetConversationState(ConversationState.Speaking);
+
+            serviceObject = new GameObject("stable gaze camera");
+            serviceObject.tag = "MainCamera";
+            serviceObject.transform.position = new Vector3(.35f, 1.55f, 1.5f);
+            serviceObject.AddComponent<Camera>();
+
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            typeof(AvatarConversationPresenter).GetField("gazeBlend", flags)
+                ?.SetValue(presenter, 1f);
+            typeof(AvatarConversationPresenter).GetField("hasSmoothedHeadRotation", flags)
+                ?.SetValue(presenter, true);
+
+            typeof(AvatarConversationPresenter).GetMethod("LateUpdate", flags)
+                ?.Invoke(presenter, null);
+            var first = headObject.transform.localRotation;
+            typeof(AvatarConversationPresenter).GetMethod("LateUpdate", flags)
+                ?.Invoke(presenter, null);
+            var second = headObject.transform.localRotation;
+
+            Assert.That(Quaternion.Angle(first, second), Is.LessThan(.1f));
+        }
+
+        [Test]
+        public void PresenterKeepsAnActionRewriteAsTheNextGazeBase()
+        {
+            avatarObject = new GameObject("rewritten gaze avatar");
+            var headObject = new GameObject("Head");
+            headObject.transform.SetParent(avatarObject.transform, false);
+            headObject.AddComponent<MMDBoneTransform>().boneName = "頭";
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var presenter = avatarObject.AddComponent<AvatarConversationPresenter>();
+            presenter.Bind(controller, null, null);
+            presenter.SetConversationState(ConversationState.Speaking);
+
+            serviceObject = new GameObject("rewritten gaze camera");
+            serviceObject.tag = "MainCamera";
+            serviceObject.transform.position = new Vector3(.35f, 1.55f, 1.5f);
+            serviceObject.AddComponent<Camera>();
+
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            typeof(AvatarConversationPresenter).GetField("gazeBlend", flags)
+                ?.SetValue(presenter, 1f);
+            typeof(AvatarConversationPresenter).GetField("hasSmoothedHeadRotation", flags)
+                ?.SetValue(presenter, true);
+            typeof(AvatarConversationPresenter).GetMethod("LateUpdate", flags)
+                ?.Invoke(presenter, null);
+
+            var authored = Quaternion.Euler(0f, 20f, 0f);
+            headObject.transform.localRotation = authored;
+            typeof(AvatarConversationPresenter).GetMethod("LateUpdate", flags)
+                ?.Invoke(presenter, null);
+
+            var gaze = (Quaternion)typeof(AvatarConversationPresenter)
+                .GetField("smoothedHeadRotation", flags)
+                .GetValue(presenter);
+            var expected = authored * gaze;
+            Assert.That(Quaternion.Angle(expected, headObject.transform.localRotation), Is.LessThan(.1f));
+        }
+
+        [Test]
         public void GazeReleaseKeepsAResidualOffsetDuringSmoothExit()
         {
             avatarObject = new GameObject("gaze release avatar");
