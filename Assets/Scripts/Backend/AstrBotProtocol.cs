@@ -144,7 +144,8 @@ namespace QuestMmdPlayer
 
         private static bool IsField(StringBuilder value, int separator, string expected)
         {
-            if (separator != expected.Length)
+            var fieldLength = separator < 0 ? value.Length : separator;
+            if (fieldLength != expected.Length)
             {
                 return false;
             }

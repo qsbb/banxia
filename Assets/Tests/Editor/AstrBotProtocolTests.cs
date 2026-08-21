@@ -203,6 +203,21 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void SseParserAcceptsFieldsWithoutAColon()
+        {
+            var parser = new SseEventStreamParser();
+            var frames = new List<SseEventFrame>();
+            parser.EventReceived += frames.Add;
+
+            var source = "event\ndata: payload\n\n";
+            parser.Push(Encoding.UTF8.GetBytes(source), Encoding.UTF8.GetByteCount(source));
+
+            Assert.That(frames, Has.Count.EqualTo(1));
+            Assert.That(frames[0].EventName, Is.EqualTo("message"));
+            Assert.That(frames[0].Data, Is.EqualTo("payload"));
+        }
+
+        [Test]
         public void AvatarIntentIsMappedAndUnknownValuesAreSafe()
         {
             const string json = "{\"type\":\"avatar.intent\",\"protocol_version\":\"1.0\",\"session_id\":\"s1\",\"turn_id\":\"i:e9\",\"in_reply_to_event_id\":\"e9\",\"emotion\":\"angry\",\"gesture\":\"delete_avatar\",\"look_at\":\"camera_object\",\"intensity\":1.4,\"duration_ms\":45000}";
