@@ -438,6 +438,7 @@ namespace QuestMmdPlayer
 
         public void StartTurn(string turnId, string userText)
         {
+            activeTurnId = string.Empty;
             CancelAudioUpload();
             if (!CanSend(turnId, true))
             {
@@ -461,6 +462,7 @@ namespace QuestMmdPlayer
 
         public bool BeginAudioTurn(string turnId)
         {
+            activeTurnId = string.Empty;
             if (!CanSend(turnId, true))
             {
                 return false;
@@ -499,6 +501,7 @@ namespace QuestMmdPlayer
             }
             if (queuedInputAudioBytes + pcm16.Length > MaxQueuedInputAudioBytes)
             {
+                ClearActiveTurnIfMatches(turnId);
                 EventReceived?.Invoke(new ConversationEvent
                 {
                     Type = ConversationEventType.Error,
