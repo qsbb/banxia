@@ -280,12 +280,28 @@ namespace QuestMmdPlayer
 
         public bool PushVoiceAudio(byte[] pcm16)
         {
-            var accepted = stateMachine.State == ConversationState.Listening &&
-                pcm16 != null && pcm16.Length > 0 &&
-                transport != null && transport.QueueAudioChunk(stateMachine.TurnId, pcm16);
+            if (stateMachine.State != ConversationState.Listening ||
+                pcm16 == null || pcm16.Length == 0)
+            {
+                return false;
+            }
+
+            var turnId = stateMachine.TurnId;
+            var accepted = transport != null && transport.QueueAudioChunk(turnId, pcm16);
             if (accepted && firstInputChunkAt < 0f)
             {
                 firstInputChunkAt = Time.unscaledTime;
+            }
+            if (!accepted && stateMachine.State == ConversationState.Listening &&
+                string.Equals(turnId, stateMachine.TurnId, StringComparison.Ordinal))
+            {
+                // A real bridge normally emits a more specific Error event
+                // (for example audio_upload_backpressure). A transport that
+                // only rejects the chunk must still terminally close this
+                // capture instead of leaving it to look like a user cancel.
+                FailActiveTurn(
+                    transport == null ? "bridge_disconnected" : "audio_upload_rejected",
+                    "Voice upload rejected an audio chunk");
             }
             return accepted;
         }
@@ -1171,6 +1187,8 @@ namespace QuestMmdPlayer
                 string.Equals(code, "stt_empty", StringComparison.Ordinal) ||
                 string.Equals(code, "stt_unavailable", StringComparison.Ordinal) ||
                 string.Equals(code, "stt_failed", StringComparison.Ordinal) ||
+                string.Equals(code, "audio_upload_backpressure", StringComparison.Ordinal) ||
+                string.Equals(code, "audio_upload_rejected", StringComparison.Ordinal) ||
                 string.Equals(code, "voice_end_rejected", StringComparison.Ordinal) ||
                 string.Equals(code, "voice_turn_rejected", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_not_woken", StringComparison.Ordinal) ||
