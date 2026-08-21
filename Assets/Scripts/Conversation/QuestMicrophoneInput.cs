@@ -58,6 +58,7 @@ namespace QuestMmdPlayer
         private float[] interleavedCaptureBuffer = System.Array.Empty<float>();
         private float nextCapturePressureLogAt;
         private bool automaticBargeInGuardLogged;
+        private bool automaticCaptureDiscardLogged;
 
         public bool IsRecording { get; private set; }
         public bool IsMonitoring { get; private set; }
@@ -494,19 +495,48 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            if (current > lastPosition)
+
+            var available = current > lastPosition
+                ? current - lastPosition
+                : recordingClip.samples - lastPosition + current;
+            var frames = LimitCaptureFrames(available, frameBudget);
+            if (ShouldDiscardUnrecordedCapture(conversation == null
+                    ? ConversationState.Idle
+                    : conversation.State,
+                IsRecording))
             {
-                var available = current - lastPosition;
-                var frames = LimitCaptureFrames(available, frameBudget);
-                AppendRingFrames(frames);
+                // TTS echo cannot open an automatic turn. Avoid synchronously
+                // copying and down-mixing a full AudioClip window on the Unity
+                // main thread while the avatar is speaking. Explicit capture
+                // (button or tracked pinch) sets IsRecording before the next
+                // update and therefore still reads the microphone normally.
+                if (!automaticCaptureDiscardLogged)
+                {
+                    automaticCaptureDiscardLogged = true;
+                    RecordMicrophoneStage("limited", "tts_echo_capture_discarded");
+                    Debug.Log(
+                        "[VoiceInput] Automatic microphone samples discarded while TTS is speaking; " +
+                        "explicit capture remains available.",
+                        this);
+                }
+                lastPosition = (lastPosition + frames) % recordingClip.samples;
+                pendingMono.Clear();
+                preRollMono.Clear();
+                activityGate?.ResetActivation();
+                InputLevel = 0f;
+                return;
             }
-            else
-            {
-                var available = recordingClip.samples - lastPosition + current;
-                var frames = LimitCaptureFrames(available, frameBudget);
-                AppendRingFrames(frames);
-            }
+
+            automaticCaptureDiscardLogged = false;
+            AppendRingFrames(frames);
             FlushFullChunks(chunkBudget > 0 ? chunkBudget : MaxEncodedChunksPerUpdate);
+        }
+
+        internal static bool ShouldDiscardUnrecordedCapture(
+            ConversationState conversationState,
+            bool isRecording)
+        {
+            return !isRecording && conversationState == ConversationState.Speaking;
         }
 
         private int LimitCaptureFrames(int available, int frameBudget)
@@ -786,6 +816,7 @@ namespace QuestMmdPlayer
             InputLevel = 0f;
             IsRecording = false;
             IsMonitoring = false;
+            automaticCaptureDiscardLogged = false;
         }
 
         private void RecreateActivityGate()

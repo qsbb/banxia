@@ -162,8 +162,23 @@ namespace QuestMmdPlayer.Tests
             Assert.IsTrue(controller.BeginVoiceInput());
 
             Assert.That(diagnostics.GetRecentText(30), Does.Contain("Voice interrupted"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("刚刚又被打断了"));
             Assert.That(diagnostics.GetRecentText(30), Does.Contain("reason=barge_in"));
             Assert.That(diagnostics.GetRecentTimelineText(30), Does.Contain("voice_interrupted_barge_in"));
+        }
+
+        [Test]
+        public void AutomaticCaptureIsDiscardedOnlyDuringTtsWithoutExplicitRecording()
+        {
+            Assert.IsTrue(QuestMicrophoneInput.ShouldDiscardUnrecordedCapture(
+                ConversationState.Speaking,
+                false));
+            Assert.IsFalse(QuestMicrophoneInput.ShouldDiscardUnrecordedCapture(
+                ConversationState.Speaking,
+                true));
+            Assert.IsFalse(QuestMicrophoneInput.ShouldDiscardUnrecordedCapture(
+                ConversationState.Thinking,
+                false));
         }
 
         [Test]

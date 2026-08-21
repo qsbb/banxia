@@ -70,7 +70,7 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void ConversationalGazeRunsAfterVmdButBeforePhysicalTouch()
+        public void ConversationalGazeRunsAfterVmdAndPhysicalTouch()
         {
             var presenterOrder = typeof(AvatarConversationPresenter)
                 .GetCustomAttribute<DefaultExecutionOrder>().order;
@@ -80,7 +80,7 @@ namespace QuestMmdPlayer.Tests
                 .GetCustomAttribute<DefaultExecutionOrder>().order;
 
             Assert.That(presenterOrder, Is.GreaterThan(vmdOrder));
-            Assert.That(presenterOrder, Is.LessThan(touchOrder));
+            Assert.That(presenterOrder, Is.GreaterThan(touchOrder));
         }
 
         [Test]

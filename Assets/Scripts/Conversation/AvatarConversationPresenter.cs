@@ -6,10 +6,10 @@ using UnityEngine;
 
 namespace QuestMmdPlayer
 {
-    // UMT and imported VMD write the authored pose first. Gaze is a small
-    // additive post-process, while physical contact remains the final owner of
-    // the head so a hand can override attention in the same frame.
-    [DefaultExecutionOrder(11050)]
+    // UMT, imported VMD, and physical reactions write the authored pose first.
+    // Gaze is the final additive pass except while a real hand contact is
+    // active, so contact remains the authoritative owner of the head.
+    [DefaultExecutionOrder(11200)]
     public sealed class AvatarConversationPresenter : MonoBehaviour
     {
         private struct Viseme
@@ -996,10 +996,26 @@ namespace QuestMmdPlayer
                 gazeAtUserDuringConversation);
             var wantsAttention = !semanticContact &&
                 (lookAtMode != "none" || idleAttention || conversationAttention);
-            gazeBlend = Mathf.MoveTowards(gazeBlend, wantsAttention ? 1f : 0f, Time.unscaledDeltaTime * (idleAttention ? idleGazeBlendSpeed : 3.5f));
-            var gazeMode = ResolveGazeMode(state, idleAttention, conversationAttention, lookAtMode);
-            RecordGazeDiagnostic(semanticContact, wantsAttention, gazeMode);
-            ApplyGaze(gazeBlend, gazeMode);
+            if (semanticContact)
+            {
+                // Do not compose a stale conversational offset over a live
+                // hand-directed head response. Clear it here so the next
+                // frame after contact resumes from the authored pose.
+                gazeBlend = 0f;
+                smoothedHeadRotation = Quaternion.identity;
+                hasSmoothedHeadRotation = false;
+                RecordGazeDiagnostic(true, false, "physical_contact");
+            }
+            else
+            {
+                gazeBlend = Mathf.MoveTowards(
+                    gazeBlend,
+                    wantsAttention ? 1f : 0f,
+                    Time.unscaledDeltaTime * (idleAttention ? idleGazeBlendSpeed : 3.5f));
+                var gazeMode = ResolveGazeMode(state, idleAttention, conversationAttention, lookAtMode);
+                RecordGazeDiagnostic(false, wantsAttention, gazeMode);
+                ApplyGaze(gazeBlend, gazeMode);
+            }
 
             ApplyExpressions();
             UpdateIdleBehavior(semanticContact);

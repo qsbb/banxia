@@ -971,18 +971,23 @@ namespace QuestMmdPlayer
             StopAudioStream();
             errorUntil = Time.unscaledTime + 1.25f;
             NotifyStateChanged();
-            RecordStage("reply", "failed", code);
+            var trace = RuntimeDebugLog.TraceLabel(turnId);
+            var timing = BuildTimingStatus(Time.unscaledTime);
+            RecordStage("reply", "failed", code, traceId: trace);
             if (IsNoResponseCode(code))
             {
                 Debug.LogWarning(
                     "[Conversation] No response: code=" + code +
+                    " trace=" + trace +
                     "; message=" + message +
-                    "; timing=" + BuildTimingStatus(Time.unscaledTime),
+                    "; timing=" + timing,
                     this);
-                diagnostics?.Record("VoiceInput", "No response: code=" + code);
+                diagnostics?.Record(
+                    "VoiceInput",
+                    "No response: code=" + code + " trace=" + trace + " timing=" + timing);
             }
             Debug.LogWarning("[Conversation] Voice/transport error code=" + code +
-                "; bridge=" + TransportStatus + "; timing=" + BuildTimingStatus(Time.unscaledTime), this);
+                "; trace=" + trace + "; bridge=" + TransportStatus + "; timing=" + timing, this);
         }
 
         public static bool ShouldTimeoutResponse(
@@ -1117,8 +1122,8 @@ namespace QuestMmdPlayer
             var trace = RuntimeDebugLog.TraceLabel(stateMachine.TurnId);
             var details = $"reason={safeReason} source={safeSource} turn={trace} state={stateMachine.State} " +
                 $"awaiting={awaitingBackendResponse} transport={TransportStatus} queue_depth={queueDepth} buffered_ms={bufferedMs}";
-            Debug.LogWarning("[Conversation] Voice interrupted: " + details, this);
-            diagnostics?.Record("VoiceInput", "Voice interrupted: " + details);
+            Debug.LogWarning("[Conversation] 刚刚又被打断了 / Voice interrupted: " + details, this);
+            diagnostics?.Record("VoiceInput", "刚刚又被打断了 / Voice interrupted: " + details);
             RecordStage(
                 "interrupt",
                 "completed",
