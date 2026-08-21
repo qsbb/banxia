@@ -30,6 +30,64 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void ReplyEndIsRecognizedAsTerminalSseFrame()
+        {
+            Assert.That(
+                AstrBotBridge.IsTerminalSseFrame(new SseEventFrame("reply.end", "{}")),
+                Is.True);
+            Assert.That(
+                AstrBotBridge.IsTerminalSseFrame(new SseEventFrame("reply.audio.chunk", "{}")),
+                Is.False);
+        }
+
+        [Test]
+        public void SseClosePreservesQueuedFramesThroughReplyEnd()
+        {
+            var owner = new UnityEngine.GameObject("SSE terminal preservation test");
+            var bridge = owner.AddComponent<AstrBotBridge>();
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            typeof(AstrBotBridge)
+                .GetField("sseGeneration", flags)
+                .SetValue(bridge, 4L);
+            var queue = (System.Collections.Concurrent.ConcurrentQueue<SseEventFrame>)
+                typeof(AstrBotBridge)
+                    .GetField("incomingFrames", flags)
+                    .GetValue(bridge);
+            queue.Enqueue(new SseEventFrame("reply.text.delta", "{}", 1L, 4L));
+            queue.Enqueue(new SseEventFrame("reply.end", "{}", 2L, 4L));
+
+            var preserved = (bool)typeof(AstrBotBridge)
+                .GetMethod("InvalidateSseGeneration", flags)
+                .Invoke(bridge, new object[] { 4L });
+
+            Assert.That(preserved, Is.True);
+            Assert.That(queue.TryDequeue(out var first), Is.True);
+            Assert.That(queue.TryDequeue(out var terminal), Is.True);
+            Assert.That(first.EventName, Is.EqualTo("reply.text.delta"));
+            Assert.That(terminal.EventName, Is.EqualTo("reply.end"));
+            Assert.That(first.Generation, Is.EqualTo(5L));
+            Assert.That(terminal.Generation, Is.EqualTo(5L));
+            Assert.That(queue.IsEmpty, Is.True);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+
+        [Test]
+        public void OversizedReplyAudioChunkIsRejectedBeforePcmAllocation()
+        {
+            var bytes = new byte[AstrBotProtocol.MaxReplyAudioBytes + 2];
+            var json = "{\"type\":\"reply.audio.chunk\",\"protocol_version\":\"1.0\"," +
+                "\"session_id\":\"s1\",\"turn_id\":\"t1\",\"format\":\"pcm16\"," +
+                "\"sample_rate\":24000,\"channels\":1,\"data\":\"" +
+                Convert.ToBase64String(bytes) + "\"}";
+
+            Assert.That(
+                AstrBotProtocol.TryMapSseEvent(
+                    "s1", "reply.audio.chunk", json, out _, out var error),
+                Is.False);
+            Assert.That(error, Does.Contain("too large"));
+        }
+
+        [Test]
         public void SseTurnFilterDropsLateConversationFramesButKeepsInteractions()
         {
             Assert.That(AstrBotBridge.ShouldDispatchTurn(

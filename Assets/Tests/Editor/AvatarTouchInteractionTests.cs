@@ -501,6 +501,95 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void HeadReactionPreservesAuthoredPoseAcrossFrames()
+        {
+            avatarObject = new GameObject("AuthoredHeadAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var head = new GameObject("Head");
+            head.transform.SetParent(avatarObject.transform, false);
+            var headBone = head.AddComponent<MMDBoneTransform>();
+            headBone.boneName = "head";
+
+            serviceObject = new GameObject("AuthoredHeadInteraction");
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+
+            var authored = Quaternion.Euler(0f, 25f, 0f);
+            head.transform.localRotation = authored;
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(AvatarHumanInteraction).GetField("current", flags)
+                ?.SetValue(interaction, HumanInteractionKind.HeadPat);
+            typeof(AvatarHumanInteraction).GetField("fadeKind", flags)
+                ?.SetValue(interaction, HumanInteractionKind.HeadPat);
+            typeof(AvatarHumanInteraction).GetField("fade", flags)
+                ?.SetValue(interaction, 1f);
+            typeof(AvatarHumanInteraction).GetField("currentInteractionIsPhysical", flags)
+                ?.SetValue(interaction, true);
+
+            typeof(AvatarHumanInteraction).GetMethod("LateUpdate", flags)
+                ?.Invoke(interaction, null);
+            var first = head.transform.localRotation;
+            typeof(AvatarHumanInteraction).GetMethod("LateUpdate", flags)
+                ?.Invoke(interaction, null);
+            var second = head.transform.localRotation;
+
+            var expected = authored * Quaternion.Euler(
+                -1.1f + Mathf.Sin(Time.unscaledTime * 2.15f) * .15f,
+                0f,
+                0f);
+            Assert.That(Quaternion.Angle(first, expected), Is.LessThan(1f));
+            Assert.That(Quaternion.Angle(second, first), Is.LessThan(1f));
+        }
+
+        [Test]
+        public void BackendReactionDoesNotCaptureReactionPoseAsAuthoredHead()
+        {
+            avatarObject = new GameObject("BackendHeadAvatar");
+            var controller = avatarObject.AddComponent<AvatarController>();
+            controller.Initialize(avatarObject.transform);
+            var head = new GameObject("Head");
+            head.transform.SetParent(avatarObject.transform, false);
+            var headBone = head.AddComponent<MMDBoneTransform>();
+            headBone.boneName = "head";
+
+            serviceObject = new GameObject("BackendHeadInteraction");
+            var interaction = serviceObject.AddComponent<AvatarHumanInteraction>();
+            interaction.Bind(controller);
+
+            var bindPose = head.transform.localRotation;
+            var authored = Quaternion.Euler(0f, 25f, 0f);
+            head.transform.localRotation = authored;
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            typeof(AvatarHumanInteraction).GetField("current", flags)
+                ?.SetValue(interaction, HumanInteractionKind.HeadPat);
+            typeof(AvatarHumanInteraction).GetField("fadeKind", flags)
+                ?.SetValue(interaction, HumanInteractionKind.HeadPat);
+            typeof(AvatarHumanInteraction).GetField("fade", flags)
+                ?.SetValue(interaction, 1f);
+            typeof(AvatarHumanInteraction).GetField("currentInteractionIsPhysical", flags)
+                ?.SetValue(interaction, false);
+
+            typeof(AvatarHumanInteraction).GetMethod("LateUpdate", flags)
+                ?.Invoke(interaction, null);
+            var reaction = head.transform.localRotation;
+            Assert.That(Quaternion.Angle(reaction, authored), Is.GreaterThan(0.1f));
+
+            typeof(AvatarHumanInteraction).GetField("fade", flags)
+                ?.SetValue(interaction, 0f);
+            typeof(AvatarHumanInteraction).GetField("current", flags)
+                ?.SetValue(interaction, HumanInteractionKind.None);
+            typeof(AvatarHumanInteraction).GetMethod("LateUpdate", flags)
+                ?.Invoke(interaction, null);
+
+            // The backend reaction uses the bind pose as its base, but must
+            // not poison the physical-contact authored-pose bookkeeping.
+            Assert.That(Quaternion.Angle(head.transform.localRotation, bindPose), Is.LessThan(0.1f));
+        }
+
+        [Test]
         public void ContactSurfaceReportsOutwardNormalWithoutMovingProbe()
         {
             avatarObject = new GameObject("SurfaceAvatar");

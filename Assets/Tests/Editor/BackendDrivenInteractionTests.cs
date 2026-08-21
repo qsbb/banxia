@@ -205,8 +205,22 @@ namespace QuestMmdPlayer.Tests
             typeof(AvatarConversationPresenter).GetMethod("LateUpdate", flags)
                 ?.Invoke(presenter, null);
             var second = headObject.transform.localRotation;
+            var secondOffset = (Quaternion)typeof(AvatarConversationPresenter)
+                .GetField("smoothedHeadRotation", flags)
+                .GetValue(presenter);
 
-            Assert.That(Quaternion.Angle(first, second), Is.LessThan(.1f));
+            // Two reflected LateUpdate calls are separate updates and the
+            // smoothing target may legitimately advance between them. The
+            // invariant is that the current authored base receives exactly
+            // one current offset, rather than the previous presented result
+            // being used as the next base and compounded again.
+            Assert.That(
+                Quaternion.Angle(second, Quaternion.identity * secondOffset),
+                Is.LessThan(.1f));
+            Assert.That(
+                Quaternion.Angle(first, second),
+                Is.LessThan(1f),
+                "unchanged gaze should remain smooth while its offset converges");
         }
 
         [Test]

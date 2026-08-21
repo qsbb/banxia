@@ -949,6 +949,14 @@ namespace QuestMmdPlayer
                     // A DownloadHandler callback can arrive after the request
                     // has been aborted. Tag every frame so a late callback can
                     // never enter the next SSE stream's turn.
+                    // Reject the common case before touching the shared queue;
+                    // the generation check in Update remains the final race
+                    // guard for a callback that wins this check concurrently
+                    // with stream invalidation.
+                    if (shuttingDown || Interlocked.Read(ref sseGeneration) != generation)
+                    {
+                        return;
+                    }
                     incomingFrames.Enqueue(new SseEventFrame(
                         frame.EventName,
                         frame.Data,
@@ -986,7 +994,7 @@ namespace QuestMmdPlayer
                 activeSseRequest = null;
             }
             eventStreamReady = false;
-            InvalidateSseGeneration(generation);
+            var terminalFramePreserved = InvalidateSseGeneration(generation);
 
             if (!shuttingDown)
             {
@@ -1003,7 +1011,7 @@ namespace QuestMmdPlayer
                         request.responseCode,
                         ElapsedMs(sseConnectStartedAt));
                 }
-                else
+                else if (!terminalFramePreserved)
                 {
                     EmitActiveTurnError(
                         "sse_disconnected",
@@ -1073,12 +1081,57 @@ namespace QuestMmdPlayer
             return message.TurnId.StartsWith("i:", StringComparison.Ordinal);
         }
 
-        private void InvalidateSseGeneration(long generation)
+        private bool InvalidateSseGeneration(long generation)
         {
             if (Interlocked.CompareExchange(ref sseGeneration, generation + 1L, generation) == generation)
             {
-                ClearIncomingFrames();
+                return PreserveTerminalFrames(generation, generation + 1L);
             }
+            return false;
+        }
+
+        public static bool IsTerminalSseFrame(SseEventFrame frame)
+        {
+            return string.Equals(frame.EventName, "reply.end", StringComparison.Ordinal);
+        }
+
+        private bool PreserveTerminalFrames(long generation, long nextGeneration)
+        {
+            List<SseEventFrame> currentFrames = null;
+            var terminalFound = false;
+            while (incomingFrames.TryDequeue(out var frame))
+            {
+                if (frame.Generation != generation)
+                {
+                    continue;
+                }
+
+                if (currentFrames == null)
+                {
+                    currentFrames = new List<SseEventFrame>();
+                }
+                currentFrames.Add(frame);
+                terminalFound |= IsTerminalSseFrame(frame);
+            }
+
+            if (!terminalFound || currentFrames == null)
+            {
+                return false;
+            }
+
+            // Retag all frames from the completed stream so Update can drain
+            // the valid response after the request closes. Frames arriving
+            // after this point carry the old generation and are discarded.
+            for (var index = 0; index < currentFrames.Count; index++)
+            {
+                var frame = currentFrames[index];
+                incomingFrames.Enqueue(new SseEventFrame(
+                    frame.EventName,
+                    frame.Data,
+                    frame.ReceivedAtTicks,
+                    nextGeneration));
+            }
+            return true;
         }
 
         private void ClearIncomingFrames()

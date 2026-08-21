@@ -50,6 +50,10 @@ namespace QuestMmdPlayer
         private readonly Decoder decoder = Encoding.UTF8.GetDecoder();
         private readonly StringBuilder line = new StringBuilder();
         private readonly StringBuilder data = new StringBuilder();
+        // DownloadHandlerScript uses a bounded read buffer. Reuse the decode
+        // buffer across callbacks so a streaming TTS response does not create
+        // a short-lived char array for every network read.
+        private char[] charBuffer = Array.Empty<char>();
         private string eventName = string.Empty;
 
         public event Action<SseEventFrame> EventReceived;
@@ -62,11 +66,15 @@ namespace QuestMmdPlayer
             }
 
             count = Math.Min(count, bytes.Length);
-            var chars = new char[Encoding.UTF8.GetMaxCharCount(count)];
-            var charCount = decoder.GetChars(bytes, 0, count, chars, 0, false);
+            var requiredChars = Encoding.UTF8.GetMaxCharCount(count);
+            if (charBuffer.Length < requiredChars)
+            {
+                charBuffer = new char[requiredChars];
+            }
+            var charCount = decoder.GetChars(bytes, 0, count, charBuffer, 0, false);
             for (var index = 0; index < charCount; index++)
             {
-                var value = chars[index];
+                var value = charBuffer[index];
                 if (value == '\n')
                 {
                     ProcessLine();
@@ -139,6 +147,11 @@ namespace QuestMmdPlayer
     public static class AstrBotProtocol
     {
         public const string Version = "1.0";
+        // A 16 KiB PCM16 chunk is about 341 ms at 24 kHz mono. Keeping a
+        // single SSE event bounded prevents one malformed or burst-sized TTS
+        // event from monopolizing the Unity frame and allocating unbounded
+        // temporary arrays.
+        public const int MaxReplyAudioBytes = 16 * 1024;
         private static readonly string[] ExecutableActions =
         {
             "wave", "bow", "dance", "dance_next", "raise_hand", "raise_leg", "turn_half",
@@ -515,27 +528,44 @@ namespace QuestMmdPlayer
                 return false;
             }
 
+            var encoded = payload.data ?? string.Empty;
+            var maximumEncodedLength = ((MaxReplyAudioBytes + 2) / 3) * 4;
+            if (encoded.Length > maximumEncodedLength)
+            {
+                error = "Reply audio chunk is too large";
+                return false;
+            }
+
             byte[] bytes;
             try
             {
-                bytes = Convert.FromBase64String(payload.data ?? string.Empty);
+                bytes = Convert.FromBase64String(encoded);
             }
             catch (FormatException)
             {
                 error = "Reply audio is not valid Base64";
                 return false;
             }
-            if (bytes.Length == 0 || (bytes.Length & 1) != 0)
+            if (bytes.Length == 0 || bytes.Length > MaxReplyAudioBytes || (bytes.Length & 1) != 0)
             {
-                error = "Reply audio must contain an even number of PCM16 bytes";
+                error = bytes.Length > MaxReplyAudioBytes
+                    ? "Reply audio chunk is too large"
+                    : "Reply audio must contain an even number of PCM16 bytes";
                 return false;
             }
 
             samples = new short[bytes.Length / 2];
-            for (var index = 0; index < samples.Length; index++)
+            if (BitConverter.IsLittleEndian)
             {
-                var offset = index * 2;
-                samples[index] = unchecked((short)(bytes[offset] | (bytes[offset + 1] << 8)));
+                Buffer.BlockCopy(bytes, 0, samples, 0, bytes.Length);
+            }
+            else
+            {
+                for (var index = 0; index < samples.Length; index++)
+                {
+                    var offset = index * 2;
+                    samples[index] = unchecked((short)(bytes[offset] | (bytes[offset + 1] << 8)));
+                }
             }
             return true;
         }

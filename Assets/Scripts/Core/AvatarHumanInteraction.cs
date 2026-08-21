@@ -134,6 +134,10 @@ namespace QuestMmdPlayer
             public Quaternion rightUpperRotation, rightLowerRotation, rightHandRotation;
             public Quaternion leftUpperLegRotation, leftLowerLegRotation, leftFootRotation;
             public Quaternion rightUpperLegRotation, rightLowerLegRotation, rightFootRotation;
+            public Quaternion authoredHeadRotation;
+            public Quaternion presentedHeadRotation;
+            public bool hasPresentedHeadRotation;
+            public bool physicalHeadPoseApplied;
             public Quaternion transitionUpperBody, transitionHead, transitionLeftUpper, transitionLeftLower, transitionLeftHand;
             public Quaternion transitionRightUpper, transitionRightLower, transitionRightHand;
             public Quaternion transitionLeftUpperLeg, transitionLeftLowerLeg, transitionLeftFoot;
@@ -144,7 +148,13 @@ namespace QuestMmdPlayer
             public void CapturePose()
             {
                 if (upperBody != null) upperBodyRotation = upperBody.localRotation;
-                if (head != null) headRotation = head.localRotation;
+                if (head != null)
+                {
+                    headRotation = head.localRotation;
+                    authoredHeadRotation = headRotation;
+                    hasPresentedHeadRotation = false;
+                    physicalHeadPoseApplied = false;
+                }
                 if (leftUpper != null) leftUpperRotation = leftUpper.localRotation;
                 if (leftLower != null) leftLowerRotation = leftLower.localRotation;
                 if (leftHand != null) leftHandRotation = leftHand.localRotation;
@@ -185,6 +195,56 @@ namespace QuestMmdPlayer
                 if (head != null) { head.localRotation = headRotation; head.localScale = headScale; }
                 ResetArms();
                 ResetLegs();
+            }
+
+            public void PrepareAuthoredHeadPose(bool physicalContactActive)
+            {
+                if (head == null || !physicalContactActive)
+                {
+                    return;
+                }
+
+                if (!physicalHeadPoseApplied)
+                {
+                    // Capture the pose authored by the action/VMD writer at
+                    // the moment a real contact begins. Backend-only
+                    // reactions never enter this bookkeeping path.
+                    authoredHeadRotation = head.localRotation;
+                    physicalHeadPoseApplied = true;
+                }
+                else if (hasPresentedHeadRotation &&
+                    Quaternion.Angle(head.localRotation, presentedHeadRotation) <= .01f)
+                {
+                    head.localRotation = authoredHeadRotation;
+                }
+                else
+                {
+                    // An action/VMD writer replaced our previous result. That
+                    // pose is the correct authored base for this frame.
+                    authoredHeadRotation = head.localRotation;
+                }
+                hasPresentedHeadRotation = false;
+            }
+
+            public void MarkPresentedHeadPose()
+            {
+                if (head == null)
+                {
+                    return;
+                }
+                presentedHeadRotation = head.localRotation;
+                hasPresentedHeadRotation = true;
+            }
+
+            public void RestoreAuthoredHeadPose(Quaternion authored)
+            {
+                if (head != null)
+                {
+                    head.localRotation = authored;
+                    authoredHeadRotation = authored;
+                }
+                hasPresentedHeadRotation = false;
+                physicalHeadPoseApplied = false;
             }
 
             public void CaptureTransitionPose()
@@ -402,6 +462,10 @@ namespace QuestMmdPlayer
         void LateUpdate()
         {
             if (avatar == null || bones == null) return;
+            // VMD/action writers run before this component. Remove only the
+            // previous physical-contact offset so the current authored head
+            // pose stays the base for a live, hand-directed reaction.
+            bones.PrepareAuthoredHeadPose(currentInteractionIsPhysical);
             var backendActive = backendReactionUntil > Time.unscaledTime;
             var desired = SelectDesiredInteraction(
                 current,
@@ -430,7 +494,13 @@ namespace QuestMmdPlayer
             {
                 if (reactionPoseApplied || scaleChanged)
                 {
+                    var preservePhysicalAuthoredHead = bones.physicalHeadPoseApplied;
+                    var authoredHead = bones.authoredHeadRotation;
                     RestorePose();
+                    if (preservePhysicalAuthoredHead)
+                    {
+                        bones.RestoreAuthoredHeadPose(authoredHead);
+                    }
                     RestoreMorphs();
                     reactionPoseApplied = false;
                 }
@@ -440,6 +510,10 @@ namespace QuestMmdPlayer
             if (enableMorphReactions) ApplyMorphs(kind, fade);
             if (enableBoneReactions) ApplyBones(kind, fade);
             bones.ApplyTransition(Time.unscaledDeltaTime, .38f);
+            if (currentInteractionIsPhysical)
+            {
+                bones.MarkPresentedHeadPose();
+            }
             reactionPoseApplied = true;
         }
 
@@ -685,9 +759,10 @@ namespace QuestMmdPlayer
                     : kind == HumanInteractionKind.BodyTouch
                             ? physical ? PhysicalBodyTouchHeadOffset(settle) : ContactHeadOffset(settle)
                         : Quaternion.identity;
+                var headBase = physical ? bones.authoredHeadRotation : bones.headRotation;
                 bones.head.localRotation = Quaternion.Slerp(
-                    bones.headRotation,
-                    bones.headRotation * offset,
+                    headBase,
+                    headBase * offset,
                     amount);
                 var squeezed = Vector3.Scale(
                     bones.headScale,
