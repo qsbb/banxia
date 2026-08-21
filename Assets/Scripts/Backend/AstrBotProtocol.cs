@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Net;
 using System.Text;
 using UnityEngine;
@@ -565,38 +566,48 @@ namespace QuestMmdPlayer
                 return false;
             }
 
-            byte[] bytes;
+            // Allow the decoder to finish the rounded Base64 boundary so an
+            // oversized payload is reported as oversized, not malformed.
+            var bytes = ArrayPool<byte>.Shared.Rent(MaxReplyAudioBytes + 2);
             try
             {
-                bytes = Convert.FromBase64String(encoded);
-            }
-            catch (FormatException)
-            {
-                error = "Reply audio is not valid Base64";
-                return false;
-            }
-            if (bytes.Length == 0 || bytes.Length > MaxReplyAudioBytes || (bytes.Length & 1) != 0)
-            {
-                error = bytes.Length > MaxReplyAudioBytes
-                    ? "Reply audio chunk is too large"
-                    : "Reply audio must contain an even number of PCM16 bytes";
-                return false;
-            }
-
-            samples = new short[bytes.Length / 2];
-            if (BitConverter.IsLittleEndian)
-            {
-                Buffer.BlockCopy(bytes, 0, samples, 0, bytes.Length);
-            }
-            else
-            {
-                for (var index = 0; index < samples.Length; index++)
+                if (!Convert.TryFromBase64String(encoded, bytes, out var byteCount))
                 {
-                    var offset = index * 2;
-                    samples[index] = unchecked((short)(bytes[offset] | (bytes[offset + 1] << 8)));
+                    error = "Reply audio is not valid Base64";
+                    return false;
                 }
+                if (byteCount > MaxReplyAudioBytes)
+                {
+                    error = "Reply audio chunk is too large";
+                    return false;
+                }
+                if (byteCount == 0 || (byteCount & 1) != 0)
+                {
+                    error = byteCount == 0
+                        ? "Reply audio must contain PCM16 bytes"
+                        : "Reply audio must contain an even number of PCM16 bytes";
+                    return false;
+                }
+
+                samples = new short[byteCount / 2];
+                if (BitConverter.IsLittleEndian)
+                {
+                    Buffer.BlockCopy(bytes, 0, samples, 0, byteCount);
+                }
+                else
+                {
+                    for (var index = 0; index < samples.Length; index++)
+                    {
+                        var offset = index * 2;
+                        samples[index] = unchecked((short)(bytes[offset] | (bytes[offset + 1] << 8)));
+                    }
+                }
+                return true;
             }
-            return true;
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(bytes);
+            }
         }
 
         private static bool TryMapVisemeTimeline(
