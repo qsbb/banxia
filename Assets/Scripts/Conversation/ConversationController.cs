@@ -257,11 +257,24 @@ namespace QuestMmdPlayer
                 return true;
             }
 
+            const string startFailureCode = "voice_turn_rejected";
+            RecordVoiceInterruption(startFailureCode, "transport_error");
+            LastErrorCode = startFailureCode;
+            transport.Interrupt(turnId);
             StopAudioStream();
             stateMachine.ResetToIdle();
             NotifyStateChanged();
             Debug.LogWarning("[Conversation] Voice input start rejected by transport.", this);
-            RecordStage("audio_upload", "failed", "voice_turn_rejected");
+            RecordStage("audio_upload", "failed", startFailureCode);
+            var startTrace = RuntimeDebugLog.TraceLabel(turnId);
+            var startTiming = BuildTimingStatus(Time.unscaledTime);
+            Debug.LogWarning(
+                "[Conversation] No response: code=" + startFailureCode +
+                " trace=" + startTrace + "; message=Voice input start rejected; timing=" + startTiming,
+                this);
+            diagnostics?.Record(
+                "VoiceInput",
+                "No response: code=" + startFailureCode + " trace=" + startTrace + " timing=" + startTiming);
             return false;
         }
 
@@ -1159,6 +1172,7 @@ namespace QuestMmdPlayer
                 string.Equals(code, "stt_unavailable", StringComparison.Ordinal) ||
                 string.Equals(code, "stt_failed", StringComparison.Ordinal) ||
                 string.Equals(code, "voice_end_rejected", StringComparison.Ordinal) ||
+                string.Equals(code, "voice_turn_rejected", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_not_woken", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_reply_capture_empty", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_no_response", StringComparison.Ordinal) ||

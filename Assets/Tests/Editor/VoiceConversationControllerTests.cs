@@ -95,6 +95,26 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void RejectedVoiceStartRecordsInterruptionAndNoResponse()
+        {
+            owner = new GameObject("Rejected voice start diagnostics test");
+            var diagnostics = owner.AddComponent<RuntimeDebugLog>();
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            transport.BeginAudioAccepted = false;
+            controller.SetTransport(transport);
+
+            Assert.IsFalse(controller.BeginVoiceInput());
+
+            Assert.AreEqual(ConversationState.Idle, controller.State);
+            Assert.AreEqual("voice_turn_rejected", controller.LastErrorCode);
+            Assert.AreEqual(1, transport.InterruptCount);
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("刚刚又被打断了"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("reason=voice_turn_rejected"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("No response: code=voice_turn_rejected"));
+        }
+
+        [Test]
         public void DuplicateVoiceActivationWhileCapturingDoesNotCreateAnotherTurn()
         {
             owner = new GameObject("Duplicate voice activation guard test");
@@ -1601,6 +1621,7 @@ namespace QuestMmdPlayer.Tests
                 new System.Collections.Generic.List<string>();
 
             public bool Connected = true;
+            public bool BeginAudioAccepted = true;
             public bool EndAudioAccepted = true;
             public string StartedTurnId;
             public string ChunkTurnId;
@@ -1635,7 +1656,7 @@ namespace QuestMmdPlayer.Tests
                 Calls.Add("start");
                 AudioStartCount++;
                 StartedTurnId = turnId;
-                return true;
+                return BeginAudioAccepted;
             }
 
             public bool QueueAudioChunk(string turnId, byte[] pcm16)
