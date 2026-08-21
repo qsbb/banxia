@@ -314,9 +314,11 @@ namespace QuestMmdPlayer
 
         public void StartConversation(string userText)
         {
-            if (transport == null)
+            if (transport == null || !transport.IsConnected)
             {
-                Debug.LogWarning("[Conversation] No transport is configured.");
+                LastErrorCode = "bridge_disconnected";
+                RecordStage("eventbus", "failed", LastErrorCode);
+                Debug.LogWarning("[Conversation] Text turn rejected because the event stream is not connected.", this);
                 return;
             }
 
@@ -503,9 +505,14 @@ namespace QuestMmdPlayer
                         RecordVoiceInterruption("pipeline_stopped", "transport_error");
                     }
                     StopAudioStream();
+                    pendingLocalAction = string.Empty;
                     LastErrorCode = string.IsNullOrWhiteSpace(message.ErrorCode)
                         ? "conversation_error"
                         : message.ErrorCode;
+                    // A terminal SSE/HTTP error must stop the matching backend
+                    // turn as well as local playback. AstrBotBridge handles
+                    // this idempotently and cancels any in-flight audio upload.
+                    transport?.Interrupt(stateMachine.TurnId);
                     if (!pipelineStopped)
                     {
                         // Every terminal transport error interrupts the active
@@ -517,8 +524,24 @@ namespace QuestMmdPlayer
                     awaitingBackendResponse = false;
                     errorUntil = Time.unscaledTime + 1.25f;
                     RecordStage("reply", "failed", LastErrorCode);
+                    var errorTrace = RuntimeDebugLog.TraceLabel(stateMachine.TurnId);
+                    var errorTiming = BuildTimingStatus(Time.unscaledTime);
+                    if (IsNoResponseCode(LastErrorCode))
+                    {
+                        Debug.LogWarning(
+                            "[Conversation] No response: code=" + LastErrorCode +
+                            " trace=" + errorTrace +
+                            "; message=" + (message.Text ?? string.Empty) +
+                            "; timing=" + errorTiming,
+                            this);
+                        diagnostics?.Record(
+                            "VoiceInput",
+                            "No response: code=" + LastErrorCode +
+                            " trace=" + errorTrace + " timing=" + errorTiming);
+                    }
                     Debug.LogWarning("[Conversation] Voice/transport error code=" + LastErrorCode +
-                        "; bridge=" + TransportStatus + "; timing=" + BuildTimingStatus(Time.unscaledTime), this);
+                        "; trace=" + errorTrace + "; bridge=" + TransportStatus +
+                        "; timing=" + errorTiming, this);
                     break;
             }
 
@@ -1111,7 +1134,15 @@ namespace QuestMmdPlayer
             return string.Equals(code, "empty_backend_reply", StringComparison.Ordinal) ||
                 string.Equals(code, "response_first_event_timeout", StringComparison.Ordinal) ||
                 string.Equals(code, "response_event_stall_timeout", StringComparison.Ordinal) ||
-                string.Equals(code, "response_terminal_event_missing_timeout", StringComparison.Ordinal);
+                string.Equals(code, "response_terminal_event_missing_timeout", StringComparison.Ordinal) ||
+                string.Equals(code, "stt_empty", StringComparison.Ordinal) ||
+                string.Equals(code, "stt_unavailable", StringComparison.Ordinal) ||
+                string.Equals(code, "stt_failed", StringComparison.Ordinal) ||
+                string.Equals(code, "astrbot_pipeline_not_woken", StringComparison.Ordinal) ||
+                string.Equals(code, "astrbot_pipeline_reply_capture_empty", StringComparison.Ordinal) ||
+                string.Equals(code, "astrbot_pipeline_no_response", StringComparison.Ordinal) ||
+                string.Equals(code, "astrbot_pipeline_empty_reply", StringComparison.Ordinal) ||
+                string.Equals(code, "astrbot_pipeline_timeout", StringComparison.Ordinal);
         }
 
         private void RecordVoiceInterruption(string reason, string source)

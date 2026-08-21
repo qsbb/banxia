@@ -114,6 +114,7 @@ namespace QuestMmdPlayer
         private int sseFramesDispatched;
         private int sseQueueDepthPeak;
         private int sseQueueDelayMaxMs;
+        private long sseGeneration;
         private float nextSsePressureLogAt;
         private const string SpatialRevisionPreferenceKey = "banxia.spatial.revision.v1";
         private RoomUnderstandingService spatialContextSource;
@@ -195,9 +196,17 @@ namespace QuestMmdPlayer
                 incomingFrames.TryDequeue(out var frame))
             {
                 dispatchedThisFrame++;
+                if (!IsCurrentSseGeneration(frame.Generation, Interlocked.Read(ref sseGeneration)))
+                {
+                    continue;
+                }
                 var queueDelayMs = ElapsedMs(frame.ReceivedAtTicks);
                 if (AstrBotProtocol.TryMapSseEvent(sessionId, frame.EventName, frame.Data, out var message, out var error))
                 {
+                    if (!ShouldDispatchTurn(message, activeTurnId))
+                    {
+                        continue;
+                    }
                     message.TransportReceivedAtTicks = frame.ReceivedAtTicks;
                     message.TransportQueueDelayMs = queueDelayMs;
                     var messageTraceId = RuntimeDebugLog.TraceLabel(message.TurnId);
@@ -440,7 +449,8 @@ namespace QuestMmdPlayer
         {
             activeTurnId = string.Empty;
             CancelAudioUpload();
-            if (!CanSend(turnId, true))
+            ClearIncomingFrames();
+            if (!CanSend(turnId, true, true))
             {
                 return;
             }
@@ -463,12 +473,13 @@ namespace QuestMmdPlayer
         public bool BeginAudioTurn(string turnId)
         {
             activeTurnId = string.Empty;
-            if (!CanSend(turnId, true))
+            if (!CanSend(turnId, true, true))
             {
                 return false;
             }
 
             CancelAudioUpload();
+            ClearIncomingFrames();
             audioUploadTurnId = turnId;
             currentTraceId = RuntimeDebugLog.TraceLabel(turnId);
             audioEndRequested = false;
@@ -556,7 +567,8 @@ namespace QuestMmdPlayer
             {
                 activeTurnId = string.Empty;
             }
-            if (!CanSend(turnId, false))
+            ClearIncomingFrames();
+            if (!CanSend(turnId, false, false))
             {
                 return;
             }
@@ -925,6 +937,8 @@ namespace QuestMmdPlayer
 
         private IEnumerator RunEventStream()
         {
+            var generation = Interlocked.Increment(ref sseGeneration);
+            ClearIncomingFrames();
             var request = UnityWebRequest.Get(Endpoint("events/" + UnityWebRequest.EscapeURL(sessionId)));
             eventStreamReady = false;
             Interlocked.Exchange(ref receivedStreamHeaders, 0);
@@ -932,7 +946,14 @@ namespace QuestMmdPlayer
             var handler = new SseDownloadHandler(
                 frame =>
                 {
-                    incomingFrames.Enqueue(frame);
+                    // A DownloadHandler callback can arrive after the request
+                    // has been aborted. Tag every frame so a late callback can
+                    // never enter the next SSE stream's turn.
+                    incomingFrames.Enqueue(new SseEventFrame(
+                        frame.EventName,
+                        frame.Data,
+                        frame.ReceivedAtTicks,
+                        generation));
                     Interlocked.Increment(ref sseFramesReceived);
                     UpdateMaximum(ref sseQueueDepthPeak, incomingFrames.Count);
                     Interlocked.Exchange(ref receivedStreamData, 1);
@@ -965,6 +986,7 @@ namespace QuestMmdPlayer
                 activeSseRequest = null;
             }
             eventStreamReady = false;
+            InvalidateSseGeneration(generation);
 
             if (!shuttingDown)
             {
@@ -1007,6 +1029,13 @@ namespace QuestMmdPlayer
             }
 
             var turnId = activeTurnId;
+            if (string.Equals(turnId, audioUploadTurnId, StringComparison.Ordinal))
+            {
+                // The SSE request can finish while the audio upload coroutine
+                // is still waiting on turn/start or audio/chunk. Stop that
+                // producer before publishing the terminal error.
+                CancelAudioUpload();
+            }
             activeTurnId = string.Empty;
             var message = new ConversationEvent
             {
@@ -1017,6 +1046,46 @@ namespace QuestMmdPlayer
             };
             RecordIncomingEvent(message, RuntimeDebugLog.TraceLabel(turnId));
             EventReceived?.Invoke(message);
+        }
+
+        public static bool IsCurrentSseGeneration(long frameGeneration, long currentGeneration)
+        {
+            // Generation zero is retained for deterministic parser/unit tests
+            // and for frames injected by the local mock harness.
+            return frameGeneration == 0L || frameGeneration == currentGeneration;
+        }
+
+        public static bool ShouldDispatchTurn(ConversationEvent message, string currentTurnId)
+        {
+            if (message == null || string.IsNullOrEmpty(message.TurnId))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(currentTurnId) &&
+                string.Equals(message.TurnId, currentTurnId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // Interaction turns are a parallel channel and may arrive while
+            // no conversation turn is active.
+            return message.TurnId.StartsWith("i:", StringComparison.Ordinal);
+        }
+
+        private void InvalidateSseGeneration(long generation)
+        {
+            if (Interlocked.CompareExchange(ref sseGeneration, generation + 1L, generation) == generation)
+            {
+                ClearIncomingFrames();
+            }
+        }
+
+        private void ClearIncomingFrames()
+        {
+            while (incomingFrames.TryDequeue(out _))
+            {
+            }
         }
 
         private void ClearActiveTurnIfMatches(string turnId)
@@ -1371,9 +1440,10 @@ namespace QuestMmdPlayer
             request.SetRequestHeader("Accept", eventStream ? "text/event-stream" : "application/json");
         }
 
-        private bool CanSend(string turnId, bool emitError)
+        private bool CanSend(string turnId, bool emitError, bool requireEventStream = false)
         {
-            if (sessionReady && isActiveAndEnabled && !shuttingDown)
+            if (sessionReady && (!requireEventStream || eventStreamReady) &&
+                isActiveAndEnabled && !shuttingDown)
             {
                 return true;
             }
@@ -1491,6 +1561,8 @@ namespace QuestMmdPlayer
             }
             shuttingDown = true;
             CancelAudioUpload();
+            activeTurnId = string.Empty;
+            Interlocked.Increment(ref sseGeneration);
             if (connectionRoutine != null)
             {
                 StopCoroutine(connectionRoutine);
@@ -1529,7 +1601,7 @@ namespace QuestMmdPlayer
             actionReceiptKeys.Clear();
             actionReceiptOrder.Clear();
             actionResultDeliveries.Reset();
-            while (incomingFrames.TryDequeue(out _)) { }
+            ClearIncomingFrames();
         }
 
         private void OnDestroy()

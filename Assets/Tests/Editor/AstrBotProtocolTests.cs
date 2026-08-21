@@ -22,6 +22,31 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void SseGenerationRejectsFramesFromAnOlderStream()
+        {
+            Assert.That(AstrBotBridge.IsCurrentSseGeneration(7L, 7L), Is.True);
+            Assert.That(AstrBotBridge.IsCurrentSseGeneration(6L, 7L), Is.False);
+            Assert.That(AstrBotBridge.IsCurrentSseGeneration(0L, 7L), Is.True);
+        }
+
+        [Test]
+        public void SseTurnFilterDropsLateConversationFramesButKeepsInteractions()
+        {
+            Assert.That(AstrBotBridge.ShouldDispatchTurn(
+                new ConversationEvent { TurnId = "turn-current" },
+                "turn-current"), Is.True);
+            Assert.That(AstrBotBridge.ShouldDispatchTurn(
+                new ConversationEvent { TurnId = "turn-old" },
+                "turn-current"), Is.False);
+            Assert.That(AstrBotBridge.ShouldDispatchTurn(
+                new ConversationEvent { TurnId = "i:event-1" },
+                string.Empty), Is.True);
+            Assert.That(AstrBotBridge.ShouldDispatchTurn(
+                new ConversationEvent { TurnId = string.Empty },
+                string.Empty), Is.True);
+        }
+
+        [Test]
         public void ExistingSessionConflictCanReconnectButCapacityConflictCannot()
         {
             const string existing =

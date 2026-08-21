@@ -536,7 +536,7 @@ namespace QuestMmdPlayer
             FlushFullChunks(chunkBudget > 0 ? chunkBudget : MaxEncodedChunksPerUpdate);
         }
 
-        internal static bool ShouldDiscardUnrecordedCapture(
+        public static bool ShouldDiscardUnrecordedCapture(
             ConversationState conversationState,
             bool isRecording)
         {

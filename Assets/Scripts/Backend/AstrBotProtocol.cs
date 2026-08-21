@@ -21,17 +21,24 @@ namespace QuestMmdPlayer
 
     public readonly struct SseEventFrame
     {
-        public SseEventFrame(string eventName, string data, long receivedAtTicks = 0L)
+        public SseEventFrame(
+            string eventName,
+            string data,
+            long receivedAtTicks = 0L,
+            long generation = 0L)
         {
             EventName = eventName ?? string.Empty;
             Data = data ?? string.Empty;
             ReceivedAtTicks = receivedAtTicks;
+            Generation = generation;
         }
 
         public string EventName { get; }
         public string Data { get; }
         /// <summary>Monotonic timestamp captured when the SSE frame is assembled.</summary>
         public long ReceivedAtTicks { get; }
+        /// <summary>Transport generation that produced this frame.</summary>
+        public long Generation { get; }
     }
 
     /// <summary>

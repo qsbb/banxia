@@ -150,6 +150,22 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void TextTurnIsRejectedWhileTransportEventStreamIsDown()
+        {
+            owner = new GameObject("Offline text conversation test");
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            transport.Connected = false;
+            controller.SetTransport(transport);
+
+            controller.StartConversation("hello");
+
+            Assert.AreEqual(ConversationState.Idle, controller.State);
+            Assert.AreEqual(0, transport.TextStartCount);
+            Assert.AreEqual("bridge_disconnected", controller.LastErrorCode);
+        }
+
+        [Test]
         public void BargeInWritesStructuredVoiceInterruptionLog()
         {
             owner = new GameObject("Voice interruption diagnostics test");
@@ -227,6 +243,30 @@ namespace QuestMmdPlayer.Tests
             Assert.That(diagnostics.GetRecentText(30), Does.Contain("reason=audio_http_request_failed"));
             Assert.That(diagnostics.GetRecentTimelineText(30),
                 Does.Contain("voice_interrupted_audio_http_request_failed"));
+            Assert.AreEqual(1, transport.InterruptCount);
+        }
+
+        [Test]
+        public void BackendNoResponseErrorWritesTraceableNoResponseLog()
+        {
+            owner = new GameObject("Backend no response diagnostics test");
+            var diagnostics = owner.AddComponent<RuntimeDebugLog>();
+            var controller = owner.AddComponent<ConversationController>();
+            var transport = owner.AddComponent<RecordingVoiceTransport>();
+            controller.SetTransport(transport);
+            controller.StartConversation("hello");
+
+            transport.Raise(new ConversationEvent
+            {
+                Type = ConversationEventType.Error,
+                TurnId = controller.TurnId,
+                ErrorCode = "astrbot_pipeline_no_response",
+                Text = "pipeline completed without a reply"
+            });
+
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("No response: code=astrbot_pipeline_no_response"));
+            Assert.That(diagnostics.GetRecentText(30), Does.Contain("trace="));
+            Assert.AreEqual(1, transport.InterruptCount);
         }
 
         [Test]
