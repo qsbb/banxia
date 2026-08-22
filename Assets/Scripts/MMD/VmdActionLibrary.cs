@@ -473,6 +473,9 @@ namespace QuestMmdPlayer
         private bool physicsArbitrationActive;
         private bool previousTransformEnabled;
         private bool previousLivePhysics;
+        private float physicsArbitrationStartedAt = -1f;
+        private bool physicsResumePending;
+        private float physicsResumedAt = -1f;
         private bool isDestroying;
         private bool isQuitting;
         private bool endPoseHoldActive;
@@ -842,6 +845,9 @@ namespace QuestMmdPlayer
         {
             generation++;
             CompleteReturnToIdle();
+            physicsArbitrationStartedAt = -1f;
+            physicsResumePending = false;
+            physicsResumedAt = -1f;
             preparedActions.Clear();
             boundModel = null;
             boundRoot = null;
@@ -1531,6 +1537,19 @@ namespace QuestMmdPlayer
 
         private void LateUpdate()
         {
+            if (physicsResumePending)
+            {
+                physicsResumePending = false;
+                var elapsedMs = physicsResumedAt < 0f
+                    ? -1
+                    : Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - physicsResumedAt) * 1000f));
+                diagnostics?.RecordStage(
+                    "mmd_physics",
+                    "completed",
+                    "physics_resume_first_frame",
+                    elapsedMs: elapsedMs);
+                physicsResumedAt = -1f;
+            }
             if (blendOutActive)
             {
                 UpdateBlendOut();
@@ -2285,8 +2304,21 @@ namespace QuestMmdPlayer
             previousTransformEnabled = transformManager.transformEnabled;
             previousLivePhysics = transformManager.livePhysics;
             physicsArbitrationActive = true;
+            physicsArbitrationStartedAt = Time.realtimeSinceStartup;
             transformManager.transformEnabled = false;
             transformManager.livePhysics = false;
+            diagnostics?.RecordStage(
+                "mmd_physics",
+                "processing",
+                "vmd_physics_arbitration_started",
+                queueDepth: transformManager.physicsManager == null
+                    ? -1
+                    : transformManager.physicsManager.rigidBodies == null
+                        ? 0
+                        : transformManager.physicsManager.rigidBodies.Length,
+                eventCount: transformManager.physicsManager == null || transformManager.physicsManager.joints == null
+                    ? 0
+                    : transformManager.physicsManager.joints.Length);
         }
 
         private void EndPhysicsArbitration()
@@ -2299,6 +2331,17 @@ namespace QuestMmdPlayer
             transformManager.transformEnabled = previousTransformEnabled;
             transformManager.livePhysics = previousLivePhysics;
             physicsArbitrationActive = false;
+            var elapsedMs = physicsArbitrationStartedAt < 0f
+                ? -1
+                : Mathf.Max(0, Mathf.RoundToInt((Time.realtimeSinceStartup - physicsArbitrationStartedAt) * 1000f));
+            physicsArbitrationStartedAt = -1f;
+            physicsResumePending = true;
+            physicsResumedAt = Time.realtimeSinceStartup;
+            diagnostics?.RecordStage(
+                "mmd_physics",
+                "completed",
+                "vmd_physics_arbitration_restored",
+                elapsedMs: elapsedMs);
         }
 
         private bool IsRequestCurrent(int requestGeneration, PMXModel model, Transform root)

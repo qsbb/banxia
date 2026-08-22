@@ -319,6 +319,7 @@ namespace QuestMmdPlayer
                 case "audio_buffer": return "播放缓冲";
                 case "reply": return "回复结束";
                 case "avatar_action": return "角色动作";
+                case "mmd_physics": return "MMD物理";
                 case "hand_contact": return "手部触碰";
                 case "spatial_context": return "房间语义";
                 case "interrupt": return "打断";
@@ -353,6 +354,14 @@ namespace QuestMmdPlayer
             switch (value)
             {
                 case "action_state_changed": return "\u52a8\u4f5c\u72b6\u6001\u5df2\u5207\u6362";
+                case "simulation_suspended": return "物理模拟已暂停";
+                case "simulation_active": return "物理模拟运行中";
+                case "simulation_resumed": return "物理模拟已恢复";
+                case "initial_pose_pending": return "等待初始姿态同步";
+                case "initial_pose_seeded": return "初始姿态已同步";
+                case "vmd_physics_arbitration_started": return "动作接管物理模拟";
+                case "vmd_physics_arbitration_restored": return "动作释放物理模拟";
+                case "physics_resume_first_frame": return "释放物理后的首帧";
                 case "rest_target_found": return "\u5df2\u627e\u5230\u5339\u914d\u7684\u573a\u666f\u4f11\u606f\u76ee\u6807";
                 case "rest_target_missing": return "\u6ca1\u6709\u627e\u5230\u53ef\u7528\u7684\u5ea7\u4f4d\u6216\u8eba\u5367\u9762";
                 case "rest_target_capability_missing": return "\u6700\u8fd1\u7684\u573a\u666f\u76ee\u6807\u4e0d\u652f\u6301\u8be5\u52a8\u4f5c";

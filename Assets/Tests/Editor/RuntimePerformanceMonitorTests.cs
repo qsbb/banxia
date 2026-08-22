@@ -187,6 +187,25 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void DetailedPerformanceWindowStartsEmptyAndUsesTenSecondBudget()
+        {
+            var owner = new GameObject("Detailed Performance Window");
+            try
+            {
+                var monitor = owner.AddComponent<RuntimePerformanceMonitor>();
+
+                Assert.That(RuntimePerformanceMonitor.DetailedWindowDurationSeconds, Is.EqualTo(10f));
+                Assert.That(monitor.detailedWindow.SampleCount, Is.Zero);
+                Assert.That(monitor.detailedWindow.PhysicsDroppedSeconds, Is.Zero);
+                Assert.That(monitor.detailedWindow.CompositorDroppedFrames, Is.Zero);
+            }
+            finally
+            {
+                Object.DestroyImmediate(owner);
+            }
+        }
+
+        [Test]
         public void PerformanceQaWindowResetExcludesWarmupWithoutDisablingDetailSampling()
         {
             var owner = new GameObject("Performance QA Monitor");

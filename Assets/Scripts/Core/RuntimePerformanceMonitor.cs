@@ -27,16 +27,25 @@ namespace QuestMmdPlayer
     /// Frame data is sampled every frame; platform and model data are refreshed
     /// at a lower frequency so opening the panel does not distort the result.
     /// </summary>
+    [DefaultExecutionOrder(11300)]
     [DisallowMultipleComponent]
     public sealed class RuntimePerformanceMonitor : MonoBehaviour
     {
         private const int FrameWindowCapacity = 240;
+        // 10 seconds at the highest Quest refresh rate we support (144 Hz)
+        // plus a small margin. Samples are value types and are overwritten in
+        // place, so this does not allocate while the app is running.
+        private const int DetailedWindowCapacity = 1536;
+        private const float DetailedWindowSeconds = 10f;
         private const float SlowSampleIntervalSeconds = 1f;
         public const float AndroidSystemSampleIntervalSeconds = 30f;
         private const long BytesPerKilobyte = 1024L;
         private readonly float[] frameTimeWindow = new float[FrameWindowCapacity];
         private readonly float[] sortedFrameTimeWindow = new float[FrameWindowCapacity];
         private readonly FrameTiming[] frameTimings = new FrameTiming[1];
+        private readonly PerformanceFrameSample[] detailedSamples =
+            new PerformanceFrameSample[DetailedWindowCapacity];
+        private readonly float[] detailedScratch = new float[DetailedWindowCapacity];
         private readonly List<XRDisplaySubsystem> xrDisplays = new List<XRDisplaySubsystem>(2);
         private readonly Queue<TimedFrameSample> activeFrameSamples = new Queue<TimedFrameSample>(2400);
         private readonly Queue<PhysicsDropSample> activePhysicsDrops = new Queue<PhysicsDropSample>(2400);
@@ -55,6 +64,17 @@ namespace QuestMmdPlayer
         private float physicsObservedTotalDroppedSeconds;
         private int physicsObservedDroppedFrameCount;
         private float compositorObservedDroppedFrames;
+        private int physicsLastDroppedFrameCountDelta;
+        private float detailedSamplePreviousCompositorDroppedFrames;
+        private int detailedSampleWriteIndex;
+        private int detailedSampleCount;
+        private PerformanceWindowSummary detailedWindowSummary;
+        private float nextDetailedWindowSummaryAt;
+        private QuestMmdPlayerBootstrap bootstrap;
+        private RuntimeDebugLog diagnostics;
+        private bool physicsLifecycleInitialized;
+        private bool previousPhysicsSuspended;
+        private bool previousInitialPoseSeedPending;
         private Task<AndroidSystemMetricsSample> androidSystemMetricsTask;
 
         private readonly struct TimedFrameSample
@@ -103,6 +123,158 @@ namespace QuestMmdPlayer
             }
         }
 
+        /// <summary>
+        /// One low-overhead frame sample retained for the recent diagnostics
+        /// window. Action is a sanitized local label, never a turn or user id.
+        /// </summary>
+        public readonly struct PerformanceFrameSample
+        {
+            public readonly float Timestamp;
+            public readonly int FrameIndex;
+            public readonly float UnscaledDeltaMilliseconds;
+            public readonly float MmdSamplingMilliseconds;
+            public readonly float MmdSolverMilliseconds;
+            public readonly float MmdBoneAndIkMilliseconds;
+            public readonly float MmdPhysicsMilliseconds;
+            public readonly float MmdFlushMilliseconds;
+            public readonly float MmdSdefMilliseconds;
+            public readonly float HandContactMilliseconds;
+            public readonly int PhysicsSubsteps;
+            public readonly float PhysicsDroppedSeconds;
+            public readonly int PhysicsDroppedFrameCount;
+            public readonly float CompositorDroppedFramesDelta;
+            public readonly float XrCpuMilliseconds;
+            public readonly float XrGpuMilliseconds;
+            public readonly string Action;
+            public readonly bool PhysicsSuspended;
+            public readonly bool InitialPoseSeedPending;
+
+            internal PerformanceFrameSample(
+                float timestamp,
+                int frameIndex,
+                float unscaledDeltaMilliseconds,
+                float mmdSamplingMilliseconds,
+                float mmdSolverMilliseconds,
+                float mmdBoneAndIkMilliseconds,
+                float mmdPhysicsMilliseconds,
+                float mmdFlushMilliseconds,
+                float mmdSdefMilliseconds,
+                float handContactMilliseconds,
+                int physicsSubsteps,
+                float physicsDroppedSeconds,
+                int physicsDroppedFrameCount,
+                float compositorDroppedFramesDelta,
+                float xrCpuMilliseconds,
+                float xrGpuMilliseconds,
+                string action,
+                bool physicsSuspended,
+                bool initialPoseSeedPending)
+            {
+                Timestamp = timestamp;
+                FrameIndex = frameIndex;
+                UnscaledDeltaMilliseconds = unscaledDeltaMilliseconds;
+                MmdSamplingMilliseconds = mmdSamplingMilliseconds;
+                MmdSolverMilliseconds = mmdSolverMilliseconds;
+                MmdBoneAndIkMilliseconds = mmdBoneAndIkMilliseconds;
+                MmdPhysicsMilliseconds = mmdPhysicsMilliseconds;
+                MmdFlushMilliseconds = mmdFlushMilliseconds;
+                MmdSdefMilliseconds = mmdSdefMilliseconds;
+                HandContactMilliseconds = handContactMilliseconds;
+                PhysicsSubsteps = physicsSubsteps;
+                PhysicsDroppedSeconds = physicsDroppedSeconds;
+                PhysicsDroppedFrameCount = physicsDroppedFrameCount;
+                CompositorDroppedFramesDelta = compositorDroppedFramesDelta;
+                XrCpuMilliseconds = xrCpuMilliseconds;
+                XrGpuMilliseconds = xrGpuMilliseconds;
+                Action = action ?? string.Empty;
+                PhysicsSuspended = physicsSuspended;
+                InitialPoseSeedPending = initialPoseSeedPending;
+            }
+        }
+
+        /// <summary>Read-only summary of the last approximately ten active seconds.</summary>
+        public readonly struct PerformanceWindowSummary
+        {
+            public readonly int SampleCount;
+            public readonly float WindowSeconds;
+            public readonly float FrameP95Milliseconds;
+            public readonly float FrameMaxMilliseconds;
+            public readonly float MmdSolverP95Milliseconds;
+            public readonly float MmdPhysicsP95Milliseconds;
+            public readonly float MmdBoneAndIkP95Milliseconds;
+            public readonly float MmdFlushP95Milliseconds;
+            public readonly float MmdSdefP95Milliseconds;
+            public readonly float HandContactP95Milliseconds;
+            public readonly float PhysicsDroppedSeconds;
+            public readonly int PhysicsDroppedFrameCount;
+            public readonly float FirstPhysicsDroppedSeconds;
+            public readonly int LongFrameCount;
+            public readonly float FirstLongFrameOffsetMilliseconds;
+            public readonly float CompositorDroppedFrames;
+            public readonly float FirstCompositorDroppedFrames;
+            public readonly float FirstPhysicsDropOffsetMilliseconds;
+            public readonly float FirstCompositorDropOffsetMilliseconds;
+            public readonly string CurrentAction;
+            public readonly bool PhysicsSuspended;
+            public readonly bool InitialPoseSeedPending;
+
+            internal PerformanceWindowSummary(
+                int sampleCount,
+                float windowSeconds,
+                float frameP95Milliseconds,
+                float frameMaxMilliseconds,
+                float mmdSolverP95Milliseconds,
+                float mmdPhysicsP95Milliseconds,
+                float mmdBoneAndIkP95Milliseconds,
+                float mmdFlushP95Milliseconds,
+                float mmdSdefP95Milliseconds,
+                float handContactP95Milliseconds,
+                float physicsDroppedSeconds,
+                int physicsDroppedFrameCount,
+                float firstPhysicsDroppedSeconds,
+                int longFrameCount,
+                float firstLongFrameOffsetMilliseconds,
+                float compositorDroppedFrames,
+                float firstCompositorDroppedFrames,
+                float firstPhysicsDropOffsetMilliseconds,
+                float firstCompositorDropOffsetMilliseconds,
+                string currentAction,
+                bool physicsSuspended,
+                bool initialPoseSeedPending)
+            {
+                SampleCount = sampleCount;
+                WindowSeconds = windowSeconds;
+                FrameP95Milliseconds = frameP95Milliseconds;
+                FrameMaxMilliseconds = frameMaxMilliseconds;
+                MmdSolverP95Milliseconds = mmdSolverP95Milliseconds;
+                MmdPhysicsP95Milliseconds = mmdPhysicsP95Milliseconds;
+                MmdBoneAndIkP95Milliseconds = mmdBoneAndIkP95Milliseconds;
+                MmdFlushP95Milliseconds = mmdFlushP95Milliseconds;
+                MmdSdefP95Milliseconds = mmdSdefP95Milliseconds;
+                HandContactP95Milliseconds = handContactP95Milliseconds;
+                PhysicsDroppedSeconds = physicsDroppedSeconds;
+                PhysicsDroppedFrameCount = physicsDroppedFrameCount;
+                FirstPhysicsDroppedSeconds = firstPhysicsDroppedSeconds;
+                LongFrameCount = longFrameCount;
+                FirstLongFrameOffsetMilliseconds = firstLongFrameOffsetMilliseconds;
+                CompositorDroppedFrames = compositorDroppedFrames;
+                FirstCompositorDroppedFrames = firstCompositorDroppedFrames;
+                FirstPhysicsDropOffsetMilliseconds = firstPhysicsDropOffsetMilliseconds;
+                FirstCompositorDropOffsetMilliseconds = firstCompositorDropOffsetMilliseconds;
+                CurrentAction = currentAction ?? string.Empty;
+                PhysicsSuspended = physicsSuspended;
+                InitialPoseSeedPending = initialPoseSeedPending;
+            }
+
+            public static PerformanceWindowSummary Empty => new PerformanceWindowSummary(
+                0, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f,
+                0f, 0, 0f, 0, -1f, 0f, 0f, -1f, -1f, string.Empty, false, false);
+        }
+
+        public PerformanceWindowSummary detailedWindow => detailedWindowSummary;
+        public int detailedWindowSampleCount => detailedSampleCount;
+        public const float DetailedWindowDurationSeconds = DetailedWindowSeconds;
+
         public bool detailedSamplingEnabled { get; private set; }
         public bool headsetPresenceAvailable { get; private set; }
         public bool headsetWorn { get; private set; }
@@ -125,6 +297,7 @@ namespace QuestMmdPlayer
         public float xrAppGpuTimeMs { get; private set; }
         public float xrCpuUtilization { get; private set; }
         public float xrGpuUtilization { get; private set; }
+        public bool compositorDroppedFramesAvailable { get; private set; }
         public float compositorDroppedFrames { get; private set; }
         public float compositorDroppedFramesSession { get; private set; }
         public long totalAllocatedMemoryBytes { get; private set; }
@@ -173,6 +346,7 @@ namespace QuestMmdPlayer
 
         private void OnEnable()
         {
+            diagnostics = GetComponent<RuntimeDebugLog>();
             nextSlowSampleAt = 0f;
             nextAndroidSystemSampleAt = 0f;
             currentModelInstanceId = int.MinValue;
@@ -200,10 +374,6 @@ namespace QuestMmdPlayer
             {
                 RecordActiveFrame(Time.unscaledDeltaTime * 1000f, Time.unscaledTime);
             }
-            // Physics drop accounting is deliberately lightweight and always
-            // follows the worn session. Opening the detail panel must not
-            // redefine the session baseline.
-            CapturePhysicsMetrics();
             if (detailedSamplingEnabled)
             {
                 FrameTimingManager.CaptureFrameTimings();
@@ -235,6 +405,20 @@ namespace QuestMmdPlayer
                     // FPS it is measuring, especially with joint-heavy avatars.
                     ScheduleAndroidMetricsCapture();
                 }
+            }
+        }
+
+        // MMDTransformManager, hand tracking, VMD and the conversation
+        // presenter publish their frame metrics from LateUpdate. Sampling
+        // here keeps those values correlated with the rendered frame instead
+        // of reading the previous frame's values from Update.
+        private void LateUpdate()
+        {
+            CapturePhysicsMetrics();
+            CapturePhysicsLifecycle();
+            if (IsActivePerformanceSample())
+            {
+                RecordDetailedPerformanceSample();
             }
         }
 
@@ -428,7 +612,7 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            var bootstrap = GetComponent<QuestMmdPlayerBootstrap>();
+            bootstrap ??= GetComponent<QuestMmdPlayerBootstrap>();
             currentModelLoader = bootstrap == null ? null : bootstrap.ModelLoader;
         }
 
@@ -462,6 +646,61 @@ namespace QuestMmdPlayer
             physicsDroppedFramePercent5s = 0f;
             physicsDroppedFramePercent30s = 0f;
             compositorDroppedFramesSession = 0f;
+            detailedSampleWriteIndex = 0;
+            detailedSampleCount = 0;
+            physicsLastDroppedFrameCountDelta = 0;
+            detailedSamplePreviousCompositorDroppedFrames = Mathf.Max(0f, compositorDroppedFrames);
+            detailedWindowSummary = PerformanceWindowSummary.Empty;
+            nextDetailedWindowSummaryAt = Time.unscaledTime;
+            physicsLifecycleInitialized = false;
+        }
+
+        private void CapturePhysicsLifecycle()
+        {
+            var physics = currentPhysicsManager;
+            if (physics == null)
+            {
+                physicsLifecycleInitialized = false;
+                return;
+            }
+
+            var suspended = physics.simulationSuspended;
+            var initialPosePending = physics.initialPoseSeedPending;
+            if (!physicsLifecycleInitialized)
+            {
+                physicsLifecycleInitialized = true;
+                previousPhysicsSuspended = suspended;
+                previousInitialPoseSeedPending = initialPosePending;
+                diagnostics?.RecordStage(
+                    "mmd_physics",
+                    suspended ? "processing" : "ready",
+                    suspended ? "simulation_suspended" : "simulation_active",
+                    queueDepth: physics.rigidBodies == null ? 0 : physics.rigidBodies.Length,
+                    eventCount: physics.joints == null ? 0 : physics.joints.Length);
+                diagnostics?.RecordStage(
+                    "mmd_physics",
+                    initialPosePending ? "processing" : "completed",
+                    initialPosePending ? "initial_pose_pending" : "initial_pose_seeded");
+                return;
+            }
+
+            if (suspended != previousPhysicsSuspended)
+            {
+                previousPhysicsSuspended = suspended;
+                diagnostics?.RecordStage(
+                    "mmd_physics",
+                    suspended ? "processing" : "ready",
+                    suspended ? "simulation_suspended" : "simulation_resumed");
+            }
+
+            if (initialPosePending != previousInitialPoseSeedPending)
+            {
+                previousInitialPoseSeedPending = initialPosePending;
+                diagnostics?.RecordStage(
+                    "mmd_physics",
+                    initialPosePending ? "processing" : "completed",
+                    initialPosePending ? "initial_pose_pending" : "initial_pose_seeded");
+            }
         }
 
         private void PruneFrameSamples(float minimumTime)
@@ -488,6 +727,223 @@ namespace QuestMmdPlayer
             return count == 0 || totalMilliseconds <= 0f
                 ? 0f
                 : count * 1000f / totalMilliseconds;
+        }
+
+        private void RecordDetailedPerformanceSample()
+        {
+            var now = Time.unscaledTime;
+            var physics = currentPhysicsManager;
+            var compositorDelta = ResolveCounterDelta(
+                detailedSamplePreviousCompositorDroppedFrames,
+                compositorDroppedFrames);
+            detailedSamplePreviousCompositorDroppedFrames = Mathf.Max(0f, compositorDroppedFrames);
+            var sample = new PerformanceFrameSample(
+                now,
+                Time.frameCount,
+                Mathf.Max(0f, Time.unscaledDeltaTime * 1000f),
+                Mathf.Max(0f, mmdSamplingMilliseconds),
+                Mathf.Max(0f, mmdSolverMilliseconds),
+                Mathf.Max(0f, mmdBoneAndIkMilliseconds),
+                Mathf.Max(0f, mmdPhysicsMilliseconds),
+                Mathf.Max(0f, mmdFlushMilliseconds),
+                Mathf.Max(0f, mmdSdefMilliseconds),
+                Mathf.Max(0f, handContactMilliseconds),
+                Mathf.Max(0, physicsLastSubsteps),
+                Mathf.Max(0f, physicsLastDroppedSeconds),
+                Mathf.Max(0, physicsLastDroppedFrameCountDelta),
+                Mathf.Max(0f, compositorDelta),
+                xrPerformanceMetricsAvailable ? Mathf.Max(0f, xrAppCpuTimeMs) : 0f,
+                xrPerformanceMetricsAvailable ? Mathf.Max(0f, xrAppGpuTimeMs) : 0f,
+                ResolveCurrentActionLabel(),
+                physics != null && physics.simulationSuspended,
+                physics != null && physics.initialPoseSeedPending);
+            detailedSamples[detailedSampleWriteIndex] = sample;
+            detailedSampleWriteIndex = (detailedSampleWriteIndex + 1) % detailedSamples.Length;
+            detailedSampleCount = Mathf.Min(detailedSampleCount + 1, detailedSamples.Length);
+            if (now >= nextDetailedWindowSummaryAt)
+            {
+                UpdateDetailedWindowSummary(now);
+                nextDetailedWindowSummaryAt = now + .5f;
+            }
+        }
+
+        private string ResolveCurrentActionLabel()
+        {
+            bootstrap ??= GetComponent<QuestMmdPlayerBootstrap>();
+            var owner = bootstrap;
+            var vmd = owner == null ? null : owner.VmdActions;
+            if (vmd != null && (vmd.IsLoading || vmd.IsPlaying || vmd.IsHoldingEndPose || vmd.IsBlendingOut) &&
+                !string.IsNullOrEmpty(vmd.CurrentActionId))
+            {
+                return vmd.CurrentActionId;
+            }
+            var avatar = owner == null ? null : owner.Avatar;
+            return avatar == null || string.IsNullOrEmpty(avatar.CurrentAction)
+                ? "none"
+                : avatar.CurrentAction;
+        }
+
+        private void UpdateDetailedWindowSummary(float now)
+        {
+            if (detailedSampleCount <= 0)
+            {
+                detailedWindowSummary = PerformanceWindowSummary.Empty;
+                return;
+            }
+
+            var cutoff = now - DetailedWindowSeconds;
+            var validCount = 0;
+            var firstTimestamp = now;
+            var lastTimestamp = now;
+            var physicsDroppedSeconds = 0f;
+            var physicsDroppedFrames = 0;
+            var firstPhysicsDrop = 0f;
+            var longFrameCount = 0;
+            var firstLongFrameOffset = -1f;
+            var compositorDropped = 0f;
+            var firstCompositorDrop = 0f;
+            var firstPhysicsDropOffset = -1f;
+            var firstCompositorDropOffset = -1f;
+            var currentAction = "none";
+            var physicsSuspended = false;
+            var initialPoseSeedPending = false;
+            for (var offset = detailedSampleCount - 1; offset >= 0; offset--)
+            {
+                var index = (detailedSampleWriteIndex - 1 - offset + detailedSamples.Length) % detailedSamples.Length;
+                var sample = detailedSamples[index];
+                if (sample.Timestamp < cutoff)
+                {
+                    continue;
+                }
+                if (validCount == 0)
+                {
+                    firstTimestamp = sample.Timestamp;
+                }
+                lastTimestamp = sample.Timestamp;
+                validCount++;
+                physicsDroppedSeconds += sample.PhysicsDroppedSeconds;
+                physicsDroppedFrames += sample.PhysicsDroppedFrameCount;
+                if (firstPhysicsDropOffset < 0f &&
+                    (sample.PhysicsDroppedSeconds > 0f || sample.PhysicsDroppedFrameCount > 0))
+                {
+                    firstPhysicsDrop = sample.PhysicsDroppedSeconds;
+                    firstPhysicsDropOffset = Mathf.Max(0f, (sample.Timestamp - firstTimestamp) * 1000f);
+                }
+                if (sample.UnscaledDeltaMilliseconds >= 1000f / 30f)
+                {
+                    longFrameCount++;
+                    if (firstLongFrameOffset < 0f)
+                    {
+                        firstLongFrameOffset = Mathf.Max(0f, (sample.Timestamp - firstTimestamp) * 1000f);
+                    }
+                }
+                compositorDropped += sample.CompositorDroppedFramesDelta;
+                if (firstCompositorDrop <= 0f && sample.CompositorDroppedFramesDelta > 0f)
+                {
+                    firstCompositorDrop = sample.CompositorDroppedFramesDelta;
+                    firstCompositorDropOffset = Mathf.Max(0f, (sample.Timestamp - firstTimestamp) * 1000f);
+                }
+                currentAction = sample.Action;
+                physicsSuspended = sample.PhysicsSuspended;
+                initialPoseSeedPending = sample.InitialPoseSeedPending;
+            }
+
+            if (validCount <= 0)
+            {
+                detailedWindowSummary = PerformanceWindowSummary.Empty;
+                return;
+            }
+
+            detailedWindowSummary = new PerformanceWindowSummary(
+                validCount,
+                Mathf.Max(0f, lastTimestamp - firstTimestamp),
+                CalculateDetailedPercentile(cutoff, PerformanceMetric.Frame, .95f),
+                CalculateDetailedMaximum(cutoff, PerformanceMetric.Frame),
+                CalculateDetailedPercentile(cutoff, PerformanceMetric.MmdSolver, .95f),
+                CalculateDetailedPercentile(cutoff, PerformanceMetric.MmdPhysics, .95f),
+                CalculateDetailedPercentile(cutoff, PerformanceMetric.MmdBoneAndIk, .95f),
+                CalculateDetailedPercentile(cutoff, PerformanceMetric.MmdFlush, .95f),
+                CalculateDetailedPercentile(cutoff, PerformanceMetric.MmdSdef, .95f),
+                CalculateDetailedPercentile(cutoff, PerformanceMetric.HandContact, .95f),
+                physicsDroppedSeconds,
+                physicsDroppedFrames,
+                firstPhysicsDrop,
+                longFrameCount,
+                firstLongFrameOffset,
+                compositorDropped,
+                firstCompositorDrop,
+                firstPhysicsDropOffset,
+                firstCompositorDropOffset,
+                currentAction,
+                physicsSuspended,
+                initialPoseSeedPending);
+        }
+
+        private enum PerformanceMetric
+        {
+            Frame,
+            MmdSolver,
+            MmdPhysics,
+            MmdBoneAndIk,
+            MmdFlush,
+            MmdSdef,
+            HandContact
+        }
+
+        private float CalculateDetailedPercentile(float cutoff, PerformanceMetric metric, float percentile)
+        {
+            var count = 0;
+            for (var offset = 0; offset < detailedSampleCount; offset++)
+            {
+                var index = (detailedSampleWriteIndex - 1 - offset + detailedSamples.Length) % detailedSamples.Length;
+                var sample = detailedSamples[index];
+                if (sample.Timestamp < cutoff)
+                {
+                    continue;
+                }
+                var value = GetMetricValue(sample, metric);
+                if (!IsFinitePositive(value))
+                {
+                    continue;
+                }
+                detailedScratch[count++] = value;
+            }
+            if (count == 0)
+            {
+                return 0f;
+            }
+            Array.Sort(detailedScratch, 0, count);
+            return Percentile(detailedScratch, count, percentile);
+        }
+
+        private float CalculateDetailedMaximum(float cutoff, PerformanceMetric metric)
+        {
+            var maximum = 0f;
+            for (var offset = 0; offset < detailedSampleCount; offset++)
+            {
+                var index = (detailedSampleWriteIndex - 1 - offset + detailedSamples.Length) % detailedSamples.Length;
+                var sample = detailedSamples[index];
+                if (sample.Timestamp < cutoff)
+                {
+                    continue;
+                }
+                maximum = Mathf.Max(maximum, GetMetricValue(sample, metric));
+            }
+            return maximum;
+        }
+
+        private static float GetMetricValue(PerformanceFrameSample sample, PerformanceMetric metric)
+        {
+            switch (metric)
+            {
+                case PerformanceMetric.MmdSolver: return sample.MmdSolverMilliseconds;
+                case PerformanceMetric.MmdPhysics: return sample.MmdPhysicsMilliseconds;
+                case PerformanceMetric.MmdBoneAndIk: return sample.MmdBoneAndIkMilliseconds;
+                case PerformanceMetric.MmdFlush: return sample.MmdFlushMilliseconds;
+                case PerformanceMetric.MmdSdef: return sample.MmdSdefMilliseconds;
+                case PerformanceMetric.HandContact: return sample.HandContactMilliseconds;
+                default: return sample.UnscaledDeltaMilliseconds;
+            }
         }
 
         private void UpdateRecentPhysicsRates(float now)
@@ -597,6 +1053,7 @@ namespace QuestMmdPlayer
         private void CaptureXrPerformanceMetrics()
         {
             xrPerformanceMetricsAvailable = false;
+            compositorDroppedFramesAvailable = false;
             xrDisplays.Clear();
             SubsystemManager.GetInstances(xrDisplays);
             for (var index = 0; index < xrDisplays.Count; index++)
@@ -618,6 +1075,7 @@ namespace QuestMmdPlayer
                 xrGpuUtilization = hasGpuUtil && gpuUtil >= 0f ? gpuUtil : 0f;
                 if (hasDrops && drops >= 0f)
                 {
+                    compositorDroppedFramesAvailable = true;
                     var droppedDelta = ResolveCounterDelta(compositorObservedDroppedFrames, drops);
                     compositorObservedDroppedFrames = drops;
                     compositorDroppedFrames = drops;
@@ -927,6 +1385,7 @@ namespace QuestMmdPlayer
                 mmdFlushMilliseconds = 0f;
                 mmdSdefMilliseconds = 0f;
                 handContactMilliseconds = 0f;
+                physicsLastDroppedFrameCountDelta = 0;
                 return;
             }
 
@@ -942,6 +1401,7 @@ namespace QuestMmdPlayer
             var droppedFrameDelta = Mathf.Max(
                 0,
                 physicsDroppedFrameCount - physicsObservedDroppedFrameCount);
+            physicsLastDroppedFrameCountDelta = droppedFrameDelta;
             physicsObservedTotalDroppedSeconds = physicsTotalDroppedSeconds;
             physicsObservedDroppedFrameCount = physicsDroppedFrameCount;
             var transformManager = currentTransformManager;

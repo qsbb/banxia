@@ -53,6 +53,18 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void MmdPhysicsLifecycleUsesLocalizedStageAndCodes()
+        {
+            diagnostics.RecordStage("mmd_physics", "processing", "vmd_physics_arbitration_started");
+            diagnostics.RecordStage("mmd_physics", "completed", "physics_resume_first_frame", elapsedMs: 1);
+
+            var timeline = diagnostics.GetRecentTimelineText(5);
+            Assert.That(timeline, Does.Contain("[MMD物理]"));
+            Assert.That(timeline, Does.Contain("动作接管物理模拟"));
+            Assert.That(timeline, Does.Contain("释放物理后的首帧"));
+        }
+
+        [Test]
         public void ClearRemovesTimelineAndRootCause()
         {
             diagnostics.RecordStage("reply", "failed", "llm_failed");

@@ -192,6 +192,17 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void PhysicsArbitrationLifecycleIsExplicitlyInstrumented()
+        {
+            var source = File.ReadAllText(Path.Combine(
+                Application.dataPath,
+                "Scripts/MMD/VmdActionLibrary.cs"));
+            StringAssert.Contains("vmd_physics_arbitration_started", source);
+            StringAssert.Contains("vmd_physics_arbitration_restored", source);
+            StringAssert.Contains("physics_resume_first_frame", source);
+        }
+
+        [Test]
         public void ReturnToIdleBlendUsesSmoothBoundedProgress()
         {
             Assert.That(VmdActionLibrary.SmoothReturnProgress(0f), Is.Zero);

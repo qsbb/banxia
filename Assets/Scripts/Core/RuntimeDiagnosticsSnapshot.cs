@@ -530,6 +530,7 @@ namespace QuestMmdPlayer
         public float XrAppGpuTimeMs { get; }
         public float XrCpuUtilization { get; }
         public float XrGpuUtilization { get; }
+        public bool CompositorDroppedFramesAvailable { get; }
         public float CompositorDroppedFramesSession { get; }
         public long TotalAllocatedMemoryBytes { get; }
         public long TotalReservedMemoryBytes { get; }
@@ -572,6 +573,28 @@ namespace QuestMmdPlayer
         public float MmdFlushMilliseconds { get; }
         public float MmdSdefMilliseconds { get; }
         public float HandContactMilliseconds { get; }
+        public int DetailedWindowSampleCount { get; }
+        public float DetailedWindowSeconds { get; }
+        public float DetailedWindowFrameP95Ms { get; }
+        public float DetailedWindowFrameMaxMs { get; }
+        public float DetailedWindowMmdSolverP95Ms { get; }
+        public float DetailedWindowMmdPhysicsP95Ms { get; }
+        public float DetailedWindowMmdBoneAndIkP95Ms { get; }
+        public float DetailedWindowMmdFlushP95Ms { get; }
+        public float DetailedWindowMmdSdefP95Ms { get; }
+        public float DetailedWindowHandContactP95Ms { get; }
+        public float DetailedWindowPhysicsDroppedSeconds { get; }
+        public int DetailedWindowPhysicsDroppedFrameCount { get; }
+        public float DetailedWindowFirstPhysicsDroppedSeconds { get; }
+        public int DetailedWindowLongFrameCount { get; }
+        public float DetailedWindowFirstLongFrameOffsetMs { get; }
+        public float DetailedWindowCompositorDroppedFrames { get; }
+        public float DetailedWindowFirstCompositorDroppedFrames { get; }
+        public float DetailedWindowFirstPhysicsDropOffsetMs { get; }
+        public float DetailedWindowFirstCompositorDropOffsetMs { get; }
+        public bool DetailedWindowActionActive { get; }
+        public bool DetailedWindowPhysicsSuspended { get; }
+        public bool DetailedWindowInitialPoseSeedPending { get; }
 
         internal PerformanceDiagnostics(RuntimePerformanceMonitor monitor)
         {
@@ -598,6 +621,7 @@ namespace QuestMmdPlayer
             XrAppGpuTimeMs = monitor == null ? 0f : Mathf.Max(0f, monitor.xrAppGpuTimeMs);
             XrCpuUtilization = monitor == null ? 0f : Mathf.Max(0f, monitor.xrCpuUtilization);
             XrGpuUtilization = monitor == null ? 0f : Mathf.Max(0f, monitor.xrGpuUtilization);
+            CompositorDroppedFramesAvailable = monitor != null && monitor.compositorDroppedFramesAvailable;
             CompositorDroppedFramesSession = monitor == null
                 ? 0f
                 : Mathf.Max(0f, monitor.compositorDroppedFramesSession);
@@ -656,6 +680,33 @@ namespace QuestMmdPlayer
             MmdFlushMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdFlushMilliseconds);
             MmdSdefMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.mmdSdefMilliseconds);
             HandContactMilliseconds = monitor == null ? 0f : Mathf.Max(0f, monitor.handContactMilliseconds);
+            var window = monitor == null
+                ? RuntimePerformanceMonitor.PerformanceWindowSummary.Empty
+                : monitor.detailedWindow;
+            DetailedWindowSampleCount = Mathf.Max(0, window.SampleCount);
+            DetailedWindowSeconds = Mathf.Max(0f, window.WindowSeconds);
+            DetailedWindowFrameP95Ms = Mathf.Max(0f, window.FrameP95Milliseconds);
+            DetailedWindowFrameMaxMs = Mathf.Max(0f, window.FrameMaxMilliseconds);
+            DetailedWindowMmdSolverP95Ms = Mathf.Max(0f, window.MmdSolverP95Milliseconds);
+            DetailedWindowMmdPhysicsP95Ms = Mathf.Max(0f, window.MmdPhysicsP95Milliseconds);
+            DetailedWindowMmdBoneAndIkP95Ms = Mathf.Max(0f, window.MmdBoneAndIkP95Milliseconds);
+            DetailedWindowMmdFlushP95Ms = Mathf.Max(0f, window.MmdFlushP95Milliseconds);
+            DetailedWindowMmdSdefP95Ms = Mathf.Max(0f, window.MmdSdefP95Milliseconds);
+            DetailedWindowHandContactP95Ms = Mathf.Max(0f, window.HandContactP95Milliseconds);
+            DetailedWindowPhysicsDroppedSeconds = Mathf.Max(0f, window.PhysicsDroppedSeconds);
+            DetailedWindowPhysicsDroppedFrameCount = Mathf.Max(0, window.PhysicsDroppedFrameCount);
+            DetailedWindowFirstPhysicsDroppedSeconds = Mathf.Max(0f, window.FirstPhysicsDroppedSeconds);
+            DetailedWindowLongFrameCount = Mathf.Max(0, window.LongFrameCount);
+            DetailedWindowFirstLongFrameOffsetMs = window.FirstLongFrameOffsetMilliseconds;
+            DetailedWindowCompositorDroppedFrames = Mathf.Max(0f, window.CompositorDroppedFrames);
+            DetailedWindowFirstCompositorDroppedFrames = Mathf.Max(0f, window.FirstCompositorDroppedFrames);
+            DetailedWindowFirstPhysicsDropOffsetMs = window.FirstPhysicsDropOffsetMilliseconds;
+            DetailedWindowFirstCompositorDropOffsetMs = window.FirstCompositorDropOffsetMilliseconds;
+            DetailedWindowActionActive = !string.IsNullOrWhiteSpace(window.CurrentAction) &&
+                !string.Equals(window.CurrentAction, "none", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(window.CurrentAction, "idle", StringComparison.OrdinalIgnoreCase);
+            DetailedWindowPhysicsSuspended = window.PhysicsSuspended;
+            DetailedWindowInitialPoseSeedPending = window.InitialPoseSeedPending;
         }
     }
 

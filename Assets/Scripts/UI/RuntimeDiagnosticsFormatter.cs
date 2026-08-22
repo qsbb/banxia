@@ -172,6 +172,70 @@ namespace QuestMmdPlayer
                 .Append(OptionalMilliseconds(performance.FrameSampleCount > 0, performance.FrameTimeP95Ms))
                 .Append(" · 最大 ")
                 .Append(OptionalMilliseconds(performance.FrameSampleCount > 0, performance.FrameTimeMaxMs));
+            if (performance.DetailedWindowSampleCount > 0)
+            {
+                builder.Append("\n最近10秒窗口：")
+                    .Append(performance.DetailedWindowSeconds.ToString("F1"))
+                    .Append("s · ")
+                    .Append(performance.DetailedWindowSampleCount)
+                    .Append("帧 · 帧P95 ")
+                    .Append(performance.DetailedWindowFrameP95Ms.ToString("F2"))
+                    .Append("ms · 最大 ")
+                    .Append(performance.DetailedWindowFrameMaxMs.ToString("F2"))
+                    .Append("ms");
+                builder.Append("\n窗口丢帧：合成器 ");
+                if (performance.CompositorDroppedFramesAvailable)
+                {
+                    builder.Append('+')
+                        .Append(performance.DetailedWindowCompositorDroppedFrames.ToString("F0"))
+                        .Append("（首次 +")
+                        .Append(performance.DetailedWindowFirstCompositorDroppedFrames.ToString("F0"))
+                        .Append(" @")
+                        .Append(OptionalMilliseconds(
+                            performance.DetailedWindowFirstCompositorDropOffsetMs >= 0f,
+                            performance.DetailedWindowFirstCompositorDropOffsetMs))
+                        .Append(')');
+                }
+                else
+                {
+                    builder.Append("不可用");
+                }
+                builder.Append(" · 物理 ")
+                    .Append(performance.DetailedWindowPhysicsDroppedSeconds.ToString("F3"))
+                    .Append("s/")
+                    .Append(performance.DetailedWindowPhysicsDroppedFrameCount)
+                    .Append("帧（首次 ")
+                    .Append(performance.DetailedWindowFirstPhysicsDropOffsetMs >= 0f
+                        ? performance.DetailedWindowFirstPhysicsDropOffsetMs.ToString("F1")
+                        : "-")
+                    .Append("ms，丢弃量 ")
+                    .Append((performance.DetailedWindowFirstPhysicsDroppedSeconds * 1000f).ToString("F1"))
+                    .Append("ms）");
+                builder.Append("\n窗口长帧：")
+                    .Append(performance.DetailedWindowLongFrameCount)
+                    .Append(" 帧");
+                if (performance.DetailedWindowFirstLongFrameOffsetMs >= 0f)
+                {
+                    builder.Append(" · 首次 ")
+                        .Append(performance.DetailedWindowFirstLongFrameOffsetMs.ToString("F1"))
+                        .Append("ms");
+                }
+                builder.Append("\n窗口阶段P95：骨骼/IK ")
+                    .Append(performance.DetailedWindowMmdBoneAndIkP95Ms.ToString("F2"))
+                    .Append(" · Bullet ")
+                    .Append(performance.DetailedWindowMmdPhysicsP95Ms.ToString("F2"))
+                    .Append(" · 回写 ")
+                    .Append(performance.DetailedWindowMmdFlushP95Ms.ToString("F2"))
+                    .Append(" · SDEF ")
+                    .Append(performance.DetailedWindowMmdSdefP95Ms.ToString("F2"))
+                    .Append("ms");
+                builder.Append("\n窗口状态：动作 ")
+                    .Append(performance.DetailedWindowActionActive ? "执行中" : "无")
+                    .Append(" · 物理 ")
+                    .Append(performance.DetailedWindowPhysicsSuspended ? "暂停" : "运行")
+                    .Append(" · 初始姿态 ")
+                    .Append(performance.DetailedWindowInitialPoseSeedPending ? "待同步" : "已同步");
+            }
             builder.Append("\nCPU/GPU 帧时：")
                 .Append(OptionalMilliseconds(performance.CpuFrameTimeAvailable, performance.CpuFrameTimeMs))
                 .Append(" / ")
@@ -188,7 +252,9 @@ namespace QuestMmdPlayer
                 builder.Append("\nOpenXR 利用率 CPU/GPU：")
                     .Append(performance.XrCpuUtilization.ToString("F0")).Append("% / ")
                     .Append(performance.XrGpuUtilization.ToString("F0")).Append("% · 合成器丢帧 ")
-                    .Append(performance.CompositorDroppedFramesSession.ToString("F0"));
+                    .Append(performance.CompositorDroppedFramesAvailable
+                        ? performance.CompositorDroppedFramesSession.ToString("F0")
+                        : "不可用");
             }
 
             if (!performance.DetailedSamplingEnabled)
