@@ -62,11 +62,28 @@ namespace QuestMmdPlayer.Tests
             Assert.That(AvatarConversationPresenter.ShouldUseConversationUserGaze(
                 ConversationState.Speaking, false, true), Is.True);
             Assert.That(AvatarConversationPresenter.ShouldUseConversationUserGaze(
-                ConversationState.Speaking, true, true), Is.False);
+                ConversationState.Speaking, true, true), Is.True);
             Assert.That(AvatarConversationPresenter.ResolveGazeMode(
                 ConversationState.Speaking, false, true, "none"), Is.EqualTo("user"));
             Assert.That(AvatarConversationPresenter.ResolveGazeMode(
                 ConversationState.Speaking, false, true, "away"), Is.EqualTo("user"));
+        }
+
+        [TestCase(ConversationState.Listening, .28f)]
+        [TestCase(ConversationState.Thinking, .28f)]
+        [TestCase(ConversationState.Speaking, .28f)]
+        [TestCase(ConversationState.Idle, 0f)]
+        [TestCase(ConversationState.Error, 0f)]
+        public void PhysicalContactKeepsOnlyReducedConversationGaze(
+            ConversationState state,
+            float expectedWeight)
+        {
+            Assert.That(
+                AvatarConversationPresenter.GetContactGazeWeight(state, true),
+                Is.EqualTo(expectedWeight).Within(.001f));
+            Assert.That(
+                AvatarConversationPresenter.GetContactGazeWeight(state, false),
+                Is.EqualTo(0f));
         }
 
         [Test]
@@ -100,6 +117,9 @@ namespace QuestMmdPlayer.Tests
             Assert.That(AvatarConversationPresenter.GetActionGazeWeight("talk"), Is.EqualTo(1f));
             Assert.That(
                 AvatarConversationPresenter.GetActionGazeWeight("vmd", ConversationState.Speaking),
+                Is.EqualTo(.65f));
+            Assert.That(
+                AvatarConversationPresenter.GetActionGazeWeight("dance", ConversationState.Speaking),
                 Is.EqualTo(.65f));
             Assert.That(
                 AvatarConversationPresenter.GetActionGazeWeight("nod", ConversationState.Thinking),

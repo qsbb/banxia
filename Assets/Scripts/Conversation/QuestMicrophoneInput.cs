@@ -18,7 +18,13 @@ namespace QuestMmdPlayer
         // drained over subsequent frames in the same PCM order.
         private const int CaptureBudgetMillisecondsPerUpdate = 40;
         private const int MaxEncodedChunksPerUpdate = 1;
-        private const int StopCaptureBudgetMilliseconds = 120;
+        private const int StopDrainChunksPerUpdate = 2;
+        // Stopping a turn runs on Unity's main thread. Keep its final
+        // microphone read within the same per-frame budget as normal capture;
+        // a delayed XR frame must not synchronously pull a large ring-buffer
+        // window before the bounded drain can continue on later frames.
+        private const int StopCaptureBudgetMilliseconds = CaptureBudgetMillisecondsPerUpdate;
+        private const float StopCaptureTailTimeoutSeconds = .75f;
         private const string AlwaysListeningPreferenceKey = "banxia.voice.always_listening";
 
         [SerializeField, Range(40, 100)] private int chunkMilliseconds = 80;
@@ -67,6 +73,16 @@ namespace QuestMmdPlayer
         private float[] interleavedCaptureBuffer = System.Array.Empty<float>();
         private float nextCapturePressureLogAt;
         private float nextSlowCaptureReadLogAt;
+        private float nextSlowCaptureUpdateLogAt;
+        private float nextCaptureBacklogLogAt;
+        private int peakPendingCaptureFrames;
+        private bool finishingCapture;
+        private int finishingCaptureFramesRemaining;
+        private float finishingCaptureStartedAt;
+        private float finishingCaptureLastProgressAt;
+        private bool stopHadDetectedSpeech;
+        private int stopTrailingSilenceMs;
+        private float stopCaptureSeconds;
         private bool automaticBargeInGuardLogged;
         private bool automaticCaptureDiscardLogged;
 
@@ -81,7 +97,8 @@ namespace QuestMmdPlayer
         public bool SpeechDetected => detectedSpeech;
         public float LastTurnCaptureSeconds { get; private set; }
         public string DiagnosticStatus => $"{Status} | level {InputLevel:F3}/{ActivationThreshold:F3} | " +
-            $"chunks {LastTurnChunkCount} | pcm {LastTurnPcmBytes} B | capture {LastTurnCaptureSeconds:F2}s";
+            $"chunks {LastTurnChunkCount} | pcm {LastTurnPcmBytes} B | capture {LastTurnCaptureSeconds:F2}s" +
+            $" | pending {pendingMono.Count}f/{peakPendingCaptureFrames}f";
         public string Status { get; private set; } = "Microphone ready";
         public string ShortStatus => IsRecording ? "REC" : IsMonitoring && alwaysListening ? "LIVE" :
             Status.StartsWith("Microphone ready") ? "READY" : "OFF";
@@ -146,9 +163,46 @@ namespace QuestMmdPlayer
                 nextMonitorAttemptAt = Time.unscaledTime + 2f;
                 StartMonitoring();
             }
-            if (IsMonitoring)
+            if (IsMonitoring && !finishingCapture)
             {
                 CaptureAvailableFrames();
+            }
+            if (finishingCapture)
+            {
+                if (finishingCaptureFramesRemaining > 0)
+                {
+                    var captured = CaptureAvailableFrames(
+                        Mathf.Min(
+                            finishingCaptureFramesRemaining,
+                            Pcm16CaptureUtility.FramesForDuration(
+                                sourceSampleRate,
+                                CaptureBudgetMillisecondsPerUpdate)),
+                        MaxEncodedChunksPerUpdate);
+                    if (captured > 0)
+                    {
+                        finishingCaptureLastProgressAt = Time.unscaledTime;
+                        finishingCaptureFramesRemaining = Mathf.Max(
+                            0,
+                            finishingCaptureFramesRemaining - captured);
+                    }
+                    else if (Time.unscaledTime - finishingCaptureLastProgressAt >=
+                        StopCaptureTailTimeoutSeconds)
+                    {
+                        diagnostics?.RecordStage(
+                            "audio_capture",
+                            "limited",
+                            "capture_tail_timeout",
+                            elapsedMs: Mathf.RoundToInt(
+                                Mathf.Max(0f, Time.unscaledTime - finishingCaptureStartedAt) * 1000f),
+                            eventCount: finishingCaptureFramesRemaining);
+                        Debug.LogWarning(
+                            $"[VoiceInput] Capture tail timed out: remaining_frames={finishingCaptureFramesRemaining}",
+                            this);
+                        finishingCaptureFramesRemaining = 0;
+                    }
+                }
+                TryFinishPendingCapture();
+                return;
             }
             if (!IsRecording)
             {
@@ -353,6 +407,7 @@ namespace QuestMmdPlayer
 
             pendingMono.Clear();
             preRollMono.Clear();
+            finishingCaptureFramesRemaining = 0;
             activityGate?.ResetActivation();
             return BeginActiveVoiceTurn(false);
         }
@@ -386,6 +441,8 @@ namespace QuestMmdPlayer
             captureReadCount = 0;
             captureReadTotalMs = 0;
             captureReadMaxMs = 0;
+            peakPendingCaptureFrames = pendingMono.Count;
+            nextCaptureBacklogLogAt = 0f;
             Status = "Recording voice";
             RecordMicrophoneStage("processing", includePreRoll ? "speech_detected" : "manual_capture");
             Debug.Log(includePreRoll
@@ -396,31 +453,92 @@ namespace QuestMmdPlayer
 
         public void StopAndSend()
         {
-            if (!IsRecording)
+            if (!IsRecording || finishingCapture)
             {
                 return;
             }
 
-            CaptureAvailableFrames(
+            var stopAvailableFrames = GetAvailableCaptureFrames();
+            var captured = CaptureAvailableFrames(
                 Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, StopCaptureBudgetMilliseconds),
-                MaxEncodedChunksPerUpdate * 2);
+                MaxEncodedChunksPerUpdate);
             if (!IsRecording)
             {
                 return;
             }
-            if (!FlushRemainder())
+            finishingCaptureFramesRemaining = Mathf.Max(0, stopAvailableFrames - captured);
+            finishingCaptureStartedAt = Time.unscaledTime;
+            finishingCaptureLastProgressAt = finishingCaptureStartedAt;
+            stopCaptureSeconds = Mathf.Max(0f, Time.unscaledTime - recordingStartedAt);
+            stopHadDetectedSpeech = detectedSpeech;
+            stopTrailingSilenceMs = Mathf.RoundToInt(
+                Mathf.Max(0f, Time.unscaledTime - lastVoiceAt) * 1000f);
+            finishingCapture = true;
+            Status = "Finishing voice capture";
+            TryFinishPendingCapture();
+        }
+
+        private void TryFinishPendingCapture()
+        {
+            if (!finishingCapture || !IsRecording)
             {
-                CancelRecording();
-                Status = "Voice upload queue full";
-                RecordMicrophoneStage("failed", "audio_upload_backpressure");
-                Debug.LogWarning("[VoiceInput] PCM upload queue rejected a chunk.", this);
                 return;
             }
 
-            LastTurnCaptureSeconds = Mathf.Max(0f, Time.unscaledTime - recordingStartedAt);
-            var hadDetectedSpeech = detectedSpeech;
-            var trailingSilenceMs = Mathf.RoundToInt(
-                Mathf.Max(0f, Time.unscaledTime - lastVoiceAt) * 1000f);
+            var sourceFrames = Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, chunkMilliseconds);
+            var minimumFrames = Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, 40);
+            var chunksProcessed = 0;
+            while (sourceFrames > 0 && pendingMono.Count >= sourceFrames &&
+                chunksProcessed < StopDrainChunksPerUpdate)
+            {
+                if (!SendSourceFrames(sourceFrames))
+                {
+                    CancelRecording();
+                    Status = "Voice upload queue full";
+                    RecordMicrophoneStage("failed", "audio_upload_backpressure");
+                    Debug.LogWarning("[VoiceInput] PCM upload queue rejected a chunk.", this);
+                    return;
+                }
+                chunksProcessed++;
+            }
+
+            // The stop snapshot may still contain samples that have not yet
+            // been read from the microphone ring. Wait for those bounded reads
+            // before deciding whether a final partial chunk can be sent.
+            if (finishingCaptureFramesRemaining > 0)
+            {
+                return;
+            }
+
+            // A final partial chunk is bounded below one normal chunk, so it
+            // cannot turn a delayed microphone frame into an unbounded main-
+            // thread resample. Anything shorter than 40 ms remains discarded
+            // as before.
+            if (sourceFrames > 0 && pendingMono.Count >= minimumFrames &&
+                pendingMono.Count < sourceFrames)
+            {
+                if (!SendSourceFrames(pendingMono.Count))
+                {
+                    CancelRecording();
+                    Status = "Voice upload queue full";
+                    RecordMicrophoneStage("failed", "audio_upload_backpressure");
+                    Debug.LogWarning("[VoiceInput] PCM upload queue rejected a partial chunk.", this);
+                    return;
+                }
+            }
+
+            if (sourceFrames > 0 && pendingMono.Count >= sourceFrames)
+            {
+                // Leave the remainder for the next Unity frame. This is the
+                // important bound for a low-cadence XR session.
+                return;
+            }
+
+            pendingMono.Clear();
+            finishingCapture = false;
+            LastTurnCaptureSeconds = stopCaptureSeconds;
+            var hadDetectedSpeech = stopHadDetectedSpeech;
+            var trailingSilenceMs = stopTrailingSilenceMs;
             var accepted = conversation != null && conversation.EndVoiceInput();
             ResetActiveVoiceCapture();
             if (accepted)
@@ -499,6 +617,10 @@ namespace QuestMmdPlayer
 
         private void ResetActiveVoiceCapture()
         {
+            finishingCapture = false;
+            finishingCaptureFramesRemaining = 0;
+            finishingCaptureStartedAt = 0f;
+            finishingCaptureLastProgressAt = 0f;
             IsRecording = false;
             detectedSpeech = false;
             activityGate?.ResetActivation();
@@ -511,26 +633,64 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void CaptureAvailableFrames(int frameBudget = -1, int chunkBudget = -1)
+        private int CaptureAvailableFrames(int frameBudget = -1, int chunkBudget = -1)
         {
             if (!IsMonitoring || recordingClip == null)
             {
-                return;
+                return 0;
+            }
+
+            var captureStartedAt = Stopwatch.GetTimestamp();
+            var available = GetAvailableCaptureFrames();
+            if (available <= 0)
+            {
+                return 0;
+            }
+
+            var frames = LimitCaptureFrames(available, frameBudget);
+            automaticCaptureDiscardLogged = false;
+            AppendRingFrames(frames);
+            FlushFullChunks(chunkBudget > 0 ? chunkBudget : MaxEncodedChunksPerUpdate);
+
+            var elapsedMs = Mathf.Clamp(
+                (int)System.Math.Round((Stopwatch.GetTimestamp() - captureStartedAt) *
+                    1000d / Stopwatch.Frequency),
+                0,
+                3600000);
+            if (elapsedMs >= 8 && Time.unscaledTime >= nextSlowCaptureUpdateLogAt)
+            {
+                nextSlowCaptureUpdateLogAt = Time.unscaledTime + 1f;
+                diagnostics?.RecordStage(
+                    "audio_capture",
+                    "limited",
+                    "capture_update_slow",
+                    elapsedMs: elapsedMs,
+                    eventCount: frames,
+                    queueDepth: pendingMono.Count);
+                Debug.LogWarning(
+                    $"[VoiceInput] Slow capture update: elapsed_ms={elapsedMs} " +
+                    $"frames={frames} pending_frames={pendingMono.Count}",
+                    this);
+            }
+            return frames;
+        }
+
+        private int GetAvailableCaptureFrames()
+        {
+            if (!IsMonitoring || recordingClip == null)
+            {
+                return 0;
             }
 
             var current = Microphone.GetPosition(deviceName);
             if (current < 0 || current == lastPosition)
             {
-                return;
+                return 0;
             }
 
-            var available = current > lastPosition
+            return current > lastPosition
                 ? current - lastPosition
                 : recordingClip.samples - lastPosition + current;
-            var frames = LimitCaptureFrames(available, frameBudget);
-            automaticCaptureDiscardLogged = false;
-            AppendRingFrames(frames);
-            FlushFullChunks(chunkBudget > 0 ? chunkBudget : MaxEncodedChunksPerUpdate);
         }
 
         public static bool ShouldDiscardUnrecordedCapture(
@@ -633,6 +793,7 @@ namespace QuestMmdPlayer
                 {
                     pendingMono.Add(interleavedCaptureBuffer[frame]);
                 }
+                TrackPendingCaptureBacklog();
                 return;
             }
             for (var frame = 0; frame < frameCount; frame++)
@@ -644,6 +805,44 @@ namespace QuestMmdPlayer
                 }
                 pendingMono.Add(sum / sourceChannels);
             }
+            TrackPendingCaptureBacklog();
+        }
+
+        private void TrackPendingCaptureBacklog()
+        {
+            if (pendingMono.Count <= peakPendingCaptureFrames)
+            {
+                return;
+            }
+
+            peakPendingCaptureFrames = pendingMono.Count;
+            var chunkFrames = Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, chunkMilliseconds);
+            if (!ShouldReportCaptureBacklog(pendingMono.Count, chunkFrames) ||
+                Time.unscaledTime < nextCaptureBacklogLogAt)
+            {
+                return;
+            }
+
+            nextCaptureBacklogLogAt = Time.unscaledTime + 1f;
+            var pendingMs = Mathf.RoundToInt(pendingMono.Count * 1000f /
+                Mathf.Max(1, sourceSampleRate));
+            diagnostics?.RecordStage(
+                "audio_capture",
+                "limited",
+                "capture_pending_backlog",
+                elapsedMs: pendingMs,
+                eventCount: pendingMono.Count,
+                queueDepth: peakPendingCaptureFrames);
+            Debug.LogWarning(
+                $"[VoiceInput] Capture backlog: pending_frames={pendingMono.Count} " +
+                $"pending_ms={pendingMs} peak_frames={peakPendingCaptureFrames} " +
+                $"source_rate={sourceSampleRate} chunk_ms={chunkMilliseconds}",
+                this);
+        }
+
+        public static bool ShouldReportCaptureBacklog(int pendingFrames, int chunkFrames)
+        {
+            return pendingFrames > 0 && chunkFrames > 0 && pendingFrames >= chunkFrames * 2;
         }
 
         private void FlushFullChunks(int chunkBudget = -1)
@@ -792,18 +991,6 @@ namespace QuestMmdPlayer
             return mic >= Mathf.Max(floor, playback * multiplier + floor * .25f);
         }
 
-        private bool FlushRemainder()
-        {
-            var minimumFrames = Pcm16CaptureUtility.FramesForDuration(sourceSampleRate, 40);
-            if (pendingMono.Count >= minimumFrames)
-            {
-                return SendSourceFrames(pendingMono.Count);
-            }
-
-            pendingMono.Clear();
-            return true;
-        }
-
         private bool SendSourceFrames(int frameCount)
         {
             var sourceCount = Mathf.Min(frameCount, pendingMono.Count);
@@ -874,6 +1061,10 @@ namespace QuestMmdPlayer
 
         private void StopMicrophoneOnly()
         {
+            finishingCapture = false;
+            finishingCaptureFramesRemaining = 0;
+            finishingCaptureStartedAt = 0f;
+            finishingCaptureLastProgressAt = 0f;
             if (!string.IsNullOrEmpty(deviceName) && Microphone.IsRecording(deviceName))
             {
                 Microphone.End(deviceName);

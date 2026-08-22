@@ -50,6 +50,11 @@ namespace QuestMmdPlayer
         public AvatarActionParameters ActionParameters;
         public AvatarActionTransition ActionTransition;
         public string ActionSource;
+        public string SpeechId;
+        public int AudioSequence = -1;
+        public bool AudioFirst;
+        public bool AudioEnd;
+        public int AudioSequenceEnd = -1;
         public bool TextSent;
         public bool AudioSent;
         /// <summary>True for a local transport acknowledgement, not a backend SSE event.</summary>

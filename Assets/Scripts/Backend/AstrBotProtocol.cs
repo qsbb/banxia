@@ -363,6 +363,10 @@ namespace QuestMmdPlayer
                     message.Pcm16 = samples;
                     message.Pcm16Length = sampleCount;
                     message.Pcm16FromPool = poolAudio;
+                    message.SpeechId = payload.speech_id;
+                    message.AudioSequence = payload.sequence;
+                    message.AudioFirst = payload.first;
+                    message.AudioEnd = payload.end;
                     message.SampleRate = payload.sample_rate;
                     break;
                 case "reply.speech.timeline":
@@ -392,6 +396,8 @@ namespace QuestMmdPlayer
                     break;
                 case "reply.end":
                     message = Basic(payload, ConversationEventType.ReplyEnd);
+                    message.SpeechId = payload.speech_id;
+                    message.AudioSequenceEnd = payload.audio_sequence_end;
                     message.TextSent = payload.text_sent;
                     message.AudioSent = payload.audio_sent;
                     break;
@@ -750,6 +756,11 @@ namespace QuestMmdPlayer
             public int sample_rate;
             public int channels;
             public string data;
+            public string speech_id;
+            public int sequence;
+            public bool first;
+            public bool end;
+            public int audio_sequence_end;
             public string code;
             public string message;
             public bool text_sent;
@@ -844,6 +855,21 @@ namespace QuestMmdPlayer
         public string protocol_version = AstrBotProtocol.Version;
         public string session_id;
         public string turn_id;
+    }
+
+    [Serializable]
+    internal sealed class PlaybackReceiptRequest
+    {
+        public string type = "playback.receipt";
+        public string protocol_version = AstrBotProtocol.Version;
+        public string session_id;
+        public string turn_id;
+        public string speech_id;
+        public string event_name;
+        public int played_ms;
+        public int buffered_ms;
+        public int underflow_count;
+        public string reason_code;
     }
 
     [Serializable]

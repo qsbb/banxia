@@ -136,6 +136,19 @@ namespace QuestMmdPlayer.Tests
             Assert.IsFalse(gate.Observe(.002f, .08f, true));
             Assert.IsFalse(gate.Observe(.02f, .08f, true));
         }
+
+        [TestCase(2559, 1280, false)]
+        [TestCase(2560, 1280, true)]
+        [TestCase(3840, 1920, true)]
+        public void CaptureBacklogDiagnosticRequiresTwoChunks(
+            int pendingFrames,
+            int chunkFrames,
+            bool expected)
+        {
+            Assert.That(
+                QuestMicrophoneInput.ShouldReportCaptureBacklog(pendingFrames, chunkFrames),
+                Is.EqualTo(expected));
+        }
     }
 }
 #endif

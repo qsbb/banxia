@@ -34,7 +34,7 @@ namespace QuestMmdPlayer.Editor
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
         private const string OutputPath = "Builds/Banxia.apk";
         private const string AndroidApplicationIdentifier = "com.lingxi.banxia";
-        private const string AndroidVersionName = "0.2.20";
+        private const string AndroidVersionName = "0.2.21";
         private const int AndroidVersionCode = 31;
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";

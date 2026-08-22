@@ -1007,17 +1007,30 @@ namespace QuestMmdPlayer
                 state,
                 semanticContact,
                 gazeAtUserDuringConversation);
-            var wantsAttention = !semanticContact &&
-                (lookAtMode != "none" || idleAttention || conversationAttention);
+            var wantsAttention = lookAtMode != "none" || idleAttention || conversationAttention;
             if (semanticContact)
             {
-                // Do not compose a stale conversational offset over a live
-                // hand-directed head response. Clear it here so the next
-                // frame after contact resumes from the authored pose.
-                gazeBlend = 0f;
-                smoothedHeadRotation = Quaternion.identity;
-                hasSmoothedHeadRotation = false;
-                RecordGazeDiagnostic(true, false, "physical_contact");
+                // A real hand response remains the authored base, but contact
+                // must not cancel eye contact during a live conversation. A
+                // reduced additive weight keeps the hand-directed reaction
+                // readable while avoiding the visibly frozen gaze reported on
+                // the device.
+                var contactGazeWeight = GetContactGazeWeight(state, semanticContact);
+                gazeBlend = Mathf.MoveTowards(
+                    gazeBlend,
+                    contactGazeWeight,
+                    Time.unscaledDeltaTime * 3.5f);
+                var contactGazeMode = contactGazeWeight > .001f ? "user" : "physical_contact";
+                RecordGazeDiagnostic(true, contactGazeWeight > .001f, contactGazeMode);
+                if (contactGazeWeight > .001f)
+                {
+                    ApplyGaze(gazeBlend, "user");
+                }
+                else
+                {
+                    smoothedHeadRotation = Quaternion.identity;
+                    hasSmoothedHeadRotation = false;
+                }
             }
             else
             {
@@ -1193,10 +1206,29 @@ namespace QuestMmdPlayer
             bool semanticContact,
             bool enabled)
         {
-            return enabled && !semanticContact &&
+            // Physical contact reduces the additive weight in LateUpdate but
+            // does not cancel conversational attention while listening,
+            // thinking, or speaking.
+            return enabled &&
                 (conversationState == ConversationState.Listening ||
                     conversationState == ConversationState.Thinking ||
                     conversationState == ConversationState.Speaking);
+        }
+
+        public static float GetContactGazeWeight(
+            ConversationState conversationState,
+            bool semanticContact)
+        {
+            if (!semanticContact)
+            {
+                return 0f;
+            }
+
+            return conversationState == ConversationState.Listening ||
+                conversationState == ConversationState.Thinking ||
+                conversationState == ConversationState.Speaking
+                ? .28f
+                : 0f;
         }
 
         public static bool ShouldSuspendGazeForAction(string action)
@@ -1270,6 +1302,11 @@ namespace QuestMmdPlayer
             // the current action pose just because a target is missing.
             if (Camera.main == null)
             {
+                // No gaze offset is presented this frame. Treat the pose
+                // authored by the action/VMD writer as the next base instead
+                // of retaining a stale base from the previous camera frame.
+                authoredHeadRotation = head.localRotation;
+                hasPresentedHeadRotation = false;
                 return;
             }
             if (amount <= .001f)
@@ -1325,8 +1362,16 @@ namespace QuestMmdPlayer
 
         private void PrepareAuthoredHeadPose()
         {
-            if (!hasPresentedHeadRotation || head == null)
+            if (head == null)
             {
+                return;
+            }
+
+            if (!hasPresentedHeadRotation)
+            {
+                // A contact writer or an action/VMD writer may have produced
+                // a pose while gaze was inactive. That pose is authoritative.
+                authoredHeadRotation = head.localRotation;
                 return;
             }
 
@@ -1336,6 +1381,13 @@ namespace QuestMmdPlayer
             if (Quaternion.Angle(head.localRotation, presentedHeadRotation) <= .01f)
             {
                 head.localRotation = authoredHeadRotation;
+            }
+            else
+            {
+                // The earlier writer replaced the previous presented value.
+                // Adopt that live pose instead of composing the new gaze over
+                // the previous frame's authored base.
+                authoredHeadRotation = head.localRotation;
             }
             hasPresentedHeadRotation = false;
         }

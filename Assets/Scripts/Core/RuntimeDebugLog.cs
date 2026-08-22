@@ -386,6 +386,11 @@ namespace QuestMmdPlayer
                 case "llm_failed": return "模型生成失败";
                 case "audio_http_request_failed": return "音频上传请求失败";
                 case "audio_upload_backpressure": return "音频上传速度跟不上录音";
+                case "capture_update_slow": return "麦克风采集帧耗时过长";
+                case "capture_read_slow": return "麦克风读取耗时过长";
+                case "capture_pending_backlog": return "麦克风采集积压";
+                case "capture_tail_timeout": return "麦克风尾帧等待超时";
+                case "audio_underflow": return "音频播放欠载";
                 case "bridge_disconnected": return "Bridge 会话未连接";
                 case "http_request_failed": return "后端请求失败";
                 case "health_incompatible": return "后端协议或传输类型不兼容";

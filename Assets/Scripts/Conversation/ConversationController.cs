@@ -46,6 +46,13 @@ namespace QuestMmdPlayer
         private bool backendTtsReported;
         private bool backendTotalReported;
         private int activePlaybackGeneration = -1;
+        private string activePlaybackTurnId = string.Empty;
+        private string activePlaybackSpeechId = string.Empty;
+        private bool playbackReceiptStarted;
+        private int playbackReceiptPlayedMs;
+        private int playbackReceiptBufferedMs;
+        private int playbackReceiptUnderflowCount;
+        private int lastPlaybackUnderflowCount;
         private RuntimeDebugLog diagnostics;
         private readonly Dictionary<string, AvatarActionReceiptTracker> actionReceiptTrackers =
             new Dictionary<string, AvatarActionReceiptTracker>(StringComparer.Ordinal);
@@ -165,6 +172,7 @@ namespace QuestMmdPlayer
             if (stateMachine.TryFinishAudio(audioPlayer == null || audioPlayer.IsDrained))
             {
                 audioDoneAt = Time.unscaledTime;
+                SendPlaybackReceipt(PlaybackReceiptKind.Ended);
                 RecordStage(
                     "audio_playback",
                     "completed",
@@ -485,6 +493,7 @@ namespace QuestMmdPlayer
             {
                 case ConversationEventType.AudioChunk:
                 {
+                    CapturePlaybackIdentity(message);
                     var pcmLength = message.Pcm16Length > 0
                         ? message.Pcm16Length
                         : message.Pcm16 == null ? 0 : message.Pcm16.Length;
@@ -506,6 +515,7 @@ namespace QuestMmdPlayer
                     presenter?.SetSpeechTimeline(message.VisemeTimeline);
                     break;
                 case ConversationEventType.ReplyEnd:
+                    CapturePlaybackIdentity(message);
                     var actionOnlyReply = AcceptActionOnlyReplyEnd(
                         backendActionReceived,
                         stateMachine.ReplyText,
@@ -1170,10 +1180,18 @@ namespace QuestMmdPlayer
         {
             presenter?.ClearSpeechTimeline();
             activePlaybackGeneration = audioPlayer == null ? -1 : audioPlayer.BeginStream();
+            activePlaybackTurnId = stateMachine.TurnId ?? string.Empty;
+            activePlaybackSpeechId = string.Empty;
+            playbackReceiptStarted = false;
+            playbackReceiptPlayedMs = 0;
+            playbackReceiptBufferedMs = 0;
+            playbackReceiptUnderflowCount = 0;
+            lastPlaybackUnderflowCount = 0;
         }
 
         private void StopAudioStream()
         {
+            SendPlaybackReceipt(PlaybackReceiptKind.Interrupted, "local_stop");
             audioPlayer?.StopAndClear();
             presenter?.ClearSpeechTimeline();
             activePlaybackGeneration = -1;
@@ -1187,6 +1205,28 @@ namespace QuestMmdPlayer
 
         private static bool IsNoResponseCode(string code)
         {
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                return true;
+            }
+
+            // Any terminal transport/backend failure can present to the user
+            // as "no response" even when it occurred after partial text or
+            // audio. Keep the specific codes below for stable UI labels, and
+            // include future phase-specific failures without silently losing
+            // the diagnostic record.
+            if (code.StartsWith("stt_", StringComparison.Ordinal) ||
+                code.StartsWith("tts_", StringComparison.Ordinal) ||
+                code.StartsWith("llm_", StringComparison.Ordinal) ||
+                code.StartsWith("audio_", StringComparison.Ordinal) ||
+                code.StartsWith("http_", StringComparison.Ordinal) ||
+                code.StartsWith("sse_", StringComparison.Ordinal) ||
+                code.StartsWith("response_", StringComparison.Ordinal) ||
+                code.StartsWith("astrbot_pipeline_", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
             return string.Equals(code, "empty_backend_reply", StringComparison.Ordinal) ||
                 string.Equals(code, "response_first_event_timeout", StringComparison.Ordinal) ||
                 string.Equals(code, "response_event_stall_timeout", StringComparison.Ordinal) ||
@@ -1205,7 +1245,10 @@ namespace QuestMmdPlayer
                 string.Equals(code, "astrbot_pipeline_reply_capture_empty", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_no_response", StringComparison.Ordinal) ||
                 string.Equals(code, "astrbot_pipeline_empty_reply", StringComparison.Ordinal) ||
-                string.Equals(code, "astrbot_pipeline_timeout", StringComparison.Ordinal);
+                string.Equals(code, "astrbot_pipeline_timeout", StringComparison.Ordinal) ||
+                string.Equals(code, "conversation_error", StringComparison.Ordinal) ||
+                string.Equals(code, "session_expired", StringComparison.Ordinal) ||
+                string.Equals(code, "bridge_disconnected", StringComparison.Ordinal);
         }
 
         private void RecordVoiceInterruption(string reason, string source)
@@ -1413,6 +1456,12 @@ namespace QuestMmdPlayer
             }
             if (telemetry.IsProgress)
             {
+                var previousUnderflowCount = lastPlaybackUnderflowCount;
+                playbackReceiptPlayedMs = telemetry.PlayedMs;
+                playbackReceiptBufferedMs = telemetry.BufferedMs;
+                playbackReceiptUnderflowCount = telemetry.UnderflowCount;
+                lastPlaybackUnderflowCount = telemetry.UnderflowCount;
+                SendPlaybackReceipt(PlaybackReceiptKind.Progress);
                 RecordStage(
                     "audio_playback",
                     "processing",
@@ -1420,9 +1469,30 @@ namespace QuestMmdPlayer
                     elapsedMs: telemetry.PlayedMs,
                     bufferedMs: telemetry.BufferedMs,
                     eventCount: telemetry.UnderflowCount);
+                if (telemetry.UnderflowCount > previousUnderflowCount)
+                {
+                    var delta = telemetry.UnderflowCount - previousUnderflowCount;
+                    RecordStage(
+                        "audio_playback",
+                        "limited",
+                        "audio_underflow",
+                        elapsedMs: telemetry.PlayedMs,
+                        eventCount: telemetry.UnderflowCount,
+                        queueDepth: audioPlayer == null ? -1 : audioPlayer.QueuedChunkCount,
+                        bufferedMs: telemetry.BufferedMs);
+                    Debug.LogWarning(
+                        $"[Conversation] PcmStream underflow increased: total={telemetry.UnderflowCount} " +
+                        $"delta={delta} played_ms={telemetry.PlayedMs} buffered_ms={telemetry.BufferedMs}",
+                        this);
+                }
                 return;
             }
             playbackStartedAt = Time.unscaledTime;
+            playbackReceiptBufferedMs = telemetry.BufferedMs;
+            playbackReceiptUnderflowCount = telemetry.UnderflowCount;
+            lastPlaybackUnderflowCount = telemetry.UnderflowCount;
+            playbackReceiptStarted = true;
+            SendPlaybackReceipt(PlaybackReceiptKind.Started);
             RecordStage(
                 "audio_playback",
                 "processing",
@@ -1442,6 +1512,50 @@ namespace QuestMmdPlayer
                     "limited",
                     "audio_underflow",
                     eventCount: telemetry.UnderflowCount);
+            }
+        }
+
+        private void CapturePlaybackIdentity(ConversationEvent message)
+        {
+            if (message == null)
+            {
+                return;
+            }
+            if (!string.IsNullOrEmpty(message.TurnId))
+            {
+                activePlaybackTurnId = message.TurnId;
+            }
+            if (!string.IsNullOrEmpty(message.SpeechId))
+            {
+                activePlaybackSpeechId = message.SpeechId;
+            }
+        }
+
+        private void SendPlaybackReceipt(PlaybackReceiptKind kind, string reasonCode = "")
+        {
+            if (!playbackReceiptStarted || string.IsNullOrEmpty(activePlaybackTurnId) ||
+                string.IsNullOrEmpty(activePlaybackSpeechId) ||
+                !(transport is IPlaybackReceiptTransport playbackTransport))
+            {
+                return;
+            }
+            playbackTransport.SendPlaybackReceipt(new PlaybackReceipt(
+                activePlaybackTurnId,
+                activePlaybackSpeechId,
+                kind,
+                playbackReceiptPlayedMs,
+                playbackReceiptBufferedMs,
+                playbackReceiptUnderflowCount,
+                reasonCode));
+            if (kind == PlaybackReceiptKind.Ended || kind == PlaybackReceiptKind.Interrupted)
+            {
+                playbackReceiptStarted = false;
+                activePlaybackTurnId = string.Empty;
+                activePlaybackSpeechId = string.Empty;
+                playbackReceiptPlayedMs = 0;
+                playbackReceiptBufferedMs = 0;
+                playbackReceiptUnderflowCount = 0;
+                lastPlaybackUnderflowCount = 0;
             }
         }
 

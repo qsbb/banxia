@@ -52,7 +52,7 @@ namespace QuestMmdPlayer
     /// into the Unity scene or APK.
     /// </summary>
     [DisallowMultipleComponent]
-    public sealed class AstrBotBridge : MonoBehaviour, IConversationTransport
+    public sealed class AstrBotBridge : MonoBehaviour, IConversationTransport, IPlaybackReceiptTransport
     {
         internal const string DefaultConfigurationFileName = "embodiment_bridge.json";
         internal const string LegacyConfigurationFileName = "quest_avatar_bridge.json";
@@ -67,6 +67,9 @@ namespace QuestMmdPlayer
         [SerializeField, Range(8, 64)] private int maxIncomingFramesPerUpdate = 24;
         [SerializeField, Range(1f, 8f)] private float maxSseDispatchMilliseconds = 3f;
         [SerializeField, Range(1f, 30f)] private float spatialContextUploadIntervalSeconds = 2f;
+        // Opt-in until the installed Bridge advertises this additive route.
+        // Existing Bridge 1.0 deployments must not receive repeated 404s.
+        [SerializeField] private bool enablePlaybackReceiptUpload;
 
         private readonly ConcurrentQueue<SseEventFrame> incomingFrames = new ConcurrentQueue<SseEventFrame>();
         private AstrBotBridgeSettings settings;
@@ -562,6 +565,31 @@ namespace QuestMmdPlayer
                 "uploading",
                 chunks: outgoingAudioChunks.Count,
                 bytes: queuedInputAudioBytes);
+            return true;
+        }
+
+        public bool SendPlaybackReceipt(PlaybackReceipt receipt)
+        {
+            if (!enablePlaybackReceiptUpload || receipt == null ||
+                string.IsNullOrEmpty(receipt.TurnId) ||
+                string.IsNullOrEmpty(receipt.SpeechId) ||
+                !CanSend(receipt.TurnId, false))
+            {
+                return false;
+            }
+
+            var request = new PlaybackReceiptRequest
+            {
+                session_id = sessionId,
+                turn_id = receipt.TurnId,
+                speech_id = receipt.SpeechId,
+                event_name = PlaybackReceiptEventName(receipt.Kind),
+                played_ms = receipt.PlayedMs,
+                buffered_ms = receipt.BufferedMs,
+                underflow_count = receipt.UnderflowCount,
+                reason_code = receipt.ReasonCode
+            };
+            StartCoroutine(PostPlaybackReceipt(JsonUtility.ToJson(request), receipt));
             return true;
         }
 
@@ -1478,6 +1506,55 @@ namespace QuestMmdPlayer
                 {
                     Debug.LogWarning("[AstrBotBridge] " + HttpFailure(endpoint, request));
                 }
+            }
+        }
+
+        private IEnumerator PostPlaybackReceipt(string json, PlaybackReceipt receipt)
+        {
+            var startedAt = DiagnosticTimestamp();
+            using (var request = CreateJsonRequest("playback/receipt", json))
+            {
+                yield return request.SendWebRequest();
+                if (Succeeded(request))
+                {
+                    RecordStage(
+                        "audio_playback",
+                        "reported",
+                        PlaybackReceiptEventName(receipt.Kind),
+                        httpStatus: request.responseCode,
+                        elapsedMs: ElapsedMs(startedAt),
+                        bufferedMs: receipt.BufferedMs,
+                        eventCount: receipt.UnderflowCount);
+                    yield break;
+                }
+
+                // A 404 is expected for pre-receipt Bridge versions. Stop
+                // further progress posts for this app lifetime to avoid load.
+                if (request.responseCode == 404)
+                {
+                    enablePlaybackReceiptUpload = false;
+                    diagnostics?.Record(
+                        "AstrBotBridge",
+                        "播放回执路由未启用，已在本次运行中停止上报");
+                }
+                else
+                {
+                    diagnostics?.Record(
+                        "AstrBotBridge",
+                        "播放回执上报失败：" + ReadFailureCode(request, "playback_receipt_failed"));
+                }
+            }
+        }
+
+        private static string PlaybackReceiptEventName(PlaybackReceiptKind kind)
+        {
+            switch (kind)
+            {
+                case PlaybackReceiptKind.Started: return "playback.started";
+                case PlaybackReceiptKind.Progress: return "playback.progress";
+                case PlaybackReceiptKind.Ended: return "playback.ended";
+                case PlaybackReceiptKind.Interrupted: return "playback.interrupted";
+                default: return "playback.unknown";
             }
         }
 
