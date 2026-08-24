@@ -461,7 +461,12 @@ namespace QuestMmdPlayer
             activeTurnId = string.Empty;
             CancelAudioUpload();
             ClearIncomingFrames();
-            if (!CanSend(turnId, true, true))
+            // Do not require the SSE stream to be attached before sending a
+            // turn. Quest-side SSE connections drop every ~10s and reconnect
+            // ~1.5s later; gating turn/start on eventStreamReady makes the
+            // turn un-sendable during that window and produces "no reply".
+            // The reply is delivered over SSE once it reattaches.
+            if (!CanSend(turnId, true, false))
             {
                 return;
             }
@@ -484,7 +489,9 @@ namespace QuestMmdPlayer
         public bool BeginAudioTurn(string turnId)
         {
             activeTurnId = string.Empty;
-            if (!CanSend(turnId, true, true))
+            // Do not require the SSE stream to be attached before sending an
+            // audio turn. See the same comment in StartTurn for reasoning.
+            if (!CanSend(turnId, true, false))
             {
                 return false;
             }
