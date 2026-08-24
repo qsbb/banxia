@@ -14,6 +14,15 @@ namespace QuestMmdPlayer
         private readonly Queue<string> entries = new Queue<string>();
         private readonly Queue<StageEntry> stageEntries = new Queue<StageEntry>();
         private static readonly byte[] TraceKey = Guid.NewGuid().ToByteArray();
+
+        // Per-stage logcat throttle. Non-failure stages (e.g. sse_dispatch
+        // "completed") fire once per SSE event, which can reach thousands of
+        // Debug.Log + stack-trace lines per second during audio streaming and
+        // starve the main thread of frame budget. Failure statuses always pass
+        // through because they are rare, diagnostic, and already throttled at
+        // their call sites (capture_queue_pressure limits itself to 1/s).
+        private readonly Dictionary<string, float> stageLogEmitTimes = new Dictionary<string, float>();
+        private const float StageLogMinIntervalSeconds = 1f;
         private string rootCauseStage = string.Empty;
         private string rootCauseCode = string.Empty;
         private static readonly string[] AllowedPrefixes =
@@ -149,20 +158,35 @@ namespace QuestMmdPlayer
                 rootCauseCode = string.Empty;
             }
 
-            Debug.Log(
-                $"[RuntimeDebug] stage={safeStage} status={safeStatus}" +
-                (string.IsNullOrEmpty(entry.TraceId) ? string.Empty : " trace=" + entry.TraceId) +
-                (string.IsNullOrEmpty(safeCode) ? string.Empty : " code=" + safeCode) +
-                (entry.HttpStatus > 0 ? " http=" + entry.HttpStatus : string.Empty) +
-                (entry.ElapsedMs >= 0 ? " elapsed_ms=" + entry.ElapsedMs : string.Empty) +
-                (entry.Chunks > 0 ? " chunks=" + entry.Chunks : string.Empty) +
-                (entry.Bytes > 0 ? " bytes=" + entry.Bytes : string.Empty) +
-                (entry.EventCount > 0 ? " events=" + entry.EventCount : string.Empty) +
-                (entry.SampleRate > 0 ? " sample_rate=" + entry.SampleRate : string.Empty) +
-                (entry.Channels > 0 ? " channels=" + entry.Channels : string.Empty) +
-                (entry.QueueDepth >= 0 ? " queue_depth=" + entry.QueueDepth : string.Empty) +
-                (entry.BufferedMs >= 0 ? " buffered_ms=" + entry.BufferedMs : string.Empty),
-                this);
+            if (IsFailureStatus(safeStatus) || ShouldEmitStageLog(safeStage))
+            {
+                Debug.Log(
+                    $"[RuntimeDebug] stage={safeStage} status={safeStatus}" +
+                    (string.IsNullOrEmpty(entry.TraceId) ? string.Empty : " trace=" + entry.TraceId) +
+                    (string.IsNullOrEmpty(safeCode) ? string.Empty : " code=" + safeCode) +
+                    (entry.HttpStatus > 0 ? " http=" + entry.HttpStatus : string.Empty) +
+                    (entry.ElapsedMs >= 0 ? " elapsed_ms=" + entry.ElapsedMs : string.Empty) +
+                    (entry.Chunks > 0 ? " chunks=" + entry.Chunks : string.Empty) +
+                    (entry.Bytes > 0 ? " bytes=" + entry.Bytes : string.Empty) +
+                    (entry.EventCount > 0 ? " events=" + entry.EventCount : string.Empty) +
+                    (entry.SampleRate > 0 ? " sample_rate=" + entry.SampleRate : string.Empty) +
+                    (entry.Channels > 0 ? " channels=" + entry.Channels : string.Empty) +
+                    (entry.QueueDepth >= 0 ? " queue_depth=" + entry.QueueDepth : string.Empty) +
+                    (entry.BufferedMs >= 0 ? " buffered_ms=" + entry.BufferedMs : string.Empty),
+                    this);
+            }
+        }
+
+        private bool ShouldEmitStageLog(string stage)
+        {
+            var now = Time.unscaledTime;
+            if (stageLogEmitTimes.TryGetValue(stage, out var last) &&
+                now - last < StageLogMinIntervalSeconds)
+            {
+                return false;
+            }
+            stageLogEmitTimes[stage] = now;
+            return true;
         }
 
         public string GetRecentTimelineText(int maximumLines = 10)
