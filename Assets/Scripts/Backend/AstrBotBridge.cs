@@ -47,6 +47,23 @@ namespace QuestMmdPlayer
     }
 
     /// <summary>
+    /// A captured PCM16 buffer plus the monotonic time it finished capture. The
+    /// uploader batches several of these; the latest capture time is reported as
+    /// <c>capture_elapsed_ms</c> so the server can measure upload/queue age.
+    /// </summary>
+    public readonly struct PendingAudioChunk
+    {
+        public PendingAudioChunk(byte[] data, float capturedAt)
+        {
+            Data = data ?? System.Array.Empty<byte>();
+            CapturedAt = capturedAt;
+        }
+
+        public byte[] Data { get; }
+        public float CapturedAt { get; }
+    }
+
+    /// <summary>
     /// AstrBot Embodiment Bridge protocol 1.0 transport. Secrets are loaded from a
     /// JSON file under Application.persistentDataPath and are never serialized
     /// into the Unity scene or APK.
@@ -84,14 +101,13 @@ namespace QuestMmdPlayer
         private bool shuttingDown;
         private int receivedStreamData;
         private int receivedStreamHeaders;
-        private readonly Queue<byte[]> outgoingAudioChunks = new Queue<byte[]>();
+        private readonly Queue<PendingAudioChunk> outgoingAudioChunks = new Queue<PendingAudioChunk>();
         private Coroutine audioUploadRoutine;
         private UnityWebRequest activeAudioRequest;
         private string audioUploadTurnId = string.Empty;
         private bool audioEndRequested;
         private int audioSequence;
         private int queuedInputAudioBytes;
-        private const int AudioUploadBatchBytes = 16000;
         private const int MaxQueuedInputAudioBytes = 1048576;
         private const string StableSessionPreferenceKey = "banxia.astrbot.session_id.v1";
         private int uploadedInputAudioBytes;
@@ -161,6 +177,21 @@ namespace QuestMmdPlayer
         public string AudioUploadDiagnosticStatus => AudioUploadInProgress
             ? $"audio queued={queuedInputAudioBytes} B uploaded={uploadedInputAudioBytes} B batches={uploadedInputBatchCount}"
             : "audio upload idle";
+
+        /// <summary>Configured upload batch size, clamped and rounded to a complete PCM16 sample.</summary>
+        private int AudioUploadBatchBytes
+        {
+            get
+            {
+                var value = settings == null ? 0 : settings.audio_upload_batch_bytes;
+                if (value < AstrBotProtocol.MinAudioUploadBatchBytes ||
+                    value > AstrBotProtocol.MaxAudioUploadBatchBytes)
+                {
+                    return AstrBotProtocol.DefaultAudioUploadBatchBytes;
+                }
+                return value & ~1;
+            }
+        }
 
         private void Awake()
         {
@@ -551,7 +582,7 @@ namespace QuestMmdPlayer
             // ConversationController never reuses or mutates pcm16, so copying
             // it here only creates another short-lived allocation on the Quest
             // main thread for every 80 ms capture chunk.
-            outgoingAudioChunks.Enqueue(pcm16);
+            outgoingAudioChunks.Enqueue(new PendingAudioChunk(pcm16, Time.unscaledTime));
             queuedInputAudioBytes += pcm16.Length;
             audioQueuedPeakBytes = Mathf.Max(audioQueuedPeakBytes, queuedInputAudioBytes);
             return true;
@@ -1218,14 +1249,18 @@ namespace QuestMmdPlayer
             {
                 if (outgoingAudioChunks.Count > 0)
                 {
-                    var pcm16 = DequeueAudioBatch(outgoingAudioChunks, AudioUploadBatchBytes);
+                    var batch = DequeueAudioBatch(outgoingAudioChunks, AudioUploadBatchBytes);
+                    var pcm16 = batch.Data;
                     queuedInputAudioBytes = Mathf.Max(0, queuedInputAudioBytes - pcm16.Length);
                     var chunk = new AudioChunkRequest
                     {
                         session_id = sessionId,
                         turn_id = turnId,
                         sequence = audioSequence,
-                        data = Convert.ToBase64String(pcm16)
+                        data = Convert.ToBase64String(pcm16),
+                        byte_offset = uploadedInputAudioBytes,
+                        capture_elapsed_ms = Mathf.RoundToInt(
+                            Mathf.Max(0f, batch.CapturedAt - audioUploadStartedAt) * 1000f)
                     };
                     var chunkSucceeded = false;
                     yield return PostAudioJson(
@@ -1249,7 +1284,13 @@ namespace QuestMmdPlayer
                 if (audioEndRequested)
                 {
                     var endSucceeded = false;
-                    var end = new AudioEndRequest { session_id = sessionId, turn_id = turnId };
+                    var end = new AudioEndRequest
+                    {
+                        session_id = sessionId,
+                        turn_id = turnId,
+                        last_sequence = audioSequence - 1,
+                        total_bytes = uploadedInputAudioBytes
+                    };
                     yield return PostAudioJson(
                         "audio/end",
                         JsonUtility.ToJson(end),
@@ -1361,23 +1402,25 @@ namespace QuestMmdPlayer
             }
         }
 
-        public static byte[] DequeueAudioBatch(Queue<byte[]> chunks, int maximumBytes)
+        public static PendingAudioChunk DequeueAudioBatch(Queue<PendingAudioChunk> chunks, int maximumBytes)
         {
             if (chunks == null || chunks.Count == 0)
             {
-                return Array.Empty<byte>();
+                return new PendingAudioChunk(Array.Empty<byte>(), 0f);
             }
 
             var limit = Mathf.Max(2, maximumBytes) & ~1;
             var total = 0;
+            var capturedAt = 0f;
             while (chunks.Count > 0)
             {
                 var next = chunks.Peek();
-                if (total > 0 && total + next.Length > limit)
+                if (total > 0 && total + next.Data.Length > limit)
                 {
                     break;
                 }
-                total += next.Length;
+                total += next.Data.Length;
+                capturedAt = next.CapturedAt;
                 if (total >= limit)
                 {
                     break;
@@ -1389,10 +1432,10 @@ namespace QuestMmdPlayer
             while (offset < total && chunks.Count > 0)
             {
                 var chunk = chunks.Dequeue();
-                Buffer.BlockCopy(chunk, 0, merged, offset, chunk.Length);
-                offset += chunk.Length;
+                Buffer.BlockCopy(chunk.Data, 0, merged, offset, chunk.Data.Length);
+                offset += chunk.Data.Length;
             }
-            return merged;
+            return new PendingAudioChunk(merged, capturedAt);
         }
 
         public static bool ShouldRecordAudioRequestStage(

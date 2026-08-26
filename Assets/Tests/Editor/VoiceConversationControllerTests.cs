@@ -595,28 +595,29 @@ namespace QuestMmdPlayer.Tests
         [Test]
         public void AudioUploadBatchCombinesCaptureChunksWithoutExceedingLimit()
         {
-            var chunks = new System.Collections.Generic.Queue<byte[]>();
+            var chunks = new System.Collections.Generic.Queue<PendingAudioChunk>();
             for (var index = 0; index < 7; index++)
             {
-                chunks.Enqueue(new byte[2560]);
+                chunks.Enqueue(new PendingAudioChunk(new byte[2560], 0f));
             }
 
             var batch = AstrBotBridge.DequeueAudioBatch(chunks, 16000);
 
-            Assert.That(batch.Length, Is.EqualTo(15360));
+            Assert.That(batch.Data.Length, Is.EqualTo(15360));
             Assert.That(chunks.Count, Is.EqualTo(1));
         }
 
         [Test]
         public void AudioUploadBatchKeepsChunkOrderWhenMergingOwnedBuffers()
         {
-            var chunks = new System.Collections.Generic.Queue<byte[]>();
-            chunks.Enqueue(new byte[] { 1, 2 });
-            chunks.Enqueue(new byte[] { 3, 4 });
+            var chunks = new System.Collections.Generic.Queue<PendingAudioChunk>();
+            chunks.Enqueue(new PendingAudioChunk(new byte[] { 1, 2 }, 1f));
+            chunks.Enqueue(new PendingAudioChunk(new byte[] { 3, 4 }, 2f));
 
             var batch = AstrBotBridge.DequeueAudioBatch(chunks, 4);
 
-            Assert.That(batch, Is.EqualTo(new byte[] { 1, 2, 3, 4 }));
+            Assert.That(batch.Data, Is.EqualTo(new byte[] { 1, 2, 3, 4 }));
+            Assert.That(batch.CapturedAt, Is.EqualTo(2f));
             Assert.That(chunks, Is.Empty);
         }
 

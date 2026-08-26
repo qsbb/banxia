@@ -1,3 +1,10 @@
+# v0.2.22
+
+- 语音上传批量大小改为可配置（`embodiment_bridge.json` 的 `audio_upload_batch_bytes`，默认 3200 字节约 100 ms，范围 1280–16000），降低说话到后端识别之间的客户端聚合延迟。
+- 每块 `audio/chunk` 新增 `byte_offset` / `capture_elapsed_ms` 时序元数据，`audio/end` 新增 `last_sequence` / `total_bytes`，用于后端分块年龄与端到端延迟诊断；旧后端忽略这些可选字段。
+- 语音活动检测尾静音默认从 1.8 s 下调为 0.8 s（Inspector 可调 0.4–3.0 s），说话停止后更快收口并启动识别。
+- 上传分块队列改为携带捕获时刻的 `PendingAudioChunk`，批量合并仍保持顺序与字节上限不变。
+
 # v0.2.17
 
 - 真实手部接触现在始终优先于仍在计时的后端摸头反应，头部保持跟随实时接触方向，不再退回固定摸头姿势。

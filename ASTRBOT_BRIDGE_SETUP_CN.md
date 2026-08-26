@@ -42,4 +42,18 @@ adb -s <serial> push embodiment_bridge.json /sdcard/Android/data/com.lingxi.banx
 - 旧会话事件、未知协议版本、错误 PCM16 和事件名/类型不匹配的数据会被丢弃。
 - Android 未配置或断网时保持中性，不启用编辑器 Mock 人格反应。
 
-STT/TTS 是否可用由后端 `/health` 决定。当前 Unity 已支持后端输出的 PCM16 24000 Hz 音频播放和真实播放电平嘴型；麦克风上传将在后续切片实现。
+STT/TTS 是否可用由后端 `/health` 决定。当前 Unity 已支持后端输出的 PCM16 24000 Hz 音频播放和真实播放电平嘴型。
+
+## 语音上传与流式识别
+
+- 麦克风以 80 ms 分块采集、PCM16 16 kHz 单声道编码，经 `audio/chunk` 逐块上传，`audio/end` 收口。分块批量大小可在 `embodiment_bridge.json` 中配置：
+
+  ```json
+  {
+    "audio_upload_batch_bytes": 3200
+  }
+  ```
+
+  默认 3200 字节（约 100 ms），范围 1280–16000（约 40–500 ms）。更小批量降低客户端聚合延迟、提高请求频率；后端有 0.25 s 的入队背压上限，逐块失败会取消本轮并回退。
+- 每块携带 `byte_offset` 与 `capture_elapsed_ms` 时序元数据，`audio/end` 携带 `last_sequence` 与 `total_bytes`；后端据此计算 `chunk_age_ms` 等分块年龄诊断，用于验收流式识别的端到端延迟。旧后端忽略这些可选字段。
+- 语音活动检测（VAD）尾静音默认从 1.8 s 下调为 0.8 s（`QuestMicrophoneInput.voiceSilenceSeconds`，Inspector 可调 0.4–3.0 s），说话停止后更快触发 `audio/end` 并启动后端识别与决策。

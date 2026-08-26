@@ -18,6 +18,7 @@ namespace QuestMmdPlayer
         public string group_id = "";
         public string relationship_profile_id = "";
         public bool allow_insecure_http;
+        public int audio_upload_batch_bytes = AstrBotProtocol.DefaultAudioUploadBatchBytes;
     }
 
     public readonly struct SseEventFrame
@@ -182,6 +183,14 @@ namespace QuestMmdPlayer
         // event from monopolizing the Unity frame and allocating unbounded
         // temporary arrays.
         public const int MaxReplyAudioBytes = 16 * 1024;
+
+        // Streaming STT upload batching. 16 kHz mono PCM16 is 32 bytes/ms, so
+        // the default 3200 bytes is ~100 ms of audio. Smaller batches shorten
+        // the client-side aggregation latency but increase the HTTP request
+        // rate; keep the floor at ~40 ms (1280 bytes) and cap at ~500 ms.
+        public const int DefaultAudioUploadBatchBytes = 3200;
+        public const int MinAudioUploadBatchBytes = 1280;
+        public const int MaxAudioUploadBatchBytes = 16000;
         private static readonly string[] ExecutableActions =
         {
             "wave", "bow", "dance", "dance_next", "raise_hand", "raise_leg", "turn_half",
@@ -846,6 +855,9 @@ namespace QuestMmdPlayer
         public int sample_rate = 16000;
         public int channels = 1;
         public string data;
+        // Optional protocol-1.1 streaming metadata.
+        public int byte_offset;
+        public int capture_elapsed_ms;
     }
 
     [Serializable]
@@ -855,6 +867,9 @@ namespace QuestMmdPlayer
         public string protocol_version = AstrBotProtocol.Version;
         public string session_id;
         public string turn_id;
+        // Optional protocol-1.1 end-of-audio completeness metadata.
+        public int last_sequence;
+        public int total_bytes;
     }
 
     [Serializable]

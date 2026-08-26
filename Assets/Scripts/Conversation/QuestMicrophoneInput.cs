@@ -34,7 +34,7 @@ namespace QuestMmdPlayer
         [SerializeField, Range(.2f, 1.2f)] private float trackedVoiceHoldSeconds = .75f;
         [SerializeField] private bool autoStopOnSilence = true;
         [SerializeField, Range(.003f, .08f)] private float voiceSilenceRms = .006f;
-        [SerializeField, Range(.4f, 3f)] private float voiceSilenceSeconds = 1.8f;
+        [SerializeField, Range(.4f, 3f)] private float voiceSilenceSeconds = 0.8f;
         [SerializeField, Range(.2f, 1f)] private float minimumVoiceSeconds = .45f;
         [SerializeField, Range(1.5f, 8f)] private float initialVoiceTimeoutSeconds = 4f;
         [SerializeField] private bool alwaysListening = true;
