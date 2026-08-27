@@ -294,6 +294,7 @@ namespace QuestMmdPlayer
             TrackedHands?.Bind(HumanInteraction);
             HandPhysics?.Bind(Avatar, TrackedHands);
             Quality?.ApplyHandContactPolicy(HandPhysics);
+            Quality?.BindIdlePhysicsSources(Avatar, TouchInteraction, HandPhysics);
             if (AvatarRayInteraction != null)
             {
                 AvatarRayInteraction.Bind(Avatar, HumanInteraction, Menu);

@@ -377,6 +377,9 @@ namespace QuestMmdPlayer
         public int TtsTotalMs;
         public int TurnTotalMs;
         public string DecisionPath;
+        public int DecisionHooksMs;
+        public int DecisionProviderMs;
+        public int EventLoopLagMs;
 
         public bool IsValid => SchemaVersion == 1;
 

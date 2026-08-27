@@ -45,6 +45,9 @@ namespace QuestMmdPlayer
         private bool backendDecisionReported;
         private bool backendTtsReported;
         private bool backendTotalReported;
+        private bool backendHooksReported;
+        private bool backendProviderReported;
+        private bool backendLagReported;
         private int activePlaybackGeneration = -1;
         private string activePlaybackTurnId = string.Empty;
         private string activePlaybackSpeechId = string.Empty;
@@ -947,6 +950,9 @@ namespace QuestMmdPlayer
             backendDecisionReported = false;
             backendTtsReported = false;
             backendTotalReported = false;
+            backendHooksReported = false;
+            backendProviderReported = false;
+            backendLagReported = false;
         }
 
         private void TryQueueLocalAction(string text)
@@ -1445,6 +1451,21 @@ namespace QuestMmdPlayer
             {
                 backendTotalReported = true;
                 RecordStage("backend_total", "completed", "server_timing", elapsedMs: timing.TurnTotalMs);
+            }
+            if (!backendHooksReported && timing.DecisionHooksMs > 0)
+            {
+                backendHooksReported = true;
+                RecordStage("backend_hooks", "completed", "decision_hooks", elapsedMs: timing.DecisionHooksMs);
+            }
+            if (!backendProviderReported && timing.DecisionProviderMs > 0)
+            {
+                backendProviderReported = true;
+                RecordStage("backend_llm", "completed", "decision_provider", elapsedMs: timing.DecisionProviderMs);
+            }
+            if (!backendLagReported && timing.EventLoopLagMs > 0)
+            {
+                backendLagReported = true;
+                RecordStage("event_loop_lag", "completed", "event_loop_lag", elapsedMs: timing.EventLoopLagMs);
             }
         }
 

@@ -26,6 +26,7 @@ namespace QuestMmdPlayer
         private bool highFrequencyContact;
         private int updateParity;
         private int activeProbeCount;
+        private bool lastHadActiveProbe;
         private readonly Vector3[] probePositions =
             new Vector3[QuestTrackedHandVisualizer.PhysicsProbeCount];
         private readonly float[] probeRadii =
@@ -46,6 +47,8 @@ namespace QuestMmdPlayer
         public bool IsConfigured => configured && physicsManager != null;
         internal bool RuntimeContactEnabled => runtimeContactEnabled;
         internal bool HighFrequencyContact => highFrequencyContact;
+        /// <summary>Fires when a tracked hand probe enters/leaves the avatar's contact range.</summary>
+        public event Action<bool> ActiveProbeChanged;
 
         internal void SetRuntimeContactEnabledForQa(bool enabled)
         {
@@ -75,6 +78,7 @@ namespace QuestMmdPlayer
                 : avatar.GetComponentsInChildren<Renderer>(true);
             configured = false;
             activeProbeCount = 0;
+            lastHadActiveProbe = false;
             cachedAvatarBoundsAvailable = false;
             nextAvatarBoundsRefreshAt = 0f;
             CaptureAvatarRootPose();
@@ -157,6 +161,7 @@ namespace QuestMmdPlayer
                 physicsManager.SetExternalKinematicSpherePose(index, probePositions[index], active);
                 if (active) activeProbeCount++;
             }
+            NotifyActiveProbeState();
         }
 
         private void DeactivateExternalProbes()
@@ -170,6 +175,18 @@ namespace QuestMmdPlayer
                 physicsManager.SetExternalKinematicSpherePose(index, Vector3.zero, false);
             }
             activeProbeCount = 0;
+            NotifyActiveProbeState();
+        }
+
+        private void NotifyActiveProbeState()
+        {
+            var hasActive = activeProbeCount > 0;
+            if (hasActive == lastHadActiveProbe)
+            {
+                return;
+            }
+            lastHadActiveProbe = hasActive;
+            ActiveProbeChanged?.Invoke(hasActive);
         }
 
         private bool TryGetCachedAvatarBounds(out Bounds bounds)

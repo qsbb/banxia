@@ -336,6 +336,9 @@ namespace QuestMmdPlayer
                 case "backend_decision": return "后端决策链";
                 case "backend_tts": return "后端语音合成";
                 case "backend_total": return "后端总耗时";
+                case "backend_hooks": return "决策前置钩子";
+                case "backend_llm": return "后端模型生成";
+                case "event_loop_lag": return "事件循环积压";
                 case "eventbus": return "AstrBot/EventBus";
                 case "llm": return "模型生成";
                 case "tts": return "语音合成";
@@ -452,6 +455,9 @@ namespace QuestMmdPlayer
                 case "playback_start": return "首段语音到实际开播";
                 case "playback_callback": return "播放请求到音频回调";
                 case "server_timing": return "服务端耗时摘要";
+                case "decision_hooks": return "模型前置钩子";
+                case "decision_provider": return "模型生成";
+                case "event_loop_lag": return "事件循环积压";
                 case "astrbot_event_bus": return "AstrBot/EventBus";
                 case "direct_provider": return "直接模型";
                 case "unknown": return "未知路径";

@@ -35,6 +35,19 @@ namespace QuestMmdPlayer
 
         [SerializeField] private QuestQualityPreset defaultPreset = QuestQualityPreset.Balanced;
         [SerializeField] private MmdPhysicsPreset defaultPhysicsPreset = MmdPhysicsPreset.Balanced;
+
+        // 待机物理档：纯待机（无动作、无触碰、无接近手）时自动切换，
+        // 低沉本打破 60Hz 固定步的 catch-up 恶性循环；动作/触碰/接近时自动恢复。
+        [Header("待机物理档")]
+        [SerializeField, Range(30, 120)] private int idlePhysicsFrequencyHz = 30;
+        [SerializeField, Range(1, 4)] private int idlePhysicsMaximumSubsteps = 1;
+        [SerializeField, Range(0, 2)] private int idlePhysicsReinforcement = 0;
+        [SerializeField] private bool idlePhysicsFullHandContact = false;
+
+        private AvatarController idlePhysicsAvatar;
+        private AvatarTouchInteraction idlePhysicsTouch;
+        private AvatarMmdPhysicsAdapter idlePhysicsHandPhysics;
+        private bool idlePhysicsSourcesBound;
         private Coroutine refreshRateRequest;
 
         public event Action<QuestQualityPreset> QualityChanged;
@@ -47,6 +60,8 @@ namespace QuestMmdPlayer
         public int PhysicsMaximumSubsteps { get; private set; } = 2;
         public int PhysicsReinforcement { get; private set; } = 1;
         public bool FullHandContact { get; private set; } = true;
+        public bool IsIdlePhysicsActive { get; private set; }
+        public event Action<bool> IdlePhysicsActiveChanged;
         public string RefreshRateStatus { get; private set; } = "等待 XR 显示器";
         public int ApplicationTargetFrameRate { get; private set; }
 
@@ -75,6 +90,11 @@ namespace QuestMmdPlayer
                 StopCoroutine(refreshRateRequest);
                 refreshRateRequest = null;
             }
+        }
+
+        private void OnDestroy()
+        {
+            UnbindIdlePhysicsSources();
         }
 
         private void OnApplicationFocus(bool hasFocus)
@@ -268,6 +288,134 @@ namespace QuestMmdPlayer
             adapter?.SetHighFrequencyContact(FullHandContact);
         }
 
+        /// <summary>
+        /// Subscribes the idle-physics governor to the three motion/contact sources
+        /// so it can swap between the low-cost idle profile and the user's preset
+        /// without polling. Callers may invoke this repeatedly (e.g. after a model
+        /// reload) because it always detaches the previous sources first.
+        /// </summary>
+        public void BindIdlePhysicsSources(
+            AvatarController avatar,
+            AvatarTouchInteraction touch,
+            AvatarMmdPhysicsAdapter handPhysics)
+        {
+            UnbindIdlePhysicsSources();
+            idlePhysicsAvatar = avatar;
+            idlePhysicsTouch = touch;
+            idlePhysicsHandPhysics = handPhysics;
+            if (avatar != null)
+            {
+                avatar.ActionChanged += HandleAvatarActionChanged;
+            }
+            if (touch != null)
+            {
+                touch.TouchStateChanged += HandleTouchStateChanged;
+            }
+            if (handPhysics != null)
+            {
+                handPhysics.ActiveProbeChanged += HandleActiveProbeChanged;
+            }
+            idlePhysicsSourcesBound = true;
+            EvaluateIdlePhysics();
+        }
+
+        public void UnbindIdlePhysicsSources()
+        {
+            if (!idlePhysicsSourcesBound)
+            {
+                return;
+            }
+            if (idlePhysicsAvatar != null)
+            {
+                idlePhysicsAvatar.ActionChanged -= HandleAvatarActionChanged;
+            }
+            if (idlePhysicsTouch != null)
+            {
+                idlePhysicsTouch.TouchStateChanged -= HandleTouchStateChanged;
+            }
+            if (idlePhysicsHandPhysics != null)
+            {
+                idlePhysicsHandPhysics.ActiveProbeChanged -= HandleActiveProbeChanged;
+            }
+            idlePhysicsAvatar = null;
+            idlePhysicsTouch = null;
+            idlePhysicsHandPhysics = null;
+            idlePhysicsSourcesBound = false;
+        }
+
+        /// <summary>Applies the tunable low-cost idle profile to every loaded model.</summary>
+        public void ApplyIdlePhysics()
+        {
+            if (IsIdlePhysicsActive)
+            {
+                return;
+            }
+            MMDPhysicsManager.ConfigureRuntimeQuality(
+                Mathf.Clamp(idlePhysicsFrequencyHz, 30, 120),
+                Mathf.Clamp(idlePhysicsMaximumSubsteps, 1, 4),
+                Mathf.Clamp(idlePhysicsReinforcement, 0, 2));
+            ApplyPhysicsPolicyToLoadedModels(true, idlePhysicsFullHandContact);
+            SetIdlePhysicsActive(true);
+        }
+
+        /// <summary>Restores the user's saved preset profile (default balanced 60/2/1).</summary>
+        public void RestorePresetPhysics()
+        {
+            if (!IsIdlePhysicsActive)
+            {
+                return;
+            }
+            MMDPhysicsManager.ConfigureRuntimeQuality(
+                PhysicsFrequencyHz,
+                PhysicsMaximumSubsteps,
+                PhysicsReinforcement);
+            ApplyPhysicsPolicyToLoadedModels(true, FullHandContact);
+            SetIdlePhysicsActive(false);
+        }
+
+        private void HandleAvatarActionChanged(string action)
+        {
+            EvaluateIdlePhysics();
+        }
+
+        private void HandleTouchStateChanged(bool touched)
+        {
+            EvaluateIdlePhysics();
+        }
+
+        private void HandleActiveProbeChanged(bool hasActiveProbe)
+        {
+            EvaluateIdlePhysics();
+        }
+
+        private void EvaluateIdlePhysics()
+        {
+            var avatarAtRest = idlePhysicsAvatar == null ||
+                AvatarMotionArbiter.Normalize(idlePhysicsAvatar.CurrentAction) == "idle";
+            var notTouching = idlePhysicsTouch == null || !idlePhysicsTouch.IsTouched;
+            var noNearHand = idlePhysicsHandPhysics == null ||
+                idlePhysicsHandPhysics.ActiveProbeCount <= 0;
+            if (avatarAtRest && notTouching && noNearHand)
+            {
+                ApplyIdlePhysics();
+            }
+            else
+            {
+                RestorePresetPhysics();
+            }
+        }
+
+        private void SetIdlePhysicsActive(bool active)
+        {
+            if (IsIdlePhysicsActive == active)
+            {
+                return;
+            }
+            IsIdlePhysicsActive = active;
+            UpdateStatus();
+            IdlePhysicsActiveChanged?.Invoke(active);
+        }
+
         private static void ApplyPhysicsPolicyToLoadedModels(bool rebuildPhysics, bool fullHandContact)
         {
             if (rebuildPhysics)
@@ -291,7 +439,11 @@ namespace QuestMmdPlayer
             Status = GetDisplayName(CurrentPreset) + "画质 · 渲染比例 " + RenderScale.ToString("F2") +
                 " · " + GetPhysicsDisplayName(CurrentPhysicsPreset) + "物理 " +
                 PhysicsFrequencyHz + "Hz/" + PhysicsMaximumSubsteps + "步" +
-                (FullHandContact ? " · 完整手部接触" : " · 低频手部接触");
+                (FullHandContact ? " · 完整手部接触" : " · 低频手部接触") +
+                (IsIdlePhysicsActive
+                    ? " · 待机档 " + idlePhysicsFrequencyHz + "Hz/" +
+                        idlePhysicsMaximumSubsteps + "步"
+                    : string.Empty);
         }
 
         private IEnumerator RequestPreferredRefreshRate()
