@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using System;
 using System.IO;
 using System.Linq;
@@ -88,6 +88,17 @@ namespace QuestMmdPlayer.Editor
                 PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
 
                 Directory.CreateDirectory(Path.GetDirectoryName(OutputPath));
+                // 联调期默认 Development：启用 ProfilerRecorder 系统级计费
+                // （[SysBilling] 心跳），定位 MMD 计费看不到的主线程开销。
+                // 传 -questDisableDevelopmentBuild 可回到纯 Release。
+                var buildOptions = BuildOptions.None;
+                var args = Environment.GetCommandLineArgs();
+                var disableDevelopment = Array.Exists(args,
+                    arg => string.Equals(arg, "-questDisableDevelopmentBuild", StringComparison.OrdinalIgnoreCase));
+                if (!disableDevelopment)
+                {
+                    buildOptions |= BuildOptions.Development;
+                }
                 BuildReport report;
                 using (new EditorBuildSettingsConfigScope(EditorSimulationSettingsConfigKey))
                 {
@@ -96,7 +107,7 @@ namespace QuestMmdPlayer.Editor
                         scenes = new[] { ScenePath },
                         locationPathName = OutputPath,
                         target = BuildTarget.Android,
-                        options = BuildOptions.None
+                        options = buildOptions
                     });
                 }
 

@@ -1,6 +1,7 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using UnityEngine;
 
@@ -82,6 +83,12 @@ namespace QuestMmdPlayer
         private int sampleRate = 24000;
         private float latestRms;
         private float audibleRms;
+        private float peakStreamRms;
+        private int peakEnqueueSample;
+        private int nonzeroChunkCount;
+        private long consumedSampleCount;
+        private const int DefaultSampleRate = 24000;
+        private const int NonzeroChunkThreshold = 500;
         private int dspBufferLength = 1024;
         private int dspBufferCount = 4;
         private double audibleUntilDspTime;
@@ -101,6 +108,12 @@ namespace QuestMmdPlayer
         private float nextSlowEnqueueLogAt;
         private double nextProgressReportDspTime;
         [SerializeField, Range(.04f, .4f)] private float startupBufferSeconds = .12f;
+        // QA 测试音：定位"数字信号有声但听不到"的最后一环（Unity→扬声器物理通路）。
+        // 仅 Development/Editor 构建编译；启动 1.5s 后自动播一次，此后可通过在
+        // persistentDataPath 写 qa_tone.trigger 文件（adb run-as）随时重测。
+        private float qaToneAt = -1f;
+        private float nextQaTriggerCheckAt;
+        private string qaTriggerPath;
         [SerializeField, Range(.02f, .5f)] private float outputTailSafetySeconds = .22f;
 
         public bool IsDrained
@@ -187,17 +200,105 @@ namespace QuestMmdPlayer
             AudioSettings.GetDSPBufferSize(out dspBufferLength, out dspBufferCount);
             dspBufferLength = Mathf.Max(1, dspBufferLength);
             dspBufferCount = Mathf.Max(1, dspBufferCount);
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+            qaToneAt = Time.unscaledTime + 1.5f;
+            qaTriggerPath = Path.Combine(Application.persistentDataPath, "qa_tone.trigger");
+#endif
+            AudioSettings.OnAudioConfigurationChanged += HandleAudioConfigurationChanged;
+            // 常驻播放架构：clip 创建一次、Play 一次、永不 Stop。
+            // PCM 回调持续拉取队列，空闲时零填充。彻底消除 Android/OpenSL 上
+            // streaming clip 经 Stop→Play 复用后输出静默的已知脆弱路径。
+            EnsurePersistentStream(DefaultSampleRate);
         }
+
+        private void HandleAudioConfigurationChanged(bool deviceWasChanged)
+        {
+            var config = AudioSettings.GetConfiguration();
+            Debug.LogWarning(
+                $"[PcmStream] 音频配置变更: deviceChanged={deviceWasChanged} " +
+                $"rate={config.sampleRate}Hz speaker={config.speakerMode} " +
+                $"voices={config.numRealVoices}/{config.numVirtualVoices}",
+                this);
+            if (deviceWasChanged && audioSource != null && streamClip != null)
+            {
+                // 输出设备切换后强制重建底层 voice，防止 OpenSL 路由残留。
+                audioSource.Stop();
+                audioSource.Play();
+            }
+        }
+
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+        private void PlayQaTone(string reason)
+        {
+            if (PlaybackStarted)
+            {
+                Debug.LogWarning("[PcmStream] QA 测试音跳过：正在播放回复", this);
+                return;
+            }
+            const int rate = 24000;
+            var count = rate * 3 / 2;
+            var tone = new short[count];
+            for (var i = 0; i < count; i++)
+            {
+                tone[i] = (short)(Mathf.Sin(2f * Mathf.PI * 880f * i / rate) * 0.35f * 32767f);
+            }
+            Debug.LogWarning(
+                $"[PcmStream] QA 测试音({reason})：880Hz×1.5s——戴头显应听到蜂鸣；若听不到且 peak_rms>0 则是系统输出层问题",
+                this);
+            BeginStream();
+            Enqueue(tone, rate, count);
+            MarkStreamCompleted();
+        }
+#endif
 
         private void Update()
         {
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+            if (qaToneAt > 0f && Time.unscaledTime >= qaToneAt)
+            {
+                qaToneAt = -1f;
+                PlayQaTone("startup");
+            }
+            if (Time.unscaledTime >= nextQaTriggerCheckAt)
+            {
+                nextQaTriggerCheckAt = Time.unscaledTime + 1f;
+                var path = qaTriggerPath;
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                {
+                    try
+                    {
+                        File.Delete(path);
+                    }
+                    catch (Exception)
+                    {
+                        // 忽略删除失败，避免每帧重试刷屏。
+                    }
+                    PlayQaTone("trigger");
+                }
+            }
+#endif
+            // 常驻播放看门狗：任何原因导致 voice 停止（挂起恢复、设备切换等）立即复活。
+            if (audioSource != null && streamClip != null && !audioSource.isPlaying)
+            {
+                audioSource.Play();
+            }
             TryStartPlayback();
             UpdateAudibleRms();
             ReportPlaybackTelemetry();
             ReportPlaybackProgress();
-            if (audioSource != null && audioSource.isPlaying && StreamCompleted && IsDrained)
+            if (PlaybackStarted && StreamCompleted && IsDrained)
             {
-                audioSource.Stop();
+                Volatile.Write(ref playbackStartedFlag, 0);
+                // 播完总结：peak_rms 此时覆盖整条播放（区别于流结束快照只覆盖到网络末尾）。
+                // nonzero_chunks 反映入队侧（线路上）真实有声块数——两侧对照可一锤定音
+                // 区分"线路发来零数据"与"播放器内部丢数据"。
+                Debug.Log(
+                    $"[PcmStream] Playback summary gen={Volatile.Read(ref playbackGeneration)} " +
+                    $"peak_rms={peakStreamRms:F4} peak_in={peakEnqueueSample} " +
+                    $"nonzero_chunks={nonzeroChunkCount}/{enqueuedChunkCount} " +
+                    $"consumed_ms={(sampleRate > 0 ? consumedSampleCount * 1000 / sampleRate : 0)} " +
+                    $"underflows={UnderflowCount}",
+                    this);
                 lock (gate)
                 {
                     latestRms = 0f;
@@ -209,6 +310,10 @@ namespace QuestMmdPlayer
 
         public int BeginStream()
         {
+            peakStreamRms = 0f;
+            peakEnqueueSample = 0;
+            nonzeroChunkCount = 0;
+            consumedSampleCount = 0L;
             StopAndClear();
             Volatile.Write(ref streamCompletedFlag, 0);
             Interlocked.Exchange(ref underflowCount, 0);
@@ -221,7 +326,10 @@ namespace QuestMmdPlayer
             Debug.Log(
                 $"[PcmStream] Stream summary chunks={enqueuedChunkCount} " +
                 $"peak_queue={peakQueuedChunkCount} max_enqueue_ms={maximumEnqueueMs:F2} " +
-                $"underflows={UnderflowCount}",
+                $"underflows={UnderflowCount} peak_rms={peakStreamRms:F4} peak_in={peakEnqueueSample} rate={sampleRate} " +
+                $"vol={audioSource.volume:F2} mute={audioSource.mute} " +
+                $"listeners={FindObjectsOfType<AudioListener>(false).Length} " +
+                $"dspRate={AudioSettings.outputSampleRate}Hz",
                 this);
             TryStartPlayback();
         }
@@ -234,16 +342,32 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            EnsureStream(sourceSampleRate);
+            EnsurePersistentStream(sourceSampleRate);
             var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             var converted = ArrayPool<float>.Shared.Rent(length);
-            for (var i = 0; i < length; i++)
-            {
-                converted[i] = pcm16[i] / 32768f;
-            }
-
+            // 转换在锁内完成：与音频线程的消费建立确定的先后/可见性关系，
+            // 同时统计本块是否真实有声（鉴别线路零数据 vs 播放器丢数据）。
             lock (gate)
             {
+                var chunkPeak = 0;
+                for (var i = 0; i < length; i++)
+                {
+                    var raw = pcm16[i];
+                    converted[i] = raw / 32768f;
+                    var magnitude = raw < 0 ? -(int)raw : (int)raw;
+                    if (magnitude > chunkPeak)
+                    {
+                        chunkPeak = magnitude;
+                    }
+                }
+                if (chunkPeak > peakEnqueueSample)
+                {
+                    peakEnqueueSample = chunkPeak;
+                }
+                if (chunkPeak > NonzeroChunkThreshold)
+                {
+                    nonzeroChunkCount++;
+                }
                 buffers.Enqueue(new AudioBuffer(converted, length));
                 queuedSamples += length;
                 enqueuedChunkCount++;
@@ -272,10 +396,7 @@ namespace QuestMmdPlayer
 
         private void ClearForFormatChange()
         {
-            if (audioSource != null)
-            {
-                audioSource.Stop();
-            }
+            // 常驻播放：这里绝不 Stop AudioSource——voice 一生只 Play 一次。
             lock (gate)
             {
                 ReturnQueuedBuffers();
@@ -302,7 +423,7 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void EnsureStream(int sourceSampleRate)
+        private void EnsurePersistentStream(int sourceSampleRate)
         {
             if (audioSource == null)
             {
@@ -331,6 +452,8 @@ namespace QuestMmdPlayer
             sampleRate = sourceSampleRate;
             streamClip = AudioClip.Create("Conversation PCM Stream", sampleRate * 2, 1, sampleRate, true, ReadAudio, SetPosition);
             audioSource.clip = streamClip;
+            // 立即永久播放：PCM 回调从此持续运转，空闲零填充、有数据即出声。
+            audioSource.Play();
         }
 
         private void ReadAudio(float[] data)
@@ -363,6 +486,7 @@ namespace QuestMmdPlayer
                     write += count;
                     currentOffset += count;
                     queuedSamples = Mathf.Max(0, queuedSamples - count);
+                    consumedSampleCount += count;
                 }
 
                 for (var i = write; i < data.Length; i++)
@@ -374,6 +498,10 @@ namespace QuestMmdPlayer
                     Interlocked.Increment(ref underflowCount);
                 }
                 latestRms = data.Length == 0 ? 0f : Mathf.Sqrt(sumSquares / data.Length);
+                if (latestRms > peakStreamRms)
+                {
+                    peakStreamRms = latestRms;
+                }
                 var outputLatencySeconds = CalculateOutputLatencySeconds(
                     dspBufferLength,
                     dspBufferCount,
@@ -458,7 +586,7 @@ namespace QuestMmdPlayer
 
         private void TryStartPlayback()
         {
-            if (audioSource == null || audioSource.isPlaying)
+            if (audioSource == null || PlaybackStarted)
             {
                 return;
             }
@@ -475,7 +603,7 @@ namespace QuestMmdPlayer
             playbackTelemetryReported = false;
             nextProgressReportDspTime = AudioSettings.dspTime + .25d;
             playbackStartBufferedMs = Mathf.RoundToInt(buffered * 1000f / Mathf.Max(1, sampleRate));
-            audioSource.Play();
+            // 常驻播放：音源始终 isPlaying，这里无需也无法再 Play。
         }
 
         private void OnAudioFilterRead(float[] data, int channels)
@@ -516,7 +644,7 @@ namespace QuestMmdPlayer
 
         private void ReportPlaybackProgress()
         {
-            if (!PlaybackStarted || audioSource == null || !audioSource.isPlaying ||
+            if (!PlaybackStarted || audioSource == null ||
                 AudioSettings.dspTime < nextProgressReportDspTime)
             {
                 return;
@@ -544,6 +672,11 @@ namespace QuestMmdPlayer
         private void OnDestroy()
         {
             StopAndClear();
+            AudioSettings.OnAudioConfigurationChanged -= HandleAudioConfigurationChanged;
+            if (audioSource != null)
+            {
+                audioSource.Stop();
+            }
             if (streamClip != null)
             {
                 Destroy(streamClip);

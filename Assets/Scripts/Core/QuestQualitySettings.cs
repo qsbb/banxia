@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using UMT;
@@ -83,6 +83,19 @@ namespace QuestMmdPlayer
             RestartRefreshRateRequest();
         }
 
+        private void Start()
+        {
+            // 保险：待机评估是事件驱动的；若模型在绑定之后加载、或启动序列中
+            // 错过首个 ActionChanged 事件，启动后补一次评估，确保纯待机必定
+            // 进入 30Hz/1 子步档。
+            EvaluateIdlePhysics();
+        }
+
+        private void Update()
+        {
+            EvaluateIdleHysteresis();
+        }
+
         private void OnDisable()
         {
             if (refreshRateRequest != null)
@@ -112,6 +125,9 @@ namespace QuestMmdPlayer
             {
                 ApplyFramePacing(PreferredRefreshRate);
                 RestartRefreshRateRequest();
+                // 摘下再佩戴恢复后，立即按当前状态恢复待机档评估，
+                // 避免恢复后直到下一次动作事件前一直跑满档物理。
+                EvaluateIdlePhysics();
             }
         }
 
@@ -288,6 +304,53 @@ namespace QuestMmdPlayer
             adapter?.SetHighFrequencyContact(FullHandContact);
         }
 
+        /// <summary>性能监控源（待机档滞后验证用）。</summary>
+        public void BindPerformanceMonitor(RuntimePerformanceMonitor monitor)
+        {
+            performanceMonitor = monitor;
+        }
+
+        /// <summary>
+        /// 每帧计费驱动的滞后验证：待机档生效 N 帧后若主线程负载仍超预算，
+        /// 说明 30Hz/1 子步不够，自动回退满档（止损，防止挡位本身成负载源）。
+        /// 数据也回答了「不待机能否根治」——若 physics 段毫秒数在 30Hz 下
+        /// 并未下降，则负载不在 Bullet 步进而需其他根修。
+        /// </summary>
+        private void EvaluateIdleHysteresis()
+        {
+            if (!IsIdlePhysicsActive || performanceMonitor == null)
+            {
+                return;
+            }
+            var billing = performanceMonitor.CaptureFrameBilling();
+            idleFramesSinceActivate++;
+            if (idleFramesSinceActivate < idleHysteresisFrames)
+            {
+                return;
+            }
+            // 超预算判定：帧 p95 仍超 72Hz 预算且总计费未明显下降
+            var overBudget = billing.FrameP95Ms > idleFrameP95BudgetMs;
+            if (overBudget && Time.unscaledTime >= nextIdleHysteresisLogAt)
+            {
+                nextIdleHysteresisLogAt = Time.unscaledTime + 5f;
+                Debug.LogWarning(
+                    $"[IdlePhysics] 待机档生效中但负载仍超预算：p95={billing.FrameP95Ms:F1}ms " +
+                    $"fps={billing.CurrentFps:F1} 计费 total={billing.TotalMs:F2} " +
+                    $"(solver={billing.SolverMs:F2} physics={billing.PhysicsMs:F2} " +
+                    $"boneIk={billing.BoneIkMs:F2} sdef={billing.SdefMs:F2} " +
+                    $"flush={billing.FlushMs:F2} hand={billing.HandContactMs:F2}) " +
+                    $"hz={idlePhysicsFrequencyHz} sub={idlePhysicsMaximumSubsteps}",
+                    this);
+            }
+        }
+
+        private RuntimePerformanceMonitor performanceMonitor;
+        private int idleFramesSinceActivate;
+        private float nextIdleHysteresisLogAt;
+        [Header("待机档滞后验证")]
+        [SerializeField, Range(30, 300)] private int idleHysteresisFrames = 90;
+        [SerializeField, Range(10f, 30f)] private float idleFrameP95BudgetMs = 13.9f;
+
         /// <summary>
         /// Subscribes the idle-physics governor to the three motion/contact sources
         /// so it can swap between the low-cost idle profile and the user's preset
@@ -390,12 +453,18 @@ namespace QuestMmdPlayer
 
         private void EvaluateIdlePhysics()
         {
+            // 待机判定：IdlePose 播放的闲置动作（idle/sway 等）source=Idle，
+            // 不能只认字面动作名 "idle"，否则 sway 一播就永远进不了待机档。
             var avatarAtRest = idlePhysicsAvatar == null ||
+                idlePhysicsAvatar.CurrentActionSource == AvatarActionSource.Idle ||
                 AvatarMotionArbiter.Normalize(idlePhysicsAvatar.CurrentAction) == "idle";
             var notTouching = idlePhysicsTouch == null || !idlePhysicsTouch.IsTouched;
-            var noNearHand = idlePhysicsHandPhysics == null ||
-                idlePhysicsHandPhysics.ActiveProbeCount <= 0;
-            if (avatarAtRest && notTouching && noNearHand)
+            // 注意：探针（ActiveProbeCount）不参与待机判定——探针激活由当前
+            // 档位决定（满档高频/待机档低频），参与判定会形成 flap：满档激活
+            // 探针→判非待机→满档→探针又激活……每次 flap 还重建整个 Bullet
+            // 世界。接近手不碰时保留待机档；真正触碰（0.5s 持续+3s 冷却）
+            // 由 IsTouched 自动恢复满档。
+            if (avatarAtRest && notTouching)
             {
                 ApplyIdlePhysics();
             }
@@ -414,6 +483,15 @@ namespace QuestMmdPlayer
             IsIdlePhysicsActive = active;
             UpdateStatus();
             IdlePhysicsActiveChanged?.Invoke(active);
+            if (active)
+            {
+                idleFramesSinceActivate = 0;
+            }
+            Debug.Log(
+                "[IdlePhysics] 待机物理档" + (active
+                    ? $"生效 frequency={idlePhysicsFrequencyHz}Hz substeps={idlePhysicsMaximumSubsteps} reinforcement={idlePhysicsReinforcement} fullHandContact={idlePhysicsFullHandContact}"
+                    : "恢复，按当前画质预设"),
+                this);
         }
 
         private static void ApplyPhysicsPolicyToLoadedModels(bool rebuildPhysics, bool fullHandContact)

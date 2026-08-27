@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UMT;
@@ -272,6 +272,59 @@ namespace QuestMmdPlayer
         }
 
         public PerformanceWindowSummary detailedWindow => detailedWindowSummary;
+
+        /// <summary>单帧各段计费快照（给待机档滞后评估用，单位毫秒）。</summary>
+        public readonly struct FrameBillingSnapshot
+        {
+            public FrameBillingSnapshot(
+                float solverMs,
+                float physicsMs,
+                float boneIkMs,
+                float sdefMs,
+                float flushMs,
+                float handContactMs,
+                float totalMs,
+                bool physicsActive,
+                float frameP95Ms,
+                float currentFps)
+            {
+                SolverMs = solverMs;
+                PhysicsMs = physicsMs;
+                BoneIkMs = boneIkMs;
+                SdefMs = sdefMs;
+                FlushMs = flushMs;
+                HandContactMs = handContactMs;
+                TotalMs = totalMs;
+                PhysicsActive = physicsActive;
+                FrameP95Ms = frameP95Ms;
+                CurrentFps = currentFps;
+            }
+
+            public float SolverMs { get; }
+            public float PhysicsMs { get; }
+            public float BoneIkMs { get; }
+            public float SdefMs { get; }
+            public float FlushMs { get; }
+            public float HandContactMs { get; }
+            public float TotalMs { get; }
+            public bool PhysicsActive { get; }
+            public float FrameP95Ms { get; }
+            public float CurrentFps { get; }
+        }
+
+        public FrameBillingSnapshot CaptureFrameBilling()
+        {
+            var solver = Mathf.Max(0f, mmdSolverMilliseconds);
+            var physics = Mathf.Max(0f, mmdPhysicsMilliseconds);
+            var boneIk = Mathf.Max(0f, mmdBoneAndIkMilliseconds);
+            var sdef = Mathf.Max(0f, mmdSdefMilliseconds);
+            var flush = Mathf.Max(0f, mmdFlushMilliseconds);
+            var hand = Mathf.Max(0f, handContactMilliseconds);
+            var total = solver + physics + boneIk + sdef + flush + hand;
+            return new FrameBillingSnapshot(
+                solver, physics, boneIk, sdef, flush, hand, total,
+                physicsMetricsAvailable, Mathf.Max(0f, frameTimeP95Ms), Mathf.Max(0f, currentFps));
+        }
         public int detailedWindowSampleCount => detailedSampleCount;
         public const float DetailedWindowDurationSeconds = DetailedWindowSeconds;
 

@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace QuestMmdPlayer
 {
@@ -297,7 +297,9 @@ namespace QuestMmdPlayer
             HandPhysics?.Bind(Avatar, TrackedHands);
             Quality?.ApplyHandContactPolicy(HandPhysics);
             Quality?.BindIdlePhysicsSources(Avatar, TouchInteraction, HandPhysics);
+            Quality?.BindPerformanceMonitor(Performance);
             DiagnosticsReporter?.Bind(Performance, Quality, AstrBot);
+            VoiceInput?.BindQuality(Quality);
             if (AvatarRayInteraction != null)
             {
                 AvatarRayInteraction.Bind(Avatar, HumanInteraction, Menu);

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Stopwatch = System.Diagnostics.Stopwatch;
 using UnityEngine;
 using UnityEngine.XR;
@@ -17,6 +17,10 @@ namespace QuestMmdPlayer
         // Any remaining samples stay in the ring-buffer backlog and are
         // drained over subsequent frames in the same PCM order.
         private const int CaptureBudgetMillisecondsPerUpdate = 40;
+        // 待机档激活时允许双倍预算：10s 环形缓冲在超长帧下也不会丢音频，
+        // 而预算翻倍只是同一帧里多处理一档，既消掉每秒一条的积压告警，
+        // 也不会产生大尖峰（环形长度天然兜底）。
+        private const int IdleCaptureBudgetMillisecondsPerUpdate = 80;
         private const int MaxEncodedChunksPerUpdate = 1;
         private const int StopDrainChunksPerUpdate = 2;
         // Stopping a turn runs on Unity's main thread. Keep its final
@@ -85,6 +89,8 @@ namespace QuestMmdPlayer
         private float stopCaptureSeconds;
         private bool automaticBargeInGuardLogged;
         private bool automaticCaptureDiscardLogged;
+        private int captureBudgetMillisecondsPerUpdate = CaptureBudgetMillisecondsPerUpdate;
+        private QuestQualitySettings qualitySettings;
 
         public bool IsRecording { get; private set; }
         public bool IsMonitoring { get; private set; }
@@ -108,6 +114,25 @@ namespace QuestMmdPlayer
             conversation = owner;
         }
 
+        /// <summary>由 bootstrap 在 Quality 创建后显式接线，避免 OnEnable 时序竞争。</summary>
+        public void BindQuality(QuestQualitySettings quality)
+        {
+            if (qualitySettings == quality)
+            {
+                return;
+            }
+            if (qualitySettings != null)
+            {
+                qualitySettings.IdlePhysicsActiveChanged -= HandleIdlePhysicsChanged;
+            }
+            qualitySettings = quality;
+            if (qualitySettings != null)
+            {
+                qualitySettings.IdlePhysicsActiveChanged += HandleIdlePhysicsChanged;
+                HandleIdlePhysicsChanged(qualitySettings.IsIdlePhysicsActive);
+            }
+        }
+
         private void Awake()
         {
             conversation = GetComponent<ConversationController>();
@@ -116,6 +141,25 @@ namespace QuestMmdPlayer
                 AlwaysListeningPreferenceKey,
                 alwaysListening ? 1 : 0) != 0;
             RecreateActivityGate();
+        }
+
+        private void OnEnable()
+        {
+            qualitySettings = qualitySettings != null
+                ? qualitySettings
+                : FindObjectOfType<QuestQualitySettings>();
+            if (qualitySettings != null)
+            {
+                qualitySettings.IdlePhysicsActiveChanged += HandleIdlePhysicsChanged;
+                HandleIdlePhysicsChanged(qualitySettings.IsIdlePhysicsActive);
+            }
+        }
+
+        private void HandleIdlePhysicsChanged(bool idlePhysicsActive)
+        {
+            captureBudgetMillisecondsPerUpdate = idlePhysicsActive
+                ? IdleCaptureBudgetMillisecondsPerUpdate
+                : CaptureBudgetMillisecondsPerUpdate;
         }
 
         private void Update()
@@ -710,7 +754,7 @@ namespace QuestMmdPlayer
                 ? frameBudget
                 : Pcm16CaptureUtility.FramesForDuration(
                     sourceSampleRate,
-                    CaptureBudgetMillisecondsPerUpdate);
+                    captureBudgetMillisecondsPerUpdate);
             var limited = Mathf.Min(available, Mathf.Max(1, budget));
             if (available > limited && Time.unscaledTime >= nextCapturePressureLogAt)
             {
@@ -1096,6 +1140,11 @@ namespace QuestMmdPlayer
 
         private void OnDisable()
         {
+            if (qualitySettings != null)
+            {
+                qualitySettings.IdlePhysicsActiveChanged -= HandleIdlePhysicsChanged;
+                qualitySettings = null;
+            }
             if (IsRecording)
             {
                 conversation?.CancelVoiceInput();

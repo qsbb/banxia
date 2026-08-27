@@ -1,7 +1,11 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
+#if ENABLE_PROFILER
+using Unity.Profiling;
+#endif
 
 namespace QuestMmdPlayer
 {
@@ -140,13 +144,107 @@ namespace QuestMmdPlayer
     public sealed class DiagnosticReporter : MonoBehaviour
     {
         [SerializeField] private bool uploadEnabled = true;
-        [SerializeField] private bool qaMode;
+        // 联调期默认开启：无头显菜单操作即可持续向 临 上报 2s 性能快照。
+        // 数据只有数值无文本、低频低优先级、失败即丢弃，不产生额外负担。
+        [SerializeField] private bool qaMode = true;
         [SerializeField, Range(1f, 30f)] private float perfIntervalSeconds = 2f;
 
         private RuntimePerformanceMonitor monitor;
         private QuestQualitySettings quality;
         private AstrBotBridge bridge;
         private float nextPerfAt;
+        private float nextHeartbeatAt;
+
+#if ENABLE_PROFILER
+        // 系统级计费（业界定位主线程隐藏开销的标准手段）：Development 构建下
+        // 直接从 Unity Profiler 标记读每帧耗时，覆盖 MMD 计费看不到的区段
+        // （渲染提交/蒙皮/变形/GC/vsync 等待）。名字无效的标记跳过。
+        private struct SystemRecorder
+        {
+            public string Name;
+            public ProfilerRecorder Recorder;
+        }
+
+        private SystemRecorder[] systemRecorders;
+        private bool systemRecordersReady;
+
+        private static readonly string[] SystemMarkerNames =
+        {
+            "BehaviourUpdate",
+            "LateBehaviourUpdate",
+            "FixedBehaviourUpdate",
+            "Camera.Render",
+            "RenderLoop.Draw",
+            "MeshSkinning.Update",
+            "ParticleSystem.Update",
+            "AudioManager.Update",
+            "Gfx.PresentFrame",
+            "GUI.Repaint",
+        };
+
+        private void EnsureSystemRecorders()
+        {
+            if (systemRecordersReady)
+            {
+                return;
+            }
+            systemRecordersReady = true;
+            var list = new List<SystemRecorder>();
+            foreach (var name in SystemMarkerNames)
+            {
+                try
+                {
+                    var recorder = ProfilerRecorder.StartNew(
+                        ProfilerCategory.Internal, name, 64,
+                        ProfilerRecorderOptions.StartImmediately |
+                        ProfilerRecorderOptions.SumAllSamplesInFrame);
+                    if (recorder.Valid)
+                    {
+                        list.Add(new SystemRecorder { Name = name, Recorder = recorder });
+                    }
+                }
+                catch (Exception)
+                {
+                    // 标记在该构建配置下不可用，忽略。
+                }
+            }
+            systemRecorders = list.ToArray();
+            var names = new StringBuilder(128);
+            foreach (var entry in systemRecorders)
+            {
+                if (names.Length > 0)
+                {
+                    names.Append(',');
+                }
+                names.Append(entry.Name);
+            }
+            Debug.Log($"[SysBilling] recorders ready: {(names.Length == 0 ? "(none)" : names.ToString())}", null);
+        }
+
+        private string SampleSystemBilling()
+        {
+            EnsureSystemRecorders();
+            if (systemRecorders == null || systemRecorders.Length == 0)
+            {
+                return string.Empty;
+            }
+            var builder = new StringBuilder(192);
+            foreach (var entry in systemRecorders)
+            {
+                if (!entry.Recorder.Valid)
+                {
+                    continue;
+                }
+                var ms = entry.Recorder.LastValue / 1_000_000.0;
+                if (ms < 0.05)
+                {
+                    continue;
+                }
+                builder.Append(' ').Append(entry.Name).Append('=').Append(ms.ToString("F2"));
+            }
+            return builder.ToString();
+        }
+#endif
 
         public bool UploadEnabled => uploadEnabled;
 
@@ -163,7 +261,31 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
-            if (!uploadEnabled || monitor == null || bridge == null)
+            if (monitor == null)
+            {
+                return;
+            }
+            // QA 心跳：5s 一行 logcat，联调期不靠上传链路也能拿到物理负载。
+            if (qaMode && Time.unscaledTime >= nextHeartbeatAt)
+            {
+                nextHeartbeatAt = Time.unscaledTime + 5f;
+                Debug.Log(
+                    $"[Perf] fps={monitor.currentFps:F1} p50={monitor.frameTimeP50Ms:F1} p95={monitor.frameTimeP95Ms:F1} max={monitor.frameTimeMaxMs:F1} " +
+                    $"solver={monitor.mmdSolverMilliseconds:F2} physics={monitor.mmdPhysicsMilliseconds:F2} " +
+                    $"boneIk={monitor.mmdBoneAndIkMilliseconds:F2} sdef={monitor.mmdSdefMilliseconds:F2} flush={monitor.mmdFlushMilliseconds:F2} " +
+                    $"hz={monitor.physicsFrequencyHz} sub={monitor.physicsMaximumSubstepsPerFrame} " +
+                    $"dropS={monitor.physicsSessionDroppedSeconds:F2} dropF={monitor.physicsSessionDroppedFrameCount} " +
+                    $"idle={(quality != null && quality.IsIdlePhysicsActive ? 1 : 0)}",
+                    this);
+#if ENABLE_PROFILER
+                var systemBilling = SampleSystemBilling();
+                if (!string.IsNullOrEmpty(systemBilling))
+                {
+                    Debug.Log($"[SysBilling]{systemBilling}", this);
+                }
+#endif
+            }
+            if (!uploadEnabled || bridge == null)
             {
                 return;
             }
