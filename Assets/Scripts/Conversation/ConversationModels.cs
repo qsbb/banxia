@@ -380,6 +380,7 @@ namespace QuestMmdPlayer
         public int DecisionHooksMs;
         public int DecisionProviderMs;
         public int EventLoopLagMs;
+        public string ServerTraceId;
 
         public bool IsValid => SchemaVersion == 1;
 
@@ -393,6 +394,25 @@ namespace QuestMmdPlayer
             return DecisionPath == "astrbot_event_bus" || DecisionPath == "direct_provider"
                 ? DecisionPath
                 : "unknown";
+        }
+
+        public string SafeTraceId()
+        {
+            var candidate = ServerTraceId ?? string.Empty;
+            if (candidate.Length == 0 || candidate.Length > 64)
+            {
+                return string.Empty;
+            }
+            for (var index = 0; index < candidate.Length; index++)
+            {
+                var character = candidate[index];
+                if (!char.IsLetterOrDigit(character) && character != '.' &&
+                    character != '_' && character != ':' && character != '-')
+                {
+                    return string.Empty;
+                }
+            }
+            return candidate;
         }
     }
 

@@ -42,6 +42,7 @@ namespace QuestMmdPlayer
         public VmdActionLibrary VmdActions { get; private set; }
         public RuntimeMmdModelLoader ModelLoader => runtimeMmdLoader;
         public QuestQualitySettings Quality { get; private set; }
+        public DiagnosticReporter DiagnosticsReporter { get; private set; }
         public QuestFileImportService FileImport { get; private set; }
         public RuntimeDebugLog DebugLog { get; private set; }
         public RuntimePerformanceMonitor Performance { get; private set; }
@@ -96,6 +97,7 @@ namespace QuestMmdPlayer
             Presence = gameObject.GetComponent<AvatarPresence>() ?? gameObject.AddComponent<AvatarPresence>();
             Outline = gameObject.GetComponent<AvatarOutlineController>() ?? gameObject.AddComponent<AvatarOutlineController>();
             Quality = gameObject.GetComponent<QuestQualitySettings>() ?? gameObject.AddComponent<QuestQualitySettings>();
+            DiagnosticsReporter = gameObject.GetComponent<DiagnosticReporter>() ?? gameObject.AddComponent<DiagnosticReporter>();
             runtimeMmdLoader = GetComponent<RuntimeMmdModelLoader>();
             VmdActions = gameObject.GetComponent<VmdActionLibrary>() ?? gameObject.AddComponent<VmdActionLibrary>();
             _ = VmdActions.RefreshAsync();
@@ -295,6 +297,7 @@ namespace QuestMmdPlayer
             HandPhysics?.Bind(Avatar, TrackedHands);
             Quality?.ApplyHandContactPolicy(HandPhysics);
             Quality?.BindIdlePhysicsSources(Avatar, TouchInteraction, HandPhysics);
+            DiagnosticsReporter?.Bind(Performance, Quality, AstrBot);
             if (AvatarRayInteraction != null)
             {
                 AvatarRayInteraction.Bind(Avatar, HumanInteraction, Menu);

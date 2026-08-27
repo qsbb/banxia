@@ -150,6 +150,12 @@ namespace QuestMmdPlayer
             new OrderedDeliveryQueue<ActionResultDelivery>();
         private Coroutine actionResultDeliveryRoutine;
         private const int MaxActionReceiptKeys = 512;
+        // 低优先级客户端诊断上报（diagnostics@1.0）：有界队列、丢弃最旧、
+        // 失败不重试；404 表示远端版本未启用该路由，本次运行内直接停用。
+        private readonly Queue<string> diagnosticsReports = new Queue<string>();
+        private Coroutine diagnosticsReportRoutine;
+        private bool diagnosticsUploadRemoteDisabled;
+        private const int MaxQueuedDiagnosticsReports = 4;
 
         private sealed class ActionResultDelivery
         {
@@ -174,6 +180,8 @@ namespace QuestMmdPlayer
         public string BackendChainStatus { get; private set; } = "chain unknown";
         public int QueuedInputAudioBytes => queuedInputAudioBytes;
         public bool AudioUploadInProgress => !string.IsNullOrEmpty(audioUploadTurnId);
+        public string SessionId => sessionId;
+        public bool DiagnosticsUploadAvailable => !diagnosticsUploadRemoteDisabled;
         public string AudioUploadDiagnosticStatus => AudioUploadInProgress
             ? $"audio queued={queuedInputAudioBytes} B uploaded={uploadedInputAudioBytes} B batches={uploadedInputBatchCount}"
             : "audio upload idle";
@@ -604,6 +612,63 @@ namespace QuestMmdPlayer
                 chunks: outgoingAudioChunks.Count,
                 bytes: queuedInputAudioBytes);
             return true;
+        }
+
+        /// <summary>
+        /// Queues one serialized diagnostics@1.0 report on the low-priority
+        /// channel. Bounded (drop-oldest), never retried; a 404 from an older
+        /// bridge disables the channel for this app lifetime.
+        /// </summary>
+        public bool EnqueueDiagnosticsReport(string json)
+        {
+            if (diagnosticsUploadRemoteDisabled || string.IsNullOrEmpty(json) ||
+                !CanSend(string.Empty, false))
+            {
+                return false;
+            }
+            while (diagnosticsReports.Count >= MaxQueuedDiagnosticsReports)
+            {
+                diagnosticsReports.Dequeue();
+            }
+            diagnosticsReports.Enqueue(json);
+            if (diagnosticsReportRoutine == null)
+            {
+                diagnosticsReportRoutine = StartCoroutine(DrainDiagnosticsReports());
+            }
+            return true;
+        }
+
+        private IEnumerator DrainDiagnosticsReports()
+        {
+            while (!shuttingDown && diagnosticsReports.Count > 0)
+            {
+                yield return PostDiagnosticsReport(diagnosticsReports.Dequeue());
+            }
+            diagnosticsReportRoutine = null;
+        }
+
+        private IEnumerator PostDiagnosticsReport(string json)
+        {
+            using (var request = CreateJsonRequest("diagnostics/report", json))
+            {
+                yield return request.SendWebRequest();
+                if (Succeeded(request))
+                {
+                    yield break;
+                }
+                if (request.responseCode == 404)
+                {
+                    diagnosticsUploadRemoteDisabled = true;
+                    diagnostics?.Record(
+                        "AstrBotBridge",
+                        "诊断上报路由未启用，已在本次运行中停止上报");
+                    yield break;
+                }
+                // 观测数据：失败即丢弃，绝不形成重试风暴。
+                diagnostics?.Record(
+                    "AstrBotBridge",
+                    "诊断上报丢弃：" + ReadFailureCode(request, "diagnostics_report_dropped"));
+            }
         }
 
         public bool SendPlaybackReceipt(PlaybackReceipt receipt)

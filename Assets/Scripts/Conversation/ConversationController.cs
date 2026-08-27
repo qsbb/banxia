@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -30,6 +31,10 @@ namespace QuestMmdPlayer
         private float playbackStartedAt = -1f;
         private float replyEndedAt = -1f;
         private float audioDoneAt = -1f;
+        private string turnServerTraceId = string.Empty;
+        private bool turnSpansSubmitted;
+        private Coroutine turnDiagnosticsFlushRoutine;
+        private DiagnosticReporter diagnosticsReporter;
         private float responseWaitStartedAt = -1f;
         private float firstBackendEventAt = -1f;
         private float lastReplyProgressAt = -1f;
@@ -181,6 +186,7 @@ namespace QuestMmdPlayer
                     "completed",
                     elapsedMs: ElapsedMsValue(firstAudioAt, audioDoneAt),
                     chunks: replyAudioChunkCount);
+                TryScheduleTurnDiagnosticsFlush();
                 Debug.Log("[Conversation] Voice timing " + BuildTimingStatus(Time.unscaledTime), this);
                 NotifyStateChanged();
             }
@@ -929,6 +935,10 @@ namespace QuestMmdPlayer
 
         private void ResetTurnTiming()
         {
+            // 上一轮若尚未上报（例如 reply.end 丢失），在新一轮开始前补交一次。
+            TrySubmitTurnDiagnostics();
+            turnServerTraceId = string.Empty;
+            turnSpansSubmitted = false;
             turnStartedAt = Time.unscaledTime;
             firstInputChunkAt = -1f;
             inputEndedAt = -1f;
@@ -1388,6 +1398,7 @@ namespace QuestMmdPlayer
                     "reply_end",
                     ElapsedMsValue(inputEndedAt >= 0f ? inputEndedAt : turnStartedAt, replyEndedAt),
                     replyAudioChunkCount);
+                TryScheduleTurnDiagnosticsFlush();
             }
 
         }
@@ -1422,6 +1433,11 @@ namespace QuestMmdPlayer
             if (timing == null || !timing.IsValid)
             {
                 return;
+            }
+            // 服务端 trace_id 是客户端跨度与服务端事件的对齐键（不匹配则只上报客户端段）。
+            if (string.IsNullOrEmpty(turnServerTraceId))
+            {
+                turnServerTraceId = timing.SafeTraceId();
             }
 
             if (!backendSttReported && timing.SttMs > 0)
@@ -1467,6 +1483,87 @@ namespace QuestMmdPlayer
                 backendLagReported = true;
                 RecordStage("event_loop_lag", "completed", "event_loop_lag", elapsedMs: timing.EventLoopLagMs);
             }
+        }
+
+        /// <summary>
+        /// 延迟 1.5s 上报本轮客户端跨度：给 audio_done 一点收尾窗口，
+        /// 且每轮只允许排一次（ReplyEnd 与音频结束都会触发调度）。
+        /// </summary>
+        private void TryScheduleTurnDiagnosticsFlush()
+        {
+            if (turnSpansSubmitted || turnDiagnosticsFlushRoutine != null)
+            {
+                return;
+            }
+            turnDiagnosticsFlushRoutine = StartCoroutine(FlushTurnDiagnosticsAfterDelay(1.5f));
+        }
+
+        private IEnumerator FlushTurnDiagnosticsAfterDelay(float delay)
+        {
+            yield return new WaitForSeconds(delay);
+            turnDiagnosticsFlushRoutine = null;
+            TrySubmitTurnDiagnostics();
+        }
+
+        private void TrySubmitTurnDiagnostics()
+        {
+            if (turnSpansSubmitted || turnStartedAt < 0f)
+            {
+                return;
+            }
+            if (diagnosticsReporter == null)
+            {
+                diagnosticsReporter = GetComponent<DiagnosticReporter>();
+            }
+            if (diagnosticsReporter == null)
+            {
+                diagnosticsReporter = FindObjectOfType<DiagnosticReporter>();
+            }
+            if (diagnosticsReporter == null)
+            {
+                return;
+            }
+            var turn = BuildTurnDiagnostics();
+            if (turn.Spans == null || turn.Spans.Length == 0)
+            {
+                return;
+            }
+            turnSpansSubmitted = true;
+            diagnosticsReporter.SubmitTurnDiagnostics(turn);
+            RecordStage("client_spans", "completed", "diagnostics_report");
+        }
+
+        /// <summary>把本轮各时间戳折算为相对 turnStartedAt 的客户端跨度（≤9 段）。</summary>
+        private ClientTurnDiagnostics BuildTurnDiagnostics()
+        {
+            var baseTime = turnStartedAt;
+            if (baseTime < 0f)
+            {
+                return default;
+            }
+            var spans = new List<ClientTurnSpan>(9);
+            void AddSpan(string component, string stage, string code, float at, int chunks = 0)
+            {
+                if (at < 0f)
+                {
+                    return;
+                }
+                var offset = Mathf.Clamp(
+                    Mathf.RoundToInt((at - baseTime) * 1000f), 0, 3600000);
+                spans.Add(new ClientTurnSpan(
+                    component, stage, "completed", code, offset, offset, -1, chunks));
+            }
+            AddSpan("capture", "capture", "first_chunk", firstInputChunkAt);
+            AddSpan("capture", "capture", "input_end", inputEndedAt);
+            AddSpan("upload", "stt_wait", "asr_final", asrFinalAt);
+            AddSpan("backend", "wait", "first_event", firstEventAt);
+            AddSpan("backend", "reply", "first_text", firstTextAt);
+            AddSpan("backend", "tts", "first_audio", firstAudioAt);
+            AddSpan("playback", "playback", "playback_start", playbackStartedAt);
+            AddSpan("reply", "reply", "reply_end", replyEndedAt, replyAudioChunkCount);
+            AddSpan("playback", "playback", "audio_done", audioDoneAt);
+            return new ClientTurnDiagnostics(
+                stateMachine.TurnId, turnServerTraceId, spans.ToArray());
         }
 
         private void HandlePlaybackTelemetry(PlaybackTelemetry telemetry)

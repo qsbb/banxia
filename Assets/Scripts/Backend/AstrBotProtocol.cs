@@ -588,12 +588,32 @@ namespace QuestMmdPlayer
                 DecisionHooksMs = ClampServerDuration(payload.decision_hooks_ms),
                 DecisionProviderMs = ClampServerDuration(payload.decision_provider_ms),
                 EventLoopLagMs = ClampServerDuration(payload.event_loop_lag_ms),
+                ServerTraceId = BoundedProtocolToken(payload.trace_id),
                 TurnTotalMs = ClampServerDuration(payload.turn_total_ms),
                 DecisionPath = payload.decision_path == "astrbot_event_bus" ||
                     payload.decision_path == "direct_provider"
                     ? payload.decision_path
                     : "unknown"
             };
+        }
+
+        /// <summary>Keeps only opaque, bounded tokens (ids) from the server.</summary>
+        private static string BoundedProtocolToken(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length > 64)
+            {
+                return string.Empty;
+            }
+            for (var index = 0; index < value.Length; index++)
+            {
+                var character = value[index];
+                if (!char.IsLetterOrDigit(character) && character != '.' &&
+                    character != '_' && character != ':' && character != '-')
+                {
+                    return string.Empty;
+                }
+            }
+            return value;
         }
 
         private static int ClampServerDuration(int value)
@@ -803,6 +823,7 @@ namespace QuestMmdPlayer
             public int decision_hooks_ms;
             public int decision_provider_ms;
             public int event_loop_lag_ms;
+            public string trace_id;
             public int turn_total_ms;
         }
     }
