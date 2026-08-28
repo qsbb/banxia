@@ -401,6 +401,11 @@ namespace UMT
         internal void Initialize()
         {
             DisposePhysics();
+            // Banxia rebuild-hygiene patch: a rebuild path that skips DiscardAccumulatedSimulationTime
+            // (e.g. external kinematic sphere reconfiguration) would otherwise carry a stale accumulator
+            // and kinetic baseline into the fresh context.
+            m_PhysicsSolverContext.timeAccumulator = 0.0f;
+            m_PhysicsSolverContext.resetKineticInterpolation = true;
             var reinforcement = ResolveLockedTranslationReinforcement(
                 joints,
                 rigidBodies == null ? 0 : rigidBodies.Length);

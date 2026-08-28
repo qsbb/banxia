@@ -101,3 +101,23 @@ Rotations`）；显示姿态 = 世界空间 lerp(prev, last, α)，再对父骨�
 `p' = rootNew + q*(p - rootOld), r' = q*r` 整体搬移（对刚性附着精确，
 与真实支点无关）。平滑移动（~3cm/帧）与平滑转向（~2°/帧）低于阈值，
 保留自然拖曳摆动。
+
+### 7. MMDTransformManager.cs / MMDPhysicsManager.cs — deltaTime 门控 v2 + 吞姿态诊断（M7）
+
+**动机**：心跳 `dropS=0.03`（恰=1 个固定步）反推出污染帧 dt≥36.4ms 真实到达；
+旧钳制上限 40ms > 子步预算 33.3ms（cap/h），drop→HardSync 链路可达，
+每次发生物理显示时钟永久落后动画 33ms 且伴随运动学锚点瞬移——
+静止时局部抽搐的时序层嫌疑。另：重置回绑定姿态的判定容差
+（|dot−1|≤1e-6 ≈ 0.16° 半角）可能吞掉小幅度脚本写入形成方波极限环，
+需设备端数据裁决。
+
+**改动**：
+- `GateLiveDeltaTime`：5 帧中位数离群门（偏离 >1.8×+4ms 或 <0.5× 即视为
+  污染帧，物理消费中位数而非封顶垃圾值）；钳制上限改为
+  `maximumSubstepsPerFrame / simulationFrequencyHz`（两档均 33.3ms）——
+  数学上保证累加器请求永不超过 cap，droppedSeconds ≡ 0。
+- 吞姿态诊断计数器（`LastSwallowedPoseBoneCount`/`TotalSwallowedPoseFrames`）：
+  Burst 重置前 managed 预扫描，采样姿态≈上次解算（将被吞回绑定）但离绑定
+  >0.05° 的骨骼计数；待机时持续非零即实锤容差极限环。
+- `MMDPhysicsManager.Initialize` 清零 timeAccumulator + 置
+  resetKineticInterpolation（重建路径不带 Discard 的卫生漏洞）。

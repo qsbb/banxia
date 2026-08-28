@@ -325,11 +325,48 @@ namespace UMT
                     physicsManager.CompensateRootMotion();
                 }
 
-                // Banxia deltaTime-guard patch: clamp the physics time input to 5-40ms. Quest3+Vulkan+OpenXR
-                // reports high-variance/incorrect frame intervals (Unity IssueTracker #7410 / N-127663), and a
-                // single polluted frame otherwise feeds the accumulator a spurious catch-up spike (dropped time,
-                // HardSync teleport, over-velocity kinetic sweeps). Live driving only: VMD baking keeps exact deltas.
-                TransformAll(Mathf.Clamp(Time.deltaTime, 0.005f, 0.04f), true, ShouldRunLivePhysics());
+                // Banxia deltaTime-guard patch v2: Quest3+Vulkan+OpenXR reports high-variance/incorrect
+                // frame intervals (Unity IssueTracker #7410 / N-127663). Two layers: (a) 5-frame median
+                // outlier gate - a frame wildly off the recent median is treated as polluted and physics
+                // consumes the median instead of clamped garbage; (b) the ceiling is tied to the substep
+                // budget (maxSubsteps / frequency = 33.3ms for both tiers) so the accumulator can never
+                // exceed (cap+1)*h and the drop->HardSync teleport chain becomes unreachable through dt.
+                // Live driving only: VMD baking keeps exact deltas.
+                TransformAll(GateLiveDeltaTime(Time.deltaTime), true, ShouldRunLivePhysics());
+            }
+
+            // Banxia deltaTime-guard v2 state: ring of recent raw frame intervals for the median gate.
+            private readonly float[] m_RecentRawDeltaTimes = { 1f / 60f, 1f / 60f, 1f / 60f, 1f / 60f, 1f / 60f };
+            private readonly float[] m_DeltaTimeSortBuffer = new float[5];
+            private int m_RecentRawDeltaTimeIndex;
+
+            /// <summary>
+            /// Banxia deltaTime-guard v2: replaces clamped garbage with the recent median on polluted
+            /// frames, then clamps to the substep budget so the physics accumulator can never request
+            /// more substeps than the cap (drop -> HardSync chain unreachable through dt).
+            /// </summary>
+            private float GateLiveDeltaTime(float rawDeltaTime)
+            {
+                m_RecentRawDeltaTimes[m_RecentRawDeltaTimeIndex] = rawDeltaTime;
+                m_RecentRawDeltaTimeIndex = (m_RecentRawDeltaTimeIndex + 1) % m_RecentRawDeltaTimes.Length;
+                for (int i = 0; i < m_RecentRawDeltaTimes.Length; ++i)
+                {
+                    m_DeltaTimeSortBuffer[i] = m_RecentRawDeltaTimes[i];
+                }
+                System.Array.Sort(m_DeltaTimeSortBuffer);
+                float median = m_DeltaTimeSortBuffer[m_DeltaTimeSortBuffer.Length / 2];
+
+                float gated = rawDeltaTime;
+                if (rawDeltaTime > median * 1.8f + 0.004f || rawDeltaTime < median * 0.5f)
+                {
+                    // Polluted frame interval (Quest #7410 spikes / near-zero reports): physics
+                    // advances by the recent typical frame time instead of the garbage value.
+                    gated = median;
+                }
+
+                float ceiling = (float)MMDPhysicsManager.maximumSubstepsPerFrame /
+                    math.max(30, MMDPhysicsManager.simulationFrequencyHz);
+                return Mathf.Clamp(gated, 0.0005f, ceiling);
             }
 
             // Reconcile CPU SDEF skinning every play-mode frame (even when the transform solve is disabled) so it tracks live bone poses like the GPU path, and so turning SDEF off or leaving CPU mode restores the renderer's original mesh.
@@ -633,9 +670,60 @@ namespace UMT
             sampleHandle.Complete();
         }
 
+        /// <summary>Banxia diagnostic: bones whose deliberate script pose was swallowed by the reset-to-bind judgment in the latest frame (sampled near solved, but far from bind).</summary>
+        public int LastSwallowedPoseBoneCount { get; private set; }
+        /// <summary>Banxia diagnostic: cumulative frames in which any deliberate pose was swallowed.</summary>
+        public int TotalSwallowedPoseFrames { get; private set; }
+
         private void ResetTransforms()
         {
+            CountSwallowedPoseResets();
             TransformMath.ResetTransformsInternal(ref m_RuntimeContext);
+        }
+
+        /// <summary>
+        /// Banxia diagnostic: replicates the IsCurrentSolvedTransform judgment BEFORE the Burst reset
+        /// mutates state, and counts bones whose sampled pose is near the previous solve (so the reset
+        /// will swallow it back to bind) yet meaningfully far from bind - i.e. a real script pose is
+        /// being eaten. Steady non-zero counts at idle prove the reset-tolerance limit cycle.
+        /// </summary>
+        private void CountSwallowedPoseResets()
+        {
+            int swallowed = 0;
+            int boneCount = m_RuntimeContext.boneStateData.Length;
+            for (int i = 0; i < boneCount; ++i)
+            {
+                MMDBoneTransform.BoneSolverState state = m_RuntimeContext.boneStateData[i];
+                if (!state.hasSolvedTransform)
+                {
+                    continue;
+                }
+
+                float3 sampledPosition = m_RuntimeContext.sampledLocalPositions[i];
+                quaternion sampledRotation = m_RuntimeContext.sampledLocalRotations[i];
+                if (math.lengthsq(sampledPosition - state.solvedLocalPosition) != 0.0f)
+                {
+                    continue;
+                }
+                if (math.abs(math.dot(sampledRotation, state.solvedLocalRotation) - 1.0f) > 0.000001f)
+                {
+                    continue;
+                }
+
+                MMDBoneTransform.BoneSolverConfig config = m_RuntimeContext.boneConfigData[i];
+                float initialDot = math.abs(math.dot(sampledRotation, config.initialLocalRotation));
+                float degreesFromInitial = 2f * math.degrees(math.acos(math.min(1f, initialDot)));
+                if (degreesFromInitial > 0.05f)
+                {
+                    ++swallowed;
+                }
+            }
+
+            LastSwallowedPoseBoneCount = swallowed;
+            if (swallowed > 0)
+            {
+                ++TotalSwallowedPoseFrames;
+            }
         }
 
         private void FlushBoneTransforms()
