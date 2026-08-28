@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using UMT;
 using UnityEngine;
 
@@ -231,7 +231,9 @@ namespace QuestMmdPlayer
             Bounds avatarBounds,
             Vector3 position,
             float radius,
-            float margin = .18f)
+            // 待机时手部追踪的毫米级噪声会通过外部运动学球逐帧泵进 Bullet，
+            // 表现为头发/披风局部高频抽搐；激活余量收紧到 5cm，手垂身侧时不再常驻激活。
+            float margin = .05f)
         {
             if (!trackedActive)
             {

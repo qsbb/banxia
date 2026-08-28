@@ -384,6 +384,10 @@ namespace QuestMmdPlayer
         public float physicsTotalDroppedSeconds { get; private set; }
         public int physicsDroppedFrameCount { get; private set; }
         public int physicsPoseSourceFlipFrames { get; private set; }
+        /// <summary>Banxia diagnostic: bones whose deliberate pose was swallowed by the reset-to-bind judgment in the latest frame.</summary>
+        public int lastSwallowedPoseBoneCount { get; private set; }
+        /// <summary>Banxia diagnostic: cumulative frames with any swallowed deliberate pose.</summary>
+        public int totalSwallowedPoseFrames { get; private set; }
         public float physicsSessionDroppedSeconds { get; private set; }
         public int physicsSessionDroppedFrameCount { get; private set; }
         public float physicsDroppedMillisecondsPerSecond5s { get; private set; }
@@ -1466,6 +1470,8 @@ namespace QuestMmdPlayer
             physicsTotalDroppedSeconds = Mathf.Max(0f, physics.totalDroppedSimulationSeconds);
             physicsDroppedFrameCount = Mathf.Max(0, physics.droppedSimulationFrameCount);
             physicsPoseSourceFlipFrames = Mathf.Max(0, physics.totalPoseSourceFlipFrames);
+            lastSwallowedPoseBoneCount = currentTransformManager == null ? 0 : Mathf.Max(0, currentTransformManager.LastSwallowedPoseBoneCount);
+            totalSwallowedPoseFrames = currentTransformManager == null ? 0 : Mathf.Max(0, currentTransformManager.TotalSwallowedPoseFrames);
             var droppedSecondsDelta = ResolvePhysicsDropDelta(
                 physicsObservedTotalDroppedSeconds,
                 physicsTotalDroppedSeconds);

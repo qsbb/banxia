@@ -302,7 +302,8 @@ namespace QuestMmdPlayer
                     $"dropS={monitor.physicsSessionDroppedSeconds:F2} dropF={monitor.physicsSessionDroppedFrameCount} " +
                     $"idle={(quality != null && quality.IsIdlePhysicsActive ? 1 : 0)} " +
                     $"mic={(voiceInput != null ? voiceInput.InputLevel : 0f):F4} " +
-                    $"pose_src_flip={monitor.physicsPoseSourceFlipFrames}",
+                    $"pose_src_flip={monitor.physicsPoseSourceFlipFrames} " +
+                    $"swallow={monitor.lastSwallowedPoseBoneCount}({monitor.totalSwallowedPoseFrames})",
                     this);
 #if ENABLE_PROFILER
                 var systemBilling = SampleSystemBilling();
