@@ -63,6 +63,7 @@ VR/MR 只是 **呈现层**（双眼渲染、透视背景）与 **输入层**（�
 | **A. 最小测试构建**（推荐先做） | 同一 Unity 工程 + 新构建变体：不挂 XR loader、普通相机+轨道手势、关闭 MR/手部/菜单组件、触屏射线接入触摸事件、屏幕常亮。对话/物理/诊断全部原样 | ~1 天 | **立即可测试**：物理抽搐修复、音频、对话在手机上随手验证 |
 | B. 可视化诊断面板 | 在 A 之上加屏幕空间 Overlay：实时 fps/pose_src_flip/物理档/心跳字段（把 logcat 变成屏内可见） | +0.5 天 | 调试迭代期 |
 | C. 手机端产品形态 | 完整触屏 UI、模型导入 UI、竖屏适配、后台保活策略 | 另立计划 | 手机端成为产品时再定 |
+| D. 现实感知通道（可选） | 接入 reality_companion 移动网关：位置/设备状态/遥测上报（3.5 节） | +1 天 | AstrBot 侧装有其插件族时 |
 
 本方案按 **A 为必须、B 为推荐** 设计；C 仅列方向，不展开。
 
@@ -139,6 +140,79 @@ adb install 到手机（USB 或 5555 无线）→ 手机 adb push 模型到
 - logcat 标签沿用 `QuestMmdPlayer`（脚本内 Log 前缀不变）→ 现有全部日志采集脚本/命令直接复用
 - **M2 修复模型的验证可以首先在手机上完成**（模型文件同一份，sha256 一致）——等头显时手机先行
 
+### 3.4 手机 → AstrBot 的网络路线（参考 reality_companion 配对手册整理）
+
+手机不在家里 Wi-Fi 时（通勤/外出）也要能连 AstrBot，按场景选路线：
+
+| 路线 | 拓扑 | 适用 | 备注 |
+|---|---|---|---|
+| A 同局域网 | `http://电脑IP:端口` | 家里现测 | 现状即此；防火墙放行端口 |
+| B Tailscale/ZeroTier 组网 | `http://100.x.x.x:端口` | **长期最推荐** | 组网链路自带加密，可用 HTTP；零公网暴露 |
+| C frp/ngrok 穿透 | `https://隧道域名` → `127.0.0.1` | 无组网工具时 | 需支持 WebSocket（SSE 也别被缓存）|
+| D 公网域名+反代 | Caddy/Nginx → `127.0.0.1` | 正式长期 | 只开 HTTPS 入口，转发 WS 头 |
+| E Cloudflare Tunnel | 域名 → 本机网关 | 无公网 IP | Quick Tunnel 地址会变，不适合长期 |
+
+要点（沿其手册的安全结论）：公网只走 HTTPS；`/pair` 类接口不加额外登录页；
+敏感响应 `no-store`；管理端口（Dashboard 等）绝不同时暴露；令牌不发群聊。
+banxia 已有 `allowPrivateHttp` 私网 HTTP 白名单机制，与该手册
+`lanRelease`（可信私网允许 HTTP）/`release`（仅 HTTPS）的分包策略同构。
+
+## 3.5 参考 `astrbot_plugin_reality_companion`（menglimi/现实触及插件）
+
+> 该项目是 AstrBot 生态的"现实设备联动"插件（第三方，**只参考、不改其源码**），
+> 内含一个**移动端网关**（aiohttp，默认 6322 端口），且明确欢迎自建客户端接入
+> （"供你自行维护的客户端接入，不随插件分发 App"）——banxia 手机端正是
+> 它欢迎的"自建客户端"形态。
+
+### 它的网关协议（已读源码核实，mobile_gateway.py 2146 行）
+
+```
+POST /pair            配对令牌(≥24字符,header) + {user_id, device_name}
+                      → session_token(urlsafe 32B) + 过期时间
+                      内存态会话(服务端重启即失效) + 限速 + 绑定唯一 allowed_user_id
+GET  /status          会话令牌 → 网关与能力就绪状态
+POST /location        {latitude,longitude,accuracy_m,altitude_m,speed_mps,
+                      bearing,label,place{matched,name,kind,distance_m,...},
+                      captured_at}——校验经纬度范围与 10 分钟新鲜度
+POST /device/status   {device_name,platform,app_state:foreground|background,
+                      battery_percent,charging,captured_at}
+POST /telemetry       {source,captured_at,measurements[{type,value,unit}×≤32],
+                      activity{...},events[...]}——结构化身体/活动/生活事件
+POST /screen/heartbeat  屏幕共享状态
+POST /session/close   主动撤销会话
+```
+
+### 对本方案的三个层面的价值
+
+**(1) 直接采纳：网络路线手册与安全卫生**（已吸收进 3.4 节）
+——五条连接路线、no-store、配对限速、公网 HTTPS-only 等，均为通用工程结论。
+
+**(2) 架构参照：配对/会话生命周期**
+它的模型是「长期配对令牌 → 短时会话令牌（内存态、自动重配对）」；
+banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落盘配置）」。
+两者是不同权衡：我们的钥**跨服务端重启存活**（服务端无状态，重启免配对），
+它的会话**短生命周期**（服务端可控失效）。**保持 banxia 现状不改**——改配对
+模型要动临插件，收益不成比例；手机端只是多一个消费同一配置的客户端。
+
+**(3) 可选互操作：手机成为"随身现实感知器"（Phase D，装了该插件才有意义）**
+
+Quest 在家，手机随行——手机是陪伴角色唯一能带出门的"感官"。若 AstrBot
+侧安装了 reality_companion，banxia 手机端可加一个小模块作为其客户端：
+
+- 新脚本 `PhoneRealityContextReporter`（`#if BANXIA_PHONE`，~150 行）：
+  - `/pair` 一次（存 session_token，失效自动重配）
+  - 前台时周期 `POST /device/status`（电量/充电/前后台——健康关怀素材）
+  - 位置共享开关打开时 `POST /location`（Android 前台服务 + FINE_LOCATION）
+  - 可选 `POST /telemetry`（体重/心率/步数等，接入 Health Connect 时）
+- **对话仍走临桥**（不动）：reality_companion 只收"现实上下文"，
+  其 Private Companion 侧把位置/设备态注入人格上下文——即两条通道
+  各司其职：banxia 手机端 = 表情/动作/语音的具身终端 + 现实感知上报器
+- 它网关绑定单一 `allowed_user_id`，与单用户陪伴定位天然一致
+
+**边界**：不修改该插件任何代码；Phase D 独立于 A/B/C，不装插件时
+手机端零感知。Phase D 的前置是用户确认其 AstrBot 跑着这套插件族
+（我会永远陪着你/现实触及），否则不做。
+
 ## 4. 风险与对策
 
 | 风险 | 评估 | 对策 |
@@ -161,6 +235,7 @@ adb install 到手机（USB 或 5555 无线）→ 手机 adb push 模型到
 ## 6. 不做什么（明确排除）
 
 - 不做 ARCore 平面检测（MR 替代品）——测试不需要；C 形态再议
-- 不改任何 AstrBot 远端/容器
+- 不改任何 AstrBot 远端/容器/**第三方插件（含 reality_companion）**
 - 不重构 Quest 版现有代码（除 TouchInteraction 可能需要加一个公共入口方法）
 - 不做竖屏 UI/正式产品设计
+- 不改 banxia 现有配对模型（6 位码/二维码 → 持久双钥保持不变，理由见 3.5(2)）
