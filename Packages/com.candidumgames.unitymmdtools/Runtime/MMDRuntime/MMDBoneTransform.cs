@@ -223,9 +223,9 @@ namespace UMT
         /// <param name="state">Bone solver state to reset.</param>
         /// <param name="currentLocalPosition">Current sampled local position.</param>
         /// <param name="currentLocalRotation">Current sampled local rotation.</param>
-        internal static void ResetRuntimeData(in BoneSolverConfig config, ref BoneSolverState state, in float3 currentLocalPosition, in quaternion currentLocalRotation)
+        internal static void ResetRuntimeData(in BoneSolverConfig config, ref BoneSolverState state, in float3 currentLocalPosition, in quaternion currentLocalRotation, bool externallyWritten)
         {
-            BoneMath.ResetRuntimeDataInternal(in config, ref state, in currentLocalPosition, in currentLocalRotation);
+            BoneMath.ResetRuntimeDataInternal(in config, ref state, in currentLocalPosition, in currentLocalRotation, externallyWritten);
         }
 
         /// <summary>
@@ -314,12 +314,17 @@ namespace UMT
             /// <param name="currentLocalPosition">Local position currently sampled from the Unity transform.</param>
             /// <param name="currentLocalRotation">Local rotation currently sampled from the Unity transform.</param>
             [BurstCompile]
-            internal static void ResetRuntimeDataInternal(in BoneSolverConfig config, ref BoneSolverState state, in float3 currentLocalPosition, in quaternion currentLocalRotation)
+            internal static void ResetRuntimeDataInternal(in BoneSolverConfig config, ref BoneSolverState state, in float3 currentLocalPosition, in quaternion currentLocalRotation, bool externallyWritten)
             {
-                bool currentSolvedTransform = IsCurrentSolvedTransform(state.hasSolvedTransform, currentLocalPosition, currentLocalRotation, state.solvedLocalPosition, state.solvedLocalRotation);
+                // Banxia M9 patch: the geometric near-solved judgment (|dot-1|<=1e-6, ~0.16 degree)
+                // swallowed deliberate small script writes (breathing/sway and post-flush restores),
+                // which reset ~90 script-driven bones to bind pose every frame (device metric:
+                // swallow=89 steady) and square-wave-pumped the physics anchors at the waist.
+                // Exact write tracking (Transform.hasChanged since last flush) replaces the guess:
+                // written bones keep their sampled pose; untouched bones reset to bind as before.
                 state = BoneSolverState.CreateDefault();
-                state.localPosition = currentSolvedTransform ? config.initialLocalPosition : currentLocalPosition;
-                state.localRotation = currentSolvedTransform ? config.initialLocalRotation : currentLocalRotation;
+                state.localPosition = externallyWritten ? currentLocalPosition : config.initialLocalPosition;
+                state.localRotation = externallyWritten ? currentLocalRotation : config.initialLocalRotation;
                 state.localPositionForIKLink = state.localPosition;
                 state.localRotationForIKLink = state.localRotation;
             }

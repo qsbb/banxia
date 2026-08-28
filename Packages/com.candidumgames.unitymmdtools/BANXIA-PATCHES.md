@@ -121,3 +121,23 @@ Rotations`）；显示姿态 = 世界空间 lerp(prev, last, α)，再对父骨�
   >0.05° 的骨骼计数；待机时持续非零即实锤容差极限环。
 - `MMDPhysicsManager.Initialize` 清零 timeAccumulator + 置
   resetKineticInterpolation（重建路径不带 Discard 的卫生漏洞）。
+
+### 8. MMDBoneTransform.cs / MMDTransformManager.cs — 重置判定改精确写入追踪（M9）
+
+**动机**：设备实测（M7 诊断指标）`swallow=89(累计数千)` 恒稳——重置回绑定姿态
+的几何近似判定（`IsCurrentSolvedTransform`，|dot−1|≤1e-6 ≈ 0.16°）每帧吞掉
+~89 根脚本驱动骨骼的刻意姿态（呼吸/摇摆小幅写入 + RestoreActionPose 的
+flush 后硬写恰好≈解算值），物理层锚点与渲染层系统性不一致，边界骨在阈值上
+翻转 → 腰部披风锚点被方波泵动（静止局部抽搐主因，设备数据实锤）。
+
+**改动**：
+- `SolverContext.externallyWrittenFlags`（NativeArray<bool>）：精确记录
+  "上次 flush 之后有没有人写过这根骨"，取代几何猜测。
+- `CaptureExternallyWrittenFlags`（ResetTransforms 前）：accumulate-only
+  读 `Transform.hasChanged`；观察窗 = flush→reset。flush 自身写全部骨骼，
+  故 `FlushBoneTransforms` 末尾同时清 hasChanged 与 flags。
+- `solverResetPending` 骨在采样期强制 flags=true（保留原"不重置"语义）。
+- `ResetRuntimeData(Internal)` 签名加 `externallyWritten`：written 骨保留
+  采样姿态，untouched 骨照旧重置回绑定；`IsCurrentSolvedTransform` 退役
+  （保留代码，不再被重置路径调用）。
+- 初始/烘焙路径 flags 默认 true（保守：保留采样姿态）。

@@ -178,6 +178,8 @@ namespace UMT
             internal NativeArray<float3> sampledLocalPositions;
             /// <summary>Sampled local rotations captured from Unity transforms.</summary>
             internal NativeArray<quaternion> sampledLocalRotations;
+            /// <summary>Banxia M9: per-bone flag, true when the Unity transform was written since the last flush (exact replacement for the geometric near-solved reset judgment).</summary>
+            internal NativeArray<bool> externallyWrittenFlags;
             /// <summary>Bone indices solved before physics, sorted by transform level.</summary>
             internal NativeArray<int> prePhysicsBoneIndices;
             /// <summary>Bone indices solved after physics, sorted by transform level.</summary>
@@ -664,6 +666,8 @@ namespace UMT
                     ref MMDBoneTransform.BoneSolverState state = ref ElementAt(m_RuntimeContext.boneStateData, i);
                     state.hasSolvedTransform = false;
                     state.solvedByIK = false;
+                    // Banxia M9: pending-reset bones must keep their sampled pose, not revert to bind.
+                    m_RuntimeContext.externallyWrittenFlags[i] = true;
                 }
             }
 
@@ -678,7 +682,25 @@ namespace UMT
         private void ResetTransforms()
         {
             CountSwallowedPoseResets();
+            CaptureExternallyWrittenFlags();
             TransformMath.ResetTransformsInternal(ref m_RuntimeContext);
+        }
+
+        /// <summary>
+        /// Banxia M9: exact write tracking. Transform.hasChanged is true for every bone written since
+        /// the last flush (by Presence/IdlePose at exec 9500/9800, RestoreActionPose/VMD/probes at
+        /// 10400+). Accumulate-only here: the flush itself writes every bone, so both hasChanged and
+        /// the accumulated flags are cleared at the end of FlushBoneTransforms, making the observation
+        /// window exactly flush-to-reset. Pending-reset bones were already forced true in
+        /// SampleBoneTransforms, so OR instead of overwrite.
+        /// </summary>
+        private void CaptureExternallyWrittenFlags()
+        {
+            for (int i = 0; i < bones.Length; ++i)
+            {
+                m_RuntimeContext.externallyWrittenFlags[i] =
+                    m_RuntimeContext.externallyWrittenFlags[i] | bones[i].transform.hasChanged;
+            }
         }
 
         /// <summary>
@@ -729,6 +751,13 @@ namespace UMT
         private void FlushBoneTransforms()
         {
             new FlushBoneTransformsJob { boneStateData = m_RuntimeContext.boneStateData, }.Schedule(m_BoneTransformAccess).Complete();
+            // Banxia M9: the flush writes every bone transform, so clear write tracking right here;
+            // the next reset then observes only genuine script writes made after this point.
+            for (int i = 0; i < bones.Length; ++i)
+            {
+                bones[i].transform.hasChanged = false;
+                m_RuntimeContext.externallyWrittenFlags[i] = false;
+            }
         }
 
         /// <summary>
@@ -772,6 +801,12 @@ namespace UMT
             ResizePersistent(ref m_RuntimeContext.boneStateData, bones.Length);
             ResizePersistent(ref m_RuntimeContext.sampledLocalPositions, bones.Length);
             ResizePersistent(ref m_RuntimeContext.sampledLocalRotations, bones.Length);
+            ResizePersistent(ref m_RuntimeContext.externallyWrittenFlags, bones.Length);
+            // Banxia M9: default to "written" so the first pass keeps sampled poses.
+            for (int i = 0; i < bones.Length; ++i)
+            {
+                m_RuntimeContext.externallyWrittenFlags[i] = true;
+            }
             ResizePersistent(ref m_RuntimeContext.prePhysicsBoneIndices, prePhysicsBones.Length);
             ResizePersistent(ref m_RuntimeContext.afterPhysicsBoneIndices, afterPhysicsBones.Length);
             ResizePersistent(ref m_RuntimeContext.ikControllerByBoneIndices, bones.Length);
@@ -871,6 +906,11 @@ namespace UMT
 
             ResizePersistent(ref runtimeContext.boneConfigData, model.bones.Length);
             ResizePersistent(ref runtimeContext.boneStateData, model.bones.Length);
+            ResizePersistent(ref runtimeContext.externallyWrittenFlags, model.bones.Length);
+            for (int i = 0; i < model.bones.Length; ++i)
+            {
+                runtimeContext.externallyWrittenFlags[i] = true;
+            }
             ResizePersistent(ref runtimeContext.sampledLocalPositions, model.bones.Length);
             ResizePersistent(ref runtimeContext.sampledLocalRotations, model.bones.Length);
             ResizePersistent(ref runtimeContext.prePhysicsBoneIndices, prePhysicsIndices.Length);
@@ -969,6 +1009,7 @@ namespace UMT
             DisposeNativeArray(ref runtimeContext.boneStateData);
             DisposeNativeArray(ref runtimeContext.sampledLocalPositions);
             DisposeNativeArray(ref runtimeContext.sampledLocalRotations);
+            DisposeNativeArray(ref runtimeContext.externallyWrittenFlags);
             DisposeNativeArray(ref runtimeContext.prePhysicsBoneIndices);
             DisposeNativeArray(ref runtimeContext.afterPhysicsBoneIndices);
             DisposeNativeArray(ref runtimeContext.ikControllerByBoneIndices);
@@ -988,6 +1029,7 @@ namespace UMT
             DisposeNativeArray(ref m_RuntimeContext.boneStateData);
             DisposeNativeArray(ref m_RuntimeContext.sampledLocalPositions);
             DisposeNativeArray(ref m_RuntimeContext.sampledLocalRotations);
+            DisposeNativeArray(ref m_RuntimeContext.externallyWrittenFlags);
             DisposeNativeArray(ref m_RuntimeContext.prePhysicsBoneIndices);
             DisposeNativeArray(ref m_RuntimeContext.afterPhysicsBoneIndices);
             DisposeNativeArray(ref m_RuntimeContext.ikControllerByBoneIndices);
@@ -1113,7 +1155,7 @@ namespace UMT
                 {
                     ref MMDBoneTransform.BoneSolverConfig config = ref ElementAt(runtimeContext.boneConfigData, i);
                     ref MMDBoneTransform.BoneSolverState state = ref ElementAt(runtimeContext.boneStateData, i);
-                    MMDBoneTransform.ResetRuntimeData(in config, ref state, runtimeContext.sampledLocalPositions[i], runtimeContext.sampledLocalRotations[i]);
+                    MMDBoneTransform.ResetRuntimeData(in config, ref state, runtimeContext.sampledLocalPositions[i], runtimeContext.sampledLocalRotations[i], runtimeContext.externallyWrittenFlags[i]);
                 }
             }
 
