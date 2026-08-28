@@ -1409,6 +1409,14 @@ namespace QuestMmdPlayer
                 : currentTransformManager.bones.Length;
             var physics = root.GetComponentInChildren<MMDPhysicsManager>(true);
             currentPhysicsManager = physics;
+            if (physics != null && physics.enableGroundCollision)
+            {
+                // Banxia ground-plane patch: the infinite y=0 ground never matches a real MR floor and
+                // no dynamic body rests near it, so its contact pairs are pure solver cost. Disable once
+                // per model; the flag also keeps future rebuilds ground-free (BuildGround reads it).
+                physics.SetGroundCollisionEnabled(false);
+                Debug.Log("[Perf] ground collision disabled (no dynamic body rests near y=0 plane)", this);
+            }
             currentTrackedHands ??= GetComponent<QuestTrackedHandVisualizer>();
             ApplyPhysicsSuspension();
             physicsObservedTotalDroppedSeconds = physics == null
