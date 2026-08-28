@@ -259,7 +259,8 @@ namespace UMT
             }
 
             Vector3 rootPosition = transform.position;
-            quaternion rootRotation = new quaternion(transform.rotation);
+            Quaternion unityRotation = transform.rotation;
+            quaternion rootRotation = new quaternion(unityRotation.x, unityRotation.y, unityRotation.z, unityRotation.w);
             if (!m_HasLastRootPose)
             {
                 m_LastRootPosition = rootPosition;
