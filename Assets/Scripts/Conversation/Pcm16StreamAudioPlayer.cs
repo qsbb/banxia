@@ -126,8 +126,8 @@ namespace QuestMmdPlayer
         private double nextProgressReportDspTime;
         [SerializeField, Range(.04f, .4f)] private float startupBufferSeconds = .12f;
         // QA 测试音：定位"数字信号有声但听不到"的最后一环（Unity→扬声器物理通路）。
-        // 仅 Development/Editor 构建编译；启动 1.5s 后自动播一次，此后可通过在
-        // persistentDataPath 写 qa_tone.trigger 文件（adb run-as）随时重测。
+        // 仅 Development/Editor 构建编译；不再开机自动播（用户要求去掉蜂鸣音），
+        // 仅可通过在 persistentDataPath 写 qa_tone.trigger 文件（adb run-as）手动触发。
         private float qaToneAt = -1f;
         private float nextQaTriggerCheckAt;
         private string qaTriggerPath;
@@ -221,7 +221,6 @@ namespace QuestMmdPlayer
             dspBufferCount = Mathf.Max(1, dspBufferCount);
             cachedOutputSampleRate = AudioSettings.outputSampleRate;
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
-            qaToneAt = Time.unscaledTime + 1.5f;
             qaTriggerPath = Path.Combine(Application.persistentDataPath, "qa_tone.trigger");
 #endif
             AudioSettings.OnAudioConfigurationChanged += HandleAudioConfigurationChanged;
