@@ -182,6 +182,28 @@ namespace QuestMmdPlayer
             "GUI.Repaint",
         };
 
+#if UNITY_ANDROID && !UNITY_EDITOR
+        private static int CheckPlayAudioOpMode()
+        {
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var appOps = activity.Call<AndroidJavaObject>("getSystemService", "appops"))
+                using (var process = new AndroidJavaClass("android.os.Process"))
+                {
+                    var uid = process.CallStatic<int>("myUid");
+                    var packageName = activity.Call<string>("getPackageName");
+                    return appOps.Call<int>("checkOpNoThrow", "android:play_audio", uid, packageName);
+                }
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
+        }
+#endif
+
         private void EnsureSystemRecorders()
         {
             if (systemRecordersReady)
@@ -282,6 +304,17 @@ namespace QuestMmdPlayer
                 if (!string.IsNullOrEmpty(systemBilling))
                 {
                     Debug.Log($"[SysBilling]{systemBilling}", this);
+                }
+#endif
+#if UNITY_ANDROID && !UNITY_EDITOR
+                // HorizonOS 会周期性把侧载应用的 PLAY_AUDIO AppOp 置为 ignore（系统级静音，
+                // 数字链路全部正常但听不到任何声音）。自检并在被静音时给出修复命令。
+                if (CheckPlayAudioOpMode() == 1)
+                {
+                    Debug.LogWarning(
+                        "[SysOps] PLAY_AUDIO=ignore：系统正在强制静音本应用！" +
+                        "修复：adb shell appops set com.lingxi.banxia PLAY_AUDIO allow",
+                        this);
                 }
 #endif
             }

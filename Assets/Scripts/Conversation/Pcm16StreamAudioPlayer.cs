@@ -91,6 +91,23 @@ namespace QuestMmdPlayer
         private const int NonzeroChunkThreshold = 500;
         private int dspBufferLength = 1024;
         private int dspBufferCount = 4;
+        // AudioSettings.outputSampleRate 是主线程专属 API——ReadAudio 在音频线程执行，
+        // 直接调用会抛 UnityException 导致回调缓冲被丢弃（静音）。在主线程缓存一次。
+        private int cachedOutputSampleRate = 48000;
+        // 输出采样时钟：PCM 回调每执行一次累加 data.Length。
+        // 与 AudioSettings.dspTime 同义但完全线程安全（dspTime 同样是主线程专属 API，
+        // 只是之前被 outputSampleRate 的异常挡住从未执行到）。
+        private long callbackOutputSamples;
+        private double OutputClockSeconds
+        {
+            get
+            {
+                lock (gate)
+                {
+                    return sampleRate <= 0 ? 0d : (double)callbackOutputSamples / sampleRate;
+                }
+            }
+        }
         private double audibleUntilDspTime;
         private double audiblePlaybackStartedAtDspTime = -1d;
         private int streamCompletedFlag = 1;
@@ -122,7 +139,8 @@ namespace QuestMmdPlayer
             {
                 lock (gate)
                 {
-                    return queuedSamples <= 0 && AudioSettings.dspTime >= audibleUntilDspTime;
+                    var now = sampleRate <= 0 ? 0d : (double)callbackOutputSamples / sampleRate;
+                    return queuedSamples <= 0 && now >= audibleUntilDspTime;
                 }
             }
         }
@@ -186,7 +204,8 @@ namespace QuestMmdPlayer
                     {
                         return 0f;
                     }
-                    return Mathf.Max(0f, (float)(AudioSettings.dspTime - audiblePlaybackStartedAtDspTime));
+                    var now = sampleRate <= 0 ? 0d : (double)callbackOutputSamples / sampleRate;
+                    return Mathf.Max(0f, (float)(now - audiblePlaybackStartedAtDspTime));
                 }
             }
         }
@@ -200,6 +219,7 @@ namespace QuestMmdPlayer
             AudioSettings.GetDSPBufferSize(out dspBufferLength, out dspBufferCount);
             dspBufferLength = Mathf.Max(1, dspBufferLength);
             dspBufferCount = Mathf.Max(1, dspBufferCount);
+            cachedOutputSampleRate = AudioSettings.outputSampleRate;
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
             qaToneAt = Time.unscaledTime + 1.5f;
             qaTriggerPath = Path.Combine(Application.persistentDataPath, "qa_tone.trigger");
@@ -214,6 +234,7 @@ namespace QuestMmdPlayer
         private void HandleAudioConfigurationChanged(bool deviceWasChanged)
         {
             var config = AudioSettings.GetConfiguration();
+            cachedOutputSampleRate = config.sampleRate;
             Debug.LogWarning(
                 $"[PcmStream] 音频配置变更: deviceChanged={deviceWasChanged} " +
                 $"rate={config.sampleRate}Hz speaker={config.speakerMode} " +
@@ -329,7 +350,7 @@ namespace QuestMmdPlayer
                 $"underflows={UnderflowCount} peak_rms={peakStreamRms:F4} peak_in={peakEnqueueSample} rate={sampleRate} " +
                 $"vol={audioSource.volume:F2} mute={audioSource.mute} " +
                 $"listeners={FindObjectsOfType<AudioListener>(false).Length} " +
-                $"dspRate={AudioSettings.outputSampleRate}Hz",
+                $"dspRate={cachedOutputSampleRate}Hz",
                 this);
             TryStartPlayback();
         }
@@ -409,6 +430,7 @@ namespace QuestMmdPlayer
                 scheduledRms.Clear();
                 audibleUntilDspTime = 0d;
                 audiblePlaybackStartedAtDspTime = -1d;
+                callbackOutputSamples = 0L;
                 Volatile.Write(ref streamCompletedFlag, 1);
                 Volatile.Write(ref playbackStartedFlag, 0);
                 Volatile.Write(ref playbackGeneration, 0);
@@ -461,6 +483,7 @@ namespace QuestMmdPlayer
             var sumSquares = 0f;
             lock (gate)
             {
+                var outputNow = sampleRate <= 0 ? 0d : (double)callbackOutputSamples / sampleRate;
                 var write = 0;
                 while (write < data.Length)
                 {
@@ -505,21 +528,22 @@ namespace QuestMmdPlayer
                 var outputLatencySeconds = CalculateOutputLatencySeconds(
                     dspBufferLength,
                     dspBufferCount,
-                    AudioSettings.outputSampleRate);
+                    cachedOutputSampleRate);
                 scheduledRms.Enqueue(new ScheduledRms(
-                    AudioSettings.dspTime + outputLatencySeconds,
+                    outputNow + outputLatencySeconds,
                     latestRms));
                 if (write > 0 && sampleRate > 0)
                 {
                     if (audiblePlaybackStartedAtDspTime < 0d)
                     {
-                        audiblePlaybackStartedAtDspTime = AudioSettings.dspTime + outputLatencySeconds;
+                        audiblePlaybackStartedAtDspTime = outputNow + outputLatencySeconds;
                     }
                     var callbackSeconds = (double)data.Length / sampleRate;
                     audibleUntilDspTime = Math.Max(
                         audibleUntilDspTime,
-                        AudioSettings.dspTime + callbackSeconds + outputLatencySeconds + outputTailSafetySeconds);
+                        outputNow + callbackSeconds + outputLatencySeconds + outputTailSafetySeconds);
                 }
+                callbackOutputSamples += data.Length;
             }
         }
 
@@ -549,7 +573,7 @@ namespace QuestMmdPlayer
 
         private void UpdateAudibleRms()
         {
-            var now = AudioSettings.dspTime;
+            var now = OutputClockSeconds;
             lock (gate)
             {
                 while (scheduledRms.Count > 0 && scheduledRms.Peek().AudibleAtDspTime <= now)
