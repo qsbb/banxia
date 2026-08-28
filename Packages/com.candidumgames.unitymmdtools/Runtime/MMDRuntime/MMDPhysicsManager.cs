@@ -1019,7 +1019,11 @@ namespace UMT
         public void SetGroundCollisionEnabled(bool enabled)
         {
             enableGroundCollision = enabled;
-            m_PhysicsSolverContext.bulletPhysicsContext.SetGroundCollisionEnabled(enabled);
+            // Banxia patch: tolerate calls before the native context is built; the flag is consumed by BuildGround on (re)initialization.
+            if (m_PhysicsSolverContext.bulletPhysicsContext.isValid)
+            {
+                m_PhysicsSolverContext.bulletPhysicsContext.SetGroundCollisionEnabled(enabled);
+            }
         }
 
         private void BuildJoints()

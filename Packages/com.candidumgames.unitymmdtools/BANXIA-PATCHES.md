@@ -44,3 +44,9 @@
   `ApplyKinetic*` 助手签名已改（out 参数）——合并上游时需手工保留。
 - `PhysicsSolverContext` 新字段参与 NativeArray 生命周期（RebuildRuntimeData 分配 /
   DisposePhysics 释放），合并时勿遗漏。
+
+### 3. MMDPhysicsManager.cs — SetGroundCollisionEnabled 有效性防御（Phase 4a 配套）
+
+原生上下文未构建时调用不再触达 Native（标志仍记录，`BuildGround` 在
+（重）初始化时消费）。配合 banxia 侧在模型绑定时以 `SetGroundCollisionEnabled(false)`
+关闭 y=0 无限地面碰撞（无动态体临近地面，纯省求解开销）。
