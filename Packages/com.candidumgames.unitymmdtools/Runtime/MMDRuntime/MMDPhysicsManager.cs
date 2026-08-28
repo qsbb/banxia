@@ -83,6 +83,10 @@ namespace UMT
             internal NativeArray<quaternion> lastPhysicsLocalRotations;
             /// <summary>Validity flag for the cached physics pose per simulated body; zero until the first substep apply (banxia pose-hold patch).</summary>
             internal NativeArray<byte> lastPhysicsPoseValid;
+            /// <summary>Previous physics-applied bone-local positions (one fixed step behind <see cref="lastPhysicsLocalPositions"/>), indexed like <see cref="sortedSimulatedRigidBodyIndices"/>. Banxia interpolation patch: every rendered frame shows lerp(prev, last, accumulator/h) so simulated bones move at render rate instead of staircase-stepping at the physics frequency.</summary>
+            internal NativeArray<float3> prevPhysicsLocalPositions;
+            /// <summary>Previous physics-applied bone-local rotations (banxia interpolation patch).</summary>
+            internal NativeArray<quaternion> prevPhysicsLocalRotations;
             /// <summary>Simulated bones whose local pose deviated from the cached physics pose during the latest zero-substep pass (banxia pose-hold patch).</summary>
             internal int lastPoseSourceFlipCount;
             /// <summary>Cumulative zero-substep frames in which any simulated bone deviated from the cached physics pose (banxia pose-hold patch).</summary>
@@ -845,6 +849,8 @@ namespace UMT
             DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsLocalPositions);
             DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsLocalRotations);
             DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsPoseValid);
+            DisposeNativeArray(ref m_PhysicsSolverContext.prevPhysicsLocalPositions);
+            DisposeNativeArray(ref m_PhysicsSolverContext.prevPhysicsLocalRotations);
             DisposeNativeArray(ref m_ExternalPoseScratchTransforms);
             DisposeNativeArray(ref m_ExternalPoseScratchIndices);
         }
@@ -876,6 +882,8 @@ namespace UMT
             ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsLocalPositions, totalBodyCount);
             ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsLocalRotations, totalBodyCount);
             ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsPoseValid, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.prevPhysicsLocalPositions, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.prevPhysicsLocalRotations, totalBodyCount);
             m_PhysicsSolverContext.lastPoseSourceFlipCount = 0;
             m_PhysicsSolverContext.totalPoseSourceFlipFrames = 0;
 
@@ -1259,6 +1267,16 @@ namespace UMT
                 {
                     ApplyDynamicRigidBodiesToBones(ref transformManagerContext, ref runtimeContext);
                 }
+                else
+                {
+                    // Banxia interpolation patch: frames whose accumulator did not fill a fixed step
+                    // (~45% of frames at 30Hz physics / 55-72fps render) previously applied NOTHING,
+                    // leaving simulated bones on the animation-layer sample and hard-alternating with
+                    // the physics pose - the dominant flicker path, which the original pose-hold patch
+                    // missed because it only covered the zero-elapsed (suspended) branch. Replay the
+                    // interpolated physics pose here too.
+                    ReplayLastPhysicsPoseToBones(ref transformManagerContext, ref runtimeContext);
+                }
             }
 
             /// <summary>
@@ -1468,6 +1486,11 @@ namespace UMT
             {
                 int count = runtimeContext.sortedSimulatedRigidBodyIndices.Length;
                 runtimeContext.bulletPhysicsContext.GetRigidBodyMotionTransforms(count, runtimeContext.sortedSimulatedRigidBodyIndices, ref runtimeContext.worldTransforms);
+                // Banxia interpolation patch: render lerp(prevStepPose, newStepPose, accumulator/h)
+                // instead of the raw new pose, so the stepping frame and the following zero-substep
+                // replay frames share one continuous trajectory (standard fixed-step render interpolation;
+                // introduces at most one fixed step of latency).
+                float alpha = ResolveInterpolationAlpha(ref runtimeContext);
 
                 for (int i = 0; i < count; ++i)
                 {
@@ -1486,9 +1509,16 @@ namespace UMT
                         // Cache rotation only: bone-aligned bodies keep their bone-driven translation, so the hold replay must never freeze a legitimately animated position.
                         if (cacheValid)
                         {
+                            bool hadPrev = runtimeContext.lastPhysicsPoseValid[i] != 0;
+                            runtimeContext.prevPhysicsLocalPositions[i] = hadPrev ? runtimeContext.lastPhysicsLocalPositions[i] : alignedLocalPosition;
+                            runtimeContext.prevPhysicsLocalRotations[i] = hadPrev ? runtimeContext.lastPhysicsLocalRotations[i] : alignedLocalRotation;
                             runtimeContext.lastPhysicsLocalPositions[i] = alignedLocalPosition;
                             runtimeContext.lastPhysicsLocalRotations[i] = alignedLocalRotation;
                             runtimeContext.lastPhysicsPoseValid[i] = 1;
+                            // Display pose: animation-anchored translation, interpolated rotation.
+                            quaternion displayRotation = math.slerp(runtimeContext.prevPhysicsLocalRotations[i], alignedLocalRotation, alpha);
+                            ref MMDBoneTransform.BoneSolverState alignedState = ref PMXUtilities.ElementAt(transformManagerContext.boneStateData, rigidBody.relatedBoneIndex);
+                            MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, rigidBody.relatedBoneIndex, alignedState.localPosition, displayRotation);
                         }
                         continue;
                     }
@@ -1501,15 +1531,36 @@ namespace UMT
                         out quaternion localRotation);
                     if (cacheValid)
                     {
+                        bool hadPrev = runtimeContext.lastPhysicsPoseValid[i] != 0;
+                        runtimeContext.prevPhysicsLocalPositions[i] = hadPrev ? runtimeContext.lastPhysicsLocalPositions[i] : localPosition;
+                        runtimeContext.prevPhysicsLocalRotations[i] = hadPrev ? runtimeContext.lastPhysicsLocalRotations[i] : localRotation;
                         runtimeContext.lastPhysicsLocalPositions[i] = localPosition;
                         runtimeContext.lastPhysicsLocalRotations[i] = localRotation;
                         runtimeContext.lastPhysicsPoseValid[i] = 1;
+                        float3 displayPosition = math.lerp(runtimeContext.prevPhysicsLocalPositions[i], localPosition, alpha);
+                        quaternion displayRotation = math.slerp(runtimeContext.prevPhysicsLocalRotations[i], localRotation, alpha);
+                        MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, rigidBody.relatedBoneIndex, displayPosition, displayRotation);
                     }
                 }
             }
 
             /// <summary>
-            /// Banxia pose-hold patch: re-asserts the last physics-applied bone pose on zero-substep frames so the rendered pose stays on the physics solution, and maintains the pose-source-flip diagnostic counting simulated bones whose final local pose deviates from the cached physics pose.
+            /// Banxia interpolation patch: fraction of the current fixed step already consumed
+            /// (timeAccumulator / fixedTimeStep, clamped to [0,1]); the displayed pose lerps from
+            /// the previous step's pose toward the latest one as the accumulator fills.
+            /// </summary>
+            private static float ResolveInterpolationAlpha(ref PhysicsSolverContext runtimeContext)
+            {
+                float fixedTimeStep = 1.0f / math.clamp(runtimeContext.simulationFrequencyHz, 30, 240);
+                return math.clamp(runtimeContext.timeAccumulator / fixedTimeStep, 0.0f, 1.0f);
+            }
+
+            /// <summary>
+            /// Banxia pose-hold + interpolation patch: on frames that ran no fixed substep, writes the
+            /// interpolated physics pose lerp(prevStep, lastStep, accumulator/h) so the rendered pose
+            /// stays on the physics trajectory at render rate. The pose-source-flip diagnostic now only
+            /// counts warmup frames (no valid cache yet); interpolated frames intentionally differ from
+            /// the raw cached pose and are no longer flips.
             /// </summary>
             [BurstCompile]
             private static void ReplayLastPhysicsPoseToBones(ref MMDTransformManager.SolverContext transformManagerContext, ref PhysicsSolverContext runtimeContext)
@@ -1520,6 +1571,7 @@ namespace UMT
                     return;
                 }
 
+                float alpha = ResolveInterpolationAlpha(ref runtimeContext);
                 int flipBones = 0;
                 for (int i = 0; i < count && i < runtimeContext.lastPhysicsPoseValid.Length; ++i)
                 {
@@ -1539,13 +1591,11 @@ namespace UMT
                     }
 
                     bool boneAligned = rigidBody.mode == PMXRigidBody.Mode.DynamicBoneAligned;
-                    float3 holdPosition = boneAligned ? state.localPosition : runtimeContext.lastPhysicsLocalPositions[i];
-                    quaternion holdRotation = runtimeContext.lastPhysicsLocalRotations[i];
+                    float3 holdPosition = boneAligned
+                        ? state.localPosition
+                        : math.lerp(runtimeContext.prevPhysicsLocalPositions[i], runtimeContext.lastPhysicsLocalPositions[i], alpha);
+                    quaternion holdRotation = math.slerp(runtimeContext.prevPhysicsLocalRotations[i], runtimeContext.lastPhysicsLocalRotations[i], alpha);
                     MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, boneIndex, holdPosition, holdRotation);
-                    if (HasPhysicsPoseDeviation(ref state, boneAligned, ref runtimeContext, i))
-                    {
-                        ++flipBones;
-                    }
                 }
 
                 runtimeContext.lastPoseSourceFlipCount = flipBones;
@@ -1553,24 +1603,6 @@ namespace UMT
                 {
                     ++runtimeContext.totalPoseSourceFlipFrames;
                 }
-            }
-
-            /// <summary>
-            /// Banxia pose-hold patch: reports whether a bone's current local pose deviates from the cached physics pose beyond the flip-detection threshold (position >1mm or rotation >~0.8 degrees).
-            /// </summary>
-            private static bool HasPhysicsPoseDeviation(ref MMDBoneTransform.BoneSolverState state, bool rotationOnly, ref PhysicsSolverContext runtimeContext, int cacheIndex)
-            {
-                if (!rotationOnly)
-                {
-                    float3 positionDelta = state.localPosition - runtimeContext.lastPhysicsLocalPositions[cacheIndex];
-                    if (math.lengthsq(positionDelta) > 1e-6f)
-                    {
-                        return true;
-                    }
-                }
-
-                float rotationDot = math.dot(state.localRotation, runtimeContext.lastPhysicsLocalRotations[cacheIndex]);
-                return math.abs(rotationDot - 1.0f) > 1e-4f;
             }
 
             /// <summary>

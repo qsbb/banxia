@@ -50,3 +50,27 @@
 原生上下文未构建时调用不再触达 Native（标志仍记录，`BuildGround` 在
 （重）初始化时消费）。配合 banxia 侧在模型绑定时以 `SetGroundCollisionEnabled(false)`
 关闭 y=0 无限地面碰撞（无动态体临近地面，纯省求解开销）。
+
+### 4. MMDPhysicsManager.cs — 0 子步帧路径根治 + 渲染率姿态插值（Phase 5 / M4）
+
+**动机**：原姿态保持补丁（M1）只挂在 `elapsedTime <= 0`（挂起/零时间）分支；
+正常运行中累加器未满一个固定步的帧（30Hz 物理 / 55-72fps 渲染下约占 45%）
+走 `StepSimulationWithKineticInterpolation` 返回 false 后**什么都不写**，
+模拟骨骼仍显示动画层采样——闪烁主路径从未被覆盖，`pose_src_flip` 指标
+因只在挂起路径计数而给出假阴性。此外 30Hz 物理下配饰姿态以阶梯更新，
+与渲染率平滑移动的身体形成速率错配。
+
+**改动**：
+- `TransformPhysicsInternal`：步进返回 false（0 子步）时也调用
+  `ReplayLastPhysicsPoseToBones`。
+- 新增 `prevPhysicsLocalPositions/Rotations`（上一固定步姿态缓存）；
+  步进帧 `ApplyDynamicRigidBodiesToBones` 与 0 子步帧回放统一写入
+  `lerp(prev, last, timeAccumulator/h)` 插值姿态（标准固定步渲染插值，
+  至多引入一步延迟）。`DynamicBoneAligned` 仅插值旋转，平移仍随动画。
+- `ResolveInterpolationAlpha` 助手；`HasPhysicsPoseDeviation` 移除
+  （插值是刻意偏离原始缓存姿态，偏差检查失去意义；`pose_src_flip`
+  指标退化为仅计预热帧）。
+
+**升级冲突提示**：`ApplyDynamicRigidBodiesToBones` /
+`ReplayLastPhysicsPoseToBones` 已重写，`PhysicsSolverContext` 再增两个
+NativeArray（ResizePersistent/Dispose 配对勿遗漏）。
