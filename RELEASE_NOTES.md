@@ -1,3 +1,12 @@
+# v0.3.0
+
+- 安卓手机端移植（形态 A+B）：新增 `BuildAndroidPhoneApk` 构建变体（`BANXIA_PHONE` 编译符号、不启用 XR loader、独立包名 `com.lingxi.banxia.phone` 可与 Quest 版共存）；轨道相机（单指环绕/双指缩放/双击复位）、触屏射线接入触摸判定（持续按住摸头可真实驱动头发物理）、屏内诊断 HUD（fps/pose_src_flip/物理档）。
+- 物理抽搐修复 M1：0 子步帧重放最后物理姿态，消除动画/物理姿态硬交替闪烁；`[Perf]` 心跳新增 `pose_src_flip` 指标。
+- 物理抽搐修复 M3：摘戴头显恢复时补 ReseedFromCurrentPose（治甩发猛拉）；物理时间输入钳制 5–40ms（防御 Quest3+Vulkan deltaTime bug #7410）；动画层骨骼写入执行序移到物理之前。
+- Phase 4a：关闭 y=0 无限地面碰撞（无动态体临近，纯省求解开销）。
+- 模型资产修复 M2：披风/头发关节注入旋转弹簧（rs 2.0/0.5）与限位；动态体静息穿插 9→0（`ForestBerry_fixed.pmx` 见 release 附件，推送到设备 MmdModels 目录覆盖原模型即可生效）。
+- 音频线程静音根治（v0.2.3 回归）：音频回调不再调用主线程 AudioSettings API。
+
 # v0.2.22
 
 - 语音上传批量大小改为可配置（`embodiment_bridge.json` 的 `audio_upload_batch_bytes`，默认 3200 字节约 100 ms，范围 1280–16000），降低说话到后端识别之间的客户端聚合延迟。
