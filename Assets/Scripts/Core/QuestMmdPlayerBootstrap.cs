@@ -298,7 +298,7 @@ namespace QuestMmdPlayer
             Quality?.ApplyHandContactPolicy(HandPhysics);
             Quality?.BindIdlePhysicsSources(Avatar, TouchInteraction, HandPhysics);
             Quality?.BindPerformanceMonitor(Performance);
-            DiagnosticsReporter?.Bind(Performance, Quality, AstrBot);
+            DiagnosticsReporter?.Bind(Performance, Quality, AstrBot, VoiceInput);
             VoiceInput?.BindQuality(Quality);
             if (AvatarRayInteraction != null)
             {

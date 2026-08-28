@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UMT;
 using UnityEngine;
 
@@ -9,7 +9,7 @@ namespace QuestMmdPlayer
     /// subtle body sway. Conversation and touch reactions remain backend-driven.
     /// </summary>
     [DisallowMultipleComponent]
-    [DefaultExecutionOrder(10500)]
+    [DefaultExecutionOrder(9500)]
     public sealed class AvatarPresence : MonoBehaviour
     {
         [SerializeField] private bool attentionEnabled = true;

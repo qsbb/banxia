@@ -383,6 +383,7 @@ namespace QuestMmdPlayer
         public float physicsLastDroppedSeconds { get; private set; }
         public float physicsTotalDroppedSeconds { get; private set; }
         public int physicsDroppedFrameCount { get; private set; }
+        public int physicsPoseSourceFlipFrames { get; private set; }
         public float physicsSessionDroppedSeconds { get; private set; }
         public int physicsSessionDroppedFrameCount { get; private set; }
         public float physicsDroppedMillisecondsPerSecond5s { get; private set; }
@@ -1174,7 +1175,14 @@ namespace QuestMmdPlayer
                 return;
             }
             var shouldSuspend = !applicationFocused || (headsetPresenceAvailable && !headsetWorn);
+            var wasSuspended = currentPhysicsManager.simulationSuspended;
             currentPhysicsManager.SetSimulationSuspended(shouldSuspend);
+            if (wasSuspended && !shouldSuspend)
+            {
+                // Banxia reseed patch: after resuming, reseed physics from the current pose so stale kinetic
+                // anchors do not yank hair/cloth toward an outdated pose (same contract as the VMD resume path).
+                currentPhysicsManager.ReseedFromCurrentPose();
+            }
         }
 
         private void CaptureTargetFrameRate()
@@ -1425,6 +1433,7 @@ namespace QuestMmdPlayer
                 physicsLastDroppedSeconds = 0f;
                 physicsTotalDroppedSeconds = 0f;
                 physicsDroppedFrameCount = 0;
+                physicsPoseSourceFlipFrames = 0;
                 physicsSessionDroppedSeconds = 0f;
                 physicsSessionDroppedFrameCount = 0;
                 physicsDroppedMillisecondsPerSecond5s = 0f;
@@ -1448,6 +1457,7 @@ namespace QuestMmdPlayer
             physicsLastDroppedSeconds = Mathf.Max(0f, physics.lastDroppedSimulationSeconds);
             physicsTotalDroppedSeconds = Mathf.Max(0f, physics.totalDroppedSimulationSeconds);
             physicsDroppedFrameCount = Mathf.Max(0, physics.droppedSimulationFrameCount);
+            physicsPoseSourceFlipFrames = Mathf.Max(0, physics.totalPoseSourceFlipFrames);
             var droppedSecondsDelta = ResolvePhysicsDropDelta(
                 physicsObservedTotalDroppedSeconds,
                 physicsTotalDroppedSeconds);

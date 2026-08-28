@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using UMT;
 using UnityEngine;
 
@@ -18,7 +18,7 @@ namespace QuestMmdPlayer
     /// still leaving the hands and head available for interaction reactions.
     /// </summary>
     [DisallowMultipleComponent]
-    [DefaultExecutionOrder(10900)]
+    [DefaultExecutionOrder(9800)]
     public sealed class AvatarNaturalIdlePose : MonoBehaviour
     {
         [SerializeField, Range(0f, 110f)] private float armDropDegrees = 78f;

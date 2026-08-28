@@ -152,6 +152,7 @@ namespace QuestMmdPlayer
         private RuntimePerformanceMonitor monitor;
         private QuestQualitySettings quality;
         private AstrBotBridge bridge;
+        private QuestMicrophoneInput voiceInput;
         private float nextPerfAt;
         private float nextHeartbeatAt;
 
@@ -273,11 +274,13 @@ namespace QuestMmdPlayer
         public void Bind(
             RuntimePerformanceMonitor performanceMonitor,
             QuestQualitySettings qualitySettings,
-            AstrBotBridge bridgeComponent)
+            AstrBotBridge bridgeComponent,
+            QuestMicrophoneInput voice = null)
         {
             monitor = performanceMonitor;
             quality = qualitySettings;
             bridge = bridgeComponent;
+            voiceInput = voice;
             nextPerfAt = 0f;
         }
 
@@ -297,7 +300,9 @@ namespace QuestMmdPlayer
                     $"boneIk={monitor.mmdBoneAndIkMilliseconds:F2} sdef={monitor.mmdSdefMilliseconds:F2} flush={monitor.mmdFlushMilliseconds:F2} " +
                     $"hz={monitor.physicsFrequencyHz} sub={monitor.physicsMaximumSubstepsPerFrame} " +
                     $"dropS={monitor.physicsSessionDroppedSeconds:F2} dropF={monitor.physicsSessionDroppedFrameCount} " +
-                    $"idle={(quality != null && quality.IsIdlePhysicsActive ? 1 : 0)}",
+                    $"idle={(quality != null && quality.IsIdlePhysicsActive ? 1 : 0)} " +
+                    $"mic={(voiceInput != null ? voiceInput.InputLevel : 0f):F4} " +
+                    $"pose_src_flip={monitor.physicsPoseSourceFlipFrames}",
                     this);
 #if ENABLE_PROFILER
                 var systemBilling = SampleSystemBilling();
