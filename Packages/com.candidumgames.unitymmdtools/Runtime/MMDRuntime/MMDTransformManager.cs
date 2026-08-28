@@ -317,7 +317,11 @@ namespace UMT
                     m_RuntimeContext.physicsInitialized = true;
                 }
 
-                TransformAll(Time.deltaTime, true, ShouldRunLivePhysics());
+                // Banxia deltaTime-guard patch: clamp the physics time input to 5-40ms. Quest3+Vulkan+OpenXR
+                // reports high-variance/incorrect frame intervals (Unity IssueTracker #7410 / N-127663), and a
+                // single polluted frame otherwise feeds the accumulator a spurious catch-up spike (dropped time,
+                // HardSync teleport, over-velocity kinetic sweeps). Live driving only: VMD baking keeps exact deltas.
+                TransformAll(Mathf.Clamp(Time.deltaTime, 0.005f, 0.04f), true, ShouldRunLivePhysics());
             }
 
             // Reconcile CPU SDEF skinning every play-mode frame (even when the transform solve is disabled) so it tracks live bone poses like the GPU path, and so turning SDEF off or leaving CPU mode restores the renderer's original mesh.

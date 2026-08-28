@@ -77,6 +77,16 @@ namespace UMT
             internal NativeArray<bool> externalKinematicFlags;
             /// <summary>World targets for externally driven kinematic bodies.</summary>
             internal NativeArray<float4x4> externalKinematicTargets;
+            /// <summary>Last physics-applied bone-local positions, indexed like <see cref="sortedSimulatedRigidBodyIndices"/>. Banxia pose-hold patch: lets zero-substep frames re-assert the last simulated pose instead of decaying to the animation sample.</summary>
+            internal NativeArray<float3> lastPhysicsLocalPositions;
+            /// <summary>Last physics-applied bone-local rotations, indexed like <see cref="sortedSimulatedRigidBodyIndices"/>. Banxia pose-hold patch.</summary>
+            internal NativeArray<quaternion> lastPhysicsLocalRotations;
+            /// <summary>Validity flag for the cached physics pose per simulated body; zero until the first substep apply (banxia pose-hold patch).</summary>
+            internal NativeArray<byte> lastPhysicsPoseValid;
+            /// <summary>Simulated bones whose local pose deviated from the cached physics pose during the latest zero-substep pass (banxia pose-hold patch).</summary>
+            internal int lastPoseSourceFlipCount;
+            /// <summary>Cumulative zero-substep frames in which any simulated bone deviated from the cached physics pose (banxia pose-hold patch).</summary>
+            internal int totalPoseSourceFlipFrames;
             /// <summary>Unconsumed simulation time carried between frames so variable frame times map onto whole fixed substeps without drifting.</summary>
             internal float timeAccumulator;
             /// <summary>Number of Bullet substeps executed by the latest transform pass.</summary>
@@ -125,6 +135,10 @@ namespace UMT
         public float totalDroppedSimulationSeconds => m_PhysicsSolverContext.totalDroppedSimulationSeconds;
         /// <summary>Number of rendered frames that discarded stale catch-up work.</summary>
         public int droppedSimulationFrameCount => m_PhysicsSolverContext.droppedSimulationFrameCount;
+        /// <summary>Simulated bones whose local pose deviated from the cached physics pose during the latest zero-substep pass (banxia pose-hold patch).</summary>
+        public int lastPoseSourceFlipCount => m_PhysicsSolverContext.lastPoseSourceFlipCount;
+        /// <summary>Cumulative zero-substep frames in which any simulated bone deviated from the cached physics pose (banxia pose-hold patch).</summary>
+        public int totalPoseSourceFlipFrames => m_PhysicsSolverContext.totalPoseSourceFlipFrames;
         /// <summary>Fixed Bullet simulation frequency used for normal playback.</summary>
         public static int simulationFrequencyHz => s_SimulationFrequencyHz;
         /// <summary>Hard limit that prevents a slow rendered frame from entering a physics catch-up spiral.</summary>
@@ -224,6 +238,21 @@ namespace UMT
             m_PhysicsSolverContext.lastDroppedSimulationSeconds = 0.0f;
             m_PhysicsSolverContext.resetKineticInterpolation = false;
             m_PhysicsSolverContext.initialPoseApplied = false;
+            InvalidateLastPhysicsPoseCache();
+        }
+
+        /// <summary>
+        /// Banxia pose-hold patch: clears the cached last-physics pose so the zero-substep hold replay cannot re-assert poses from before a reset or reseed.
+        /// </summary>
+        private void InvalidateLastPhysicsPoseCache()
+        {
+            if (m_PhysicsSolverContext.lastPhysicsPoseValid.IsCreated)
+            {
+                for (int i = 0; i < m_PhysicsSolverContext.lastPhysicsPoseValid.Length; ++i)
+                {
+                    m_PhysicsSolverContext.lastPhysicsPoseValid[i] = 0;
+                }
+            }
         }
 
         /// <summary>Diagnostic surface used by regression tests and runtime logs.</summary>
@@ -369,6 +398,7 @@ namespace UMT
             m_PhysicsSolverContext.bulletPhysicsContext.Reset(physicsSeed);
             ResetSimulatedBoneTransformsToInitial();
             m_PhysicsSolverContext.initialPoseApplied = false;
+            InvalidateLastPhysicsPoseCache();
         }
 
         /// <summary>
@@ -812,6 +842,9 @@ namespace UMT
             DisposeNativeArray(ref m_PhysicsSolverContext.currentKineticTargets);
             DisposeNativeArray(ref m_PhysicsSolverContext.externalKinematicFlags);
             DisposeNativeArray(ref m_PhysicsSolverContext.externalKinematicTargets);
+            DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsLocalPositions);
+            DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsLocalRotations);
+            DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsPoseValid);
             DisposeNativeArray(ref m_ExternalPoseScratchTransforms);
             DisposeNativeArray(ref m_ExternalPoseScratchIndices);
         }
@@ -839,6 +872,12 @@ namespace UMT
             ResizePersistent(ref m_PhysicsSolverContext.rigidBodySimulationData, totalBodyCount);
             ResizePersistent(ref m_PhysicsSolverContext.externalKinematicFlags, totalBodyCount);
             ResizePersistent(ref m_PhysicsSolverContext.externalKinematicTargets, totalBodyCount);
+            // Banxia pose-hold patch: per-body cache of the last physics-applied bone pose (fresh arrays are zero-filled, so the validity flags start clear).
+            ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsLocalPositions, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsLocalRotations, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsPoseValid, totalBodyCount);
+            m_PhysicsSolverContext.lastPoseSourceFlipCount = 0;
+            m_PhysicsSolverContext.totalPoseSourceFlipFrames = 0;
 
             for (int i = 0; i < modelBodyCount; ++i)
             {
@@ -1180,6 +1219,7 @@ namespace UMT
                 // never reported again while physics is suspended.
                 runtimeContext.lastSubstepCount = 0;
                 runtimeContext.lastDroppedSimulationSeconds = 0.0f;
+                runtimeContext.lastPoseSourceFlipCount = 0;
                 if (!runtimeContext.bulletPhysicsContext.isValid)
                 {
                     return;
@@ -1203,6 +1243,11 @@ namespace UMT
                 else if (elapsedTime <= 0.0f)
                 {
                     SyncBoneDrivenRigidBodies(in transformManagerContext, ref runtimeContext);
+                    // Banxia pose-hold patch: zero-substep frames previously left the simulated bones on the
+                    // animation-layer sample, hard-alternating with the physics pose rendered on stepping
+                    // frames. Re-assert the last physics pose so the rendered pose stays on the physics
+                    // solution while the fixed-step schedule catches up.
+                    ReplayLastPhysicsPoseToBones(ref transformManagerContext, ref runtimeContext);
                     return;
                 }
 
@@ -1424,15 +1469,104 @@ namespace UMT
                 {
                     MMDRigidBody.RigidBodySimulationData rigidBody = runtimeContext.rigidBodySimulationData[runtimeContext.sortedSimulatedRigidBodyIndices[i]];
                     float4x4 boneWorldMatrix = math.mul(runtimeContext.worldTransforms[i], rigidBody.boneLocalTransform);
+                    bool cacheValid = i < runtimeContext.lastPhysicsPoseValid.Length;
                     if (rigidBody.mode == PMXRigidBody.Mode.DynamicBoneAligned)
                     {
-                        float3 modelTranslationDelta = ApplyKineticBoneAlignedWorldMatrixToBone(ref transformManagerContext, rigidBody.relatedBoneIndex, boneWorldMatrix);
+                        float3 modelTranslationDelta = ApplyKineticBoneAlignedWorldMatrixToBone(
+                            ref transformManagerContext,
+                            rigidBody.relatedBoneIndex,
+                            boneWorldMatrix,
+                            out float3 alignedLocalPosition,
+                            out quaternion alignedLocalRotation);
                         ShiftKineticBoneAlignedBodyPosition(ref runtimeContext.bulletPhysicsContext, rigidBody, modelTranslationDelta);
+                        // Cache rotation only: bone-aligned bodies keep their bone-driven translation, so the hold replay must never freeze a legitimately animated position.
+                        if (cacheValid)
+                        {
+                            runtimeContext.lastPhysicsLocalPositions[i] = alignedLocalPosition;
+                            runtimeContext.lastPhysicsLocalRotations[i] = alignedLocalRotation;
+                            runtimeContext.lastPhysicsPoseValid[i] = 1;
+                        }
                         continue;
                     }
 
-                    ApplyKineticWorldMatrixToBone(ref transformManagerContext, rigidBody.relatedBoneIndex, boneWorldMatrix);
+                    ApplyKineticWorldMatrixToBone(
+                        ref transformManagerContext,
+                        rigidBody.relatedBoneIndex,
+                        boneWorldMatrix,
+                        out float3 localPosition,
+                        out quaternion localRotation);
+                    if (cacheValid)
+                    {
+                        runtimeContext.lastPhysicsLocalPositions[i] = localPosition;
+                        runtimeContext.lastPhysicsLocalRotations[i] = localRotation;
+                        runtimeContext.lastPhysicsPoseValid[i] = 1;
+                    }
                 }
+            }
+
+            /// <summary>
+            /// Banxia pose-hold patch: re-asserts the last physics-applied bone pose on zero-substep frames so the rendered pose stays on the physics solution, and maintains the pose-source-flip diagnostic counting simulated bones whose final local pose deviates from the cached physics pose.
+            /// </summary>
+            [BurstCompile]
+            private static void ReplayLastPhysicsPoseToBones(ref MMDTransformManager.SolverContext transformManagerContext, ref PhysicsSolverContext runtimeContext)
+            {
+                int count = runtimeContext.sortedSimulatedRigidBodyIndices.Length;
+                if (count == 0 || !runtimeContext.lastPhysicsPoseValid.IsCreated)
+                {
+                    return;
+                }
+
+                int flipBones = 0;
+                for (int i = 0; i < count && i < runtimeContext.lastPhysicsPoseValid.Length; ++i)
+                {
+                    MMDRigidBody.RigidBodySimulationData rigidBody = runtimeContext.rigidBodySimulationData[runtimeContext.sortedSimulatedRigidBodyIndices[i]];
+                    int boneIndex = rigidBody.relatedBoneIndex;
+                    if (boneIndex < 0 || boneIndex >= transformManagerContext.boneStateData.Length)
+                    {
+                        continue;
+                    }
+
+                    ref MMDBoneTransform.BoneSolverState state = ref PMXUtilities.ElementAt(transformManagerContext.boneStateData, boneIndex);
+                    if (runtimeContext.lastPhysicsPoseValid[i] == 0)
+                    {
+                        // No cached physics pose yet (before the first substep apply): this frame still renders the animation sample.
+                        ++flipBones;
+                        continue;
+                    }
+
+                    bool boneAligned = rigidBody.mode == PMXRigidBody.Mode.DynamicBoneAligned;
+                    float3 holdPosition = boneAligned ? state.localPosition : runtimeContext.lastPhysicsLocalPositions[i];
+                    quaternion holdRotation = runtimeContext.lastPhysicsLocalRotations[i];
+                    MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, boneIndex, holdPosition, holdRotation);
+                    if (HasPhysicsPoseDeviation(ref state, boneAligned, ref runtimeContext, i))
+                    {
+                        ++flipBones;
+                    }
+                }
+
+                runtimeContext.lastPoseSourceFlipCount = flipBones;
+                if (flipBones > 0)
+                {
+                    ++runtimeContext.totalPoseSourceFlipFrames;
+                }
+            }
+
+            /// <summary>
+            /// Banxia pose-hold patch: reports whether a bone's current local pose deviates from the cached physics pose beyond the flip-detection threshold (position >1mm or rotation >~0.8 degrees).
+            /// </summary>
+            private static bool HasPhysicsPoseDeviation(ref MMDBoneTransform.BoneSolverState state, bool rotationOnly, ref PhysicsSolverContext runtimeContext, int cacheIndex)
+            {
+                if (!rotationOnly)
+                {
+                    float3 positionDelta = state.localPosition - runtimeContext.lastPhysicsLocalPositions[cacheIndex];
+                    if (math.lengthsq(positionDelta) > 1e-6f)
+                    {
+                        return true;
+                    }
+                }
+
+                float rotationDot = math.dot(state.localRotation, runtimeContext.lastPhysicsLocalRotations[cacheIndex]);
+                return math.abs(rotationDot - 1.0f) > 1e-4f;
             }
 
             /// <summary>
@@ -1456,23 +1590,25 @@ namespace UMT
                 return rigidBodySimulationData.mode == PMXRigidBody.Mode.Dynamic || rigidBodySimulationData.mode == PMXRigidBody.Mode.DynamicBoneAligned;
             }
 
-            private static void ApplyKineticWorldMatrixToBone(ref MMDTransformManager.SolverContext transformManagerContext, int boneIndex, float4x4 worldMatrix)
+            private static void ApplyKineticWorldMatrixToBone(ref MMDTransformManager.SolverContext transformManagerContext, int boneIndex, float4x4 worldMatrix, out float3 appliedLocalPosition, out quaternion appliedLocalRotation)
             {
                 float4x4 parentWorldMatrix = MMDBoneTransform.GetParentWorldMatrix(ref transformManagerContext, boneIndex);
                 float4x4 localMatrix = math.mul(math.inverse(parentWorldMatrix), worldMatrix);
-                float3 localPosition = localMatrix.c3.xyz;
-                quaternion localRotation = new quaternion(localMatrix);
-                MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, boneIndex, localPosition, localRotation);
+                appliedLocalPosition = localMatrix.c3.xyz;
+                appliedLocalRotation = new quaternion(localMatrix);
+                MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, boneIndex, appliedLocalPosition, appliedLocalRotation);
             }
 
-            private static float3 ApplyKineticBoneAlignedWorldMatrixToBone(ref MMDTransformManager.SolverContext transformManagerData, int boneIndex, float4x4 worldMatrix)
+            private static float3 ApplyKineticBoneAlignedWorldMatrixToBone(ref MMDTransformManager.SolverContext transformManagerData, int boneIndex, float4x4 worldMatrix, out float3 appliedLocalPosition, out quaternion appliedLocalRotation)
             {
                 float3 boneLocalPosition = PMXUtilities.ElementAt(transformManagerData.boneStateData, boneIndex).localPosition;
                 float4x4 parentWorldMatrix = MMDBoneTransform.GetParentWorldMatrix(ref transformManagerData, boneIndex);
                 float4x4 localMatrix = math.mul(math.inverse(parentWorldMatrix), worldMatrix);
                 float3 localPosition = localMatrix.c3.xyz;
                 float3 localTranslationDelta = localPosition - boneLocalPosition;
-                MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerData, boneIndex, boneLocalPosition, new quaternion(localMatrix));
+                appliedLocalPosition = boneLocalPosition;
+                appliedLocalRotation = new quaternion(localMatrix);
+                MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerData, boneIndex, boneLocalPosition, appliedLocalRotation);
                 return math.mul(parentWorldMatrix, new float4(localTranslationDelta, 0)).xyz;
             }
 
