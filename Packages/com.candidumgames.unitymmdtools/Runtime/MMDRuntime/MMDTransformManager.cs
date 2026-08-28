@@ -335,44 +335,44 @@ namespace UMT
                 TransformAll(GateLiveDeltaTime(Time.deltaTime), true, ShouldRunLivePhysics());
             }
 
-            // Banxia deltaTime-guard v2 state: ring of recent raw frame intervals for the median gate.
-            private readonly float[] m_RecentRawDeltaTimes = { 1f / 60f, 1f / 60f, 1f / 60f, 1f / 60f, 1f / 60f };
-            private readonly float[] m_DeltaTimeSortBuffer = new float[5];
-            private int m_RecentRawDeltaTimeIndex;
-
-            /// <summary>
-            /// Banxia deltaTime-guard v2: replaces clamped garbage with the recent median on polluted
-            /// frames, then clamps to the substep budget so the physics accumulator can never request
-            /// more substeps than the cap (drop -> HardSync chain unreachable through dt).
-            /// </summary>
-            private float GateLiveDeltaTime(float rawDeltaTime)
-            {
-                m_RecentRawDeltaTimes[m_RecentRawDeltaTimeIndex] = rawDeltaTime;
-                m_RecentRawDeltaTimeIndex = (m_RecentRawDeltaTimeIndex + 1) % m_RecentRawDeltaTimes.Length;
-                for (int i = 0; i < m_RecentRawDeltaTimes.Length; ++i)
-                {
-                    m_DeltaTimeSortBuffer[i] = m_RecentRawDeltaTimes[i];
-                }
-                System.Array.Sort(m_DeltaTimeSortBuffer);
-                float median = m_DeltaTimeSortBuffer[m_DeltaTimeSortBuffer.Length / 2];
-
-                float gated = rawDeltaTime;
-                if (rawDeltaTime > median * 1.8f + 0.004f || rawDeltaTime < median * 0.5f)
-                {
-                    // Polluted frame interval (Quest #7410 spikes / near-zero reports): physics
-                    // advances by the recent typical frame time instead of the garbage value.
-                    gated = median;
-                }
-
-                float ceiling = (float)MMDPhysicsManager.maximumSubstepsPerFrame /
-                    math.max(30, MMDPhysicsManager.simulationFrequencyHz);
-                return Mathf.Clamp(gated, 0.0005f, ceiling);
-            }
-
             // Reconcile CPU SDEF skinning every play-mode frame (even when the transform solve is disabled) so it tracks live bone poses like the GPU path, and so turning SDEF off or leaving CPU mode restores the renderer's original mesh.
             var sdefStarted = Stopwatch.GetTimestamp();
             ReconcileSDEFSkinners();
             lastSdefMilliseconds = ElapsedMilliseconds(sdefStarted);
+        }
+
+        // Banxia deltaTime-guard v2 state: ring of recent raw frame intervals for the median gate.
+        private readonly float[] m_RecentRawDeltaTimes = { 1f / 60f, 1f / 60f, 1f / 60f, 1f / 60f, 1f / 60f };
+        private readonly float[] m_DeltaTimeSortBuffer = new float[5];
+        private int m_RecentRawDeltaTimeIndex;
+
+        /// <summary>
+        /// Banxia deltaTime-guard v2: replaces clamped garbage with the recent median on polluted
+        /// frames, then clamps to the substep budget so the physics accumulator can never request
+        /// more substeps than the cap (drop -> HardSync chain unreachable through dt).
+        /// </summary>
+        private float GateLiveDeltaTime(float rawDeltaTime)
+        {
+            m_RecentRawDeltaTimes[m_RecentRawDeltaTimeIndex] = rawDeltaTime;
+            m_RecentRawDeltaTimeIndex = (m_RecentRawDeltaTimeIndex + 1) % m_RecentRawDeltaTimes.Length;
+            for (int i = 0; i < m_RecentRawDeltaTimes.Length; ++i)
+            {
+                m_DeltaTimeSortBuffer[i] = m_RecentRawDeltaTimes[i];
+            }
+            System.Array.Sort(m_DeltaTimeSortBuffer);
+            float median = m_DeltaTimeSortBuffer[m_DeltaTimeSortBuffer.Length / 2];
+
+            float gated = rawDeltaTime;
+            if (rawDeltaTime > median * 1.8f + 0.004f || rawDeltaTime < median * 0.5f)
+            {
+                // Polluted frame interval (Quest #7410 spikes / near-zero reports): physics
+                // advances by the recent typical frame time instead of the garbage value.
+                gated = median;
+            }
+
+            float ceiling = (float)MMDPhysicsManager.maximumSubstepsPerFrame /
+                math.max(30, MMDPhysicsManager.simulationFrequencyHz);
+            return Mathf.Clamp(gated, 0.0005f, ceiling);
         }
 
         /// <summary>
