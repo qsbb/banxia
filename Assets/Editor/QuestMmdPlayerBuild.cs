@@ -33,9 +33,12 @@ namespace QuestMmdPlayer.Editor
     {
         private const string ScenePath = "Assets/Scenes/Prototype.unity";
         private const string OutputPath = "Builds/Banxia.apk";
+        private const string PhoneOutputPath = "Builds/Banxia-Phone.apk";
         private const string AndroidApplicationIdentifier = "com.lingxi.banxia";
-        private const string AndroidVersionName = "0.2.21";
-        private const int AndroidVersionCode = 31;
+        private const string PhoneApplicationIdentifier = "com.lingxi.banxia.phone";
+        private const string PhoneScriptingDefine = "BANXIA_PHONE";
+        private const string AndroidVersionName = "0.3.0";
+        private const int AndroidVersionCode = 32;
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
         private const string EditorSimulationSettingsPath = "Assets/XR/Settings/XRSimulationSettings.asset";
@@ -54,6 +57,22 @@ namespace QuestMmdPlayer.Editor
         [MenuItem("伴夏/Build Android APK")]
         public static void BuildAndroidApk()
         {
+            BuildAndroidInternal(phoneForm: false);
+        }
+
+        /// <summary>
+        /// Phone form (形态 A): same scene and shared runtime, but no XR loader,
+        /// a separate application id and the BANXIA_PHONE scripting define that
+        /// swaps the VR presentation/input shell for orbit camera + touch.
+        /// </summary>
+        [MenuItem("伴夏/Build Android Phone APK")]
+        public static void BuildAndroidPhoneApk()
+        {
+            BuildAndroidInternal(phoneForm: true);
+        }
+
+        private static void BuildAndroidInternal(bool phoneForm)
+        {
             if (!File.Exists(ScenePath))
             {
                 QuestMmdPlayerMenu.CreatePrototypeScene();
@@ -69,14 +88,25 @@ namespace QuestMmdPlayer.Editor
 
             RestoreSimulationSettingsFromTemp();
             using (new PreloadedAssetsScope())
+            using (new ScriptingDefineScope(phoneForm ? PhoneScriptingDefine : null))
             {
-                ConfigureOpenXr();
+                if (phoneForm)
+                {
+                    ConfigurePhoneNoXr();
+                }
+                else
+                {
+                    ConfigureOpenXr();
+                }
                 RemoveEditorOnlyPreloadedAssets();
                 ConfigureRuntimeShaders();
                 EditorUserBuildSettings.buildAppBundle = false;
                 PlayerSettings.companyName = "Banxia";
-                PlayerSettings.productName = QuestMmdPlayerBootstrap.AndroidTaskLabel;
-                PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, AndroidApplicationIdentifier);
+                PlayerSettings.productName = phoneForm
+                    ? QuestMmdPlayerBootstrap.AndroidTaskLabel + "-Phone"
+                    : QuestMmdPlayerBootstrap.AndroidTaskLabel;
+                PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android,
+                    phoneForm ? PhoneApplicationIdentifier : AndroidApplicationIdentifier);
                 PlayerSettings.bundleVersion = AndroidVersionName;
                 PlayerSettings.Android.bundleVersionCode = AndroidVersionCode;
                 PlayerSettings.colorSpace = ColorSpace.Linear;
@@ -87,7 +117,8 @@ namespace QuestMmdPlayer.Editor
                 PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel29;
                 PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
 
-                Directory.CreateDirectory(Path.GetDirectoryName(OutputPath));
+                var outputPath = phoneForm ? PhoneOutputPath : OutputPath;
+                Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
                 // 联调期默认 Development：启用 ProfilerRecorder 系统级计费
                 // （[SysBilling] 心跳），定位 MMD 计费看不到的主线程开销。
                 // 传 -questDisableDevelopmentBuild 可回到纯 Release。
@@ -105,7 +136,7 @@ namespace QuestMmdPlayer.Editor
                     report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
                     {
                         scenes = new[] { ScenePath },
-                        locationPathName = OutputPath,
+                        locationPathName = outputPath,
                         target = BuildTarget.Android,
                         options = buildOptions
                     });
@@ -117,6 +148,95 @@ namespace QuestMmdPlayer.Editor
                 }
 
                 Debug.Log($"Android APK created: {report.summary.outputPath} ({report.summary.totalSize} bytes)");
+                if (phoneForm)
+                {
+                    // The shared XR settings asset persists between builds; hand the
+                    // Android target back to the Quest OpenXR configuration so the
+                    // editor stays a Quest-first project.
+                    ConfigureOpenXr();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Removes the OpenXR loader from the Android build target so the phone
+        /// APK never boots an XR session. The loader is re-assigned after the
+        /// build (see BuildAndroidInternal) to keep the editor Quest-first.
+        /// </summary>
+        private static void ConfigurePhoneNoXr()
+        {
+            var guids = AssetDatabase.FindAssets("t:XRGeneralSettingsPerBuildTarget");
+            if (guids.Length == 0)
+            {
+                return;
+            }
+
+            var path = AssetDatabase.GUIDToAssetPath(guids[0]);
+            var buildTargetSettings = AssetDatabase.LoadAssetAtPath<XRGeneralSettingsPerBuildTarget>(path);
+            if (buildTargetSettings == null ||
+                !buildTargetSettings.HasManagerSettingsForBuildTarget(BuildTargetGroup.Android))
+            {
+                return;
+            }
+
+            var generalSettings = buildTargetSettings.SettingsForBuildTarget(BuildTargetGroup.Android);
+            if (generalSettings == null || generalSettings.Manager == null)
+            {
+                return;
+            }
+
+            if (XRPackageMetadataStore.RemoveLoader(
+                generalSettings.Manager, OpenXrLoader, BuildTargetGroup.Android))
+            {
+                Debug.Log("Phone build: removed Android OpenXR loader (no XR session on phone).");
+            }
+
+            EditorUtility.SetDirty(buildTargetSettings);
+            EditorUtility.SetDirty(generalSettings);
+            EditorUtility.SetDirty(generalSettings.Manager);
+            AssetDatabase.SaveAssets();
+        }
+
+        /// <summary>
+        /// Adds one scripting define for the duration of a build, then restores
+        /// the Android define set (builds run in the same editor process that
+        /// later compiles for the other form factor).
+        /// </summary>
+        private sealed class ScriptingDefineScope : IDisposable
+        {
+            private readonly string originalDefines;
+            private bool disposed;
+
+            internal ScriptingDefineScope(string defineToAdd)
+            {
+                originalDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.Android);
+                if (string.IsNullOrWhiteSpace(defineToAdd))
+                {
+                    return;
+                }
+
+                var defines = originalDefines
+                    .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                    .ToList();
+                if (!defines.Contains(defineToAdd))
+                {
+                    defines.Add(defineToAdd);
+                    PlayerSettings.SetScriptingDefineSymbolsForGroup(
+                        BuildTargetGroup.Android, string.Join(";", defines));
+                    Debug.Log($"Added scripting define for this build: {defineToAdd}");
+                }
+            }
+
+            public void Dispose()
+            {
+                if (disposed)
+                {
+                    return;
+                }
+
+                disposed = true;
+                PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.Android, originalDefines);
+                AssetDatabase.SaveAssets();
             }
         }
 

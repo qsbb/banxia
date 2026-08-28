@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UMT;
 using UnityEngine;
@@ -173,13 +173,21 @@ namespace QuestMmdPlayer
             }
 
             EnsureRenderers();
+#if BANXIA_PHONE
+            // Phone form: XR hand/controller input does not exist; a screen touch
+            // ray becomes one virtual hand driving the same contact pipeline.
+#else
             trackingSpace = QuestXrInputUtility.ResolveTrackingSpace(trackingSpace);
             ReadHand(leftHand);
             ReadHand(rightHand);
+#endif
 
             var bounds = CalculateAvatarBounds();
             contactBroadphaseBounds = bounds;
             contactBroadphaseReady = true;
+#if BANXIA_PHONE
+            InjectPhoneTouchHand(bounds);
+#endif
             EnsureCollisionProxies(bounds);
             UpdateCollisionProxyScale();
             UpdateTouchState(bounds);
@@ -197,6 +205,72 @@ namespace QuestMmdPlayer
             UpdateFeedback();
         }
 
+#if BANXIA_PHONE
+        /// <summary>
+        /// Phone form: maps the active single-finger touch to a virtual hand so the
+        /// existing contact thresholds, contact regions and touch feedback all work
+        /// unchanged. Two-finger gestures belong to the orbit camera.
+        /// </summary>
+        private void InjectPhoneTouchHand(Bounds bounds)
+        {
+            leftHand.previousPrimary = leftHand.primary;
+            leftHand.previousSecondary = leftHand.secondary;
+            leftHand.primary = false;
+            leftHand.secondary = false;
+            leftHand.grabHeld = false;
+            leftHand.trackedHand = false;
+            leftHand.trackingGrace = false;
+            leftHand.hasIndexTip = false;
+            leftHand.hasThumbTip = false;
+            rightHand.available = false;
+
+            var cam = Camera.main;
+            var orbitCam = cam == null ? null : cam.GetComponent<PhoneOrbitCamera>();
+            if (cam == null || Input.touchCount != 1)
+            {
+                leftHand.available = false;
+                if (orbitCam != null)
+                {
+                    orbitCam.GestureCapturedByTouch = false;
+                }
+                return;
+            }
+
+            var touch = Input.GetTouch(0);
+            if (touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled)
+            {
+                leftHand.available = false;
+                if (orbitCam != null)
+                {
+                    orbitCam.GestureCapturedByTouch = false;
+                }
+                return;
+            }
+
+            var ray = cam.ScreenPointToRay(touch.position);
+            float enter;
+            if (!bounds.IntersectRay(ray, out enter))
+            {
+                // Finger is off the avatar: camera orbit owns the gesture.
+                leftHand.available = false;
+                if (orbitCam != null)
+                {
+                    orbitCam.GestureCapturedByTouch = false;
+                }
+                return;
+            }
+
+            // Hover the virtual hand just outside the surface along the ray so the
+            // proximity thresholds register contact without sinking into the proxy.
+            leftHand.position = ray.GetPoint(Mathf.Max(0f, enter - touchDistance * 0.5f));
+            leftHand.available = true;
+            if (orbitCam != null)
+            {
+                orbitCam.GestureCapturedByTouch = true;
+            }
+        }
+
+#endif
         private void ReadHand(HandState hand)
         {
             var hadTrackedPose = hand.trackedHand && hand.available;

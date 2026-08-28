@@ -47,6 +47,11 @@ namespace QuestMmdPlayer
         public RuntimeDebugLog DebugLog { get; private set; }
         public RuntimePerformanceMonitor Performance { get; private set; }
 
+        /// <summary>Phone-form orbit camera (BANXIA_PHONE builds only).</summary>
+        public PhoneOrbitCamera OrbitCamera { get; private set; }
+        /// <summary>Phone-form on-screen diagnostics overlay (BANXIA_PHONE builds only).</summary>
+        public PhoneDiagnosticsHud PhoneHud { get; private set; }
+
         private RuntimeMmdModelLoader runtimeMmdLoader;
         private AvatarController fallbackAvatar;
         private bool androidTaskLabelLogged;
@@ -54,13 +59,20 @@ namespace QuestMmdPlayer
         private void Awake()
         {
             ApplyAndroidTaskLabel();
+#if BANXIA_PHONE
+            // Phone form: no XR session; keep the screen awake and cap at 60fps.
+            Screen.sleepTimeout = SleepTimeout.NeverSleep;
+            Application.targetFrameRate = 60;
+#endif
             DebugLog = gameObject.GetComponent<RuntimeDebugLog>() ?? gameObject.AddComponent<RuntimeDebugLog>();
             Performance = gameObject.GetComponent<RuntimePerformanceMonitor>() ??
                 gameObject.AddComponent<RuntimePerformanceMonitor>();
             EnsureCamera();
             EnsureLight();
 
+#if !BANXIA_PHONE
             Passthrough = gameObject.GetComponent<PassthroughFacade>() ?? gameObject.AddComponent<PassthroughFacade>();
+#endif
             AstrBot = gameObject.GetComponent<AstrBotBridge>() ?? gameObject.AddComponent<AstrBotBridge>();
             Pairing = gameObject.GetComponent<BackendPairingController>() ?? gameObject.AddComponent<BackendPairingController>();
             Pairing.Initialize(AstrBot);
@@ -73,8 +85,10 @@ namespace QuestMmdPlayer
             {
                 HumanInteraction = gameObject.GetComponent<AvatarHumanInteraction>() ?? gameObject.AddComponent<AvatarHumanInteraction>();
             }
+#if !BANXIA_PHONE
             TrackedHands = gameObject.GetComponent<QuestTrackedHandVisualizer>() ?? gameObject.AddComponent<QuestTrackedHandVisualizer>();
             HandPhysics = gameObject.GetComponent<AvatarMmdPhysicsAdapter>() ?? gameObject.AddComponent<AvatarMmdPhysicsAdapter>();
+#endif
             if (createConversationPrototype)
             {
                 Conversation = gameObject.GetComponent<ConversationController>() ?? gameObject.AddComponent<ConversationController>();
@@ -84,16 +98,22 @@ namespace QuestMmdPlayer
                 VoiceInput = gameObject.GetComponent<QuestMicrophoneInput>() ?? gameObject.AddComponent<QuestMicrophoneInput>();
                 VoiceInput.Bind(Conversation);
             }
+#if !BANXIA_PHONE
             if (createVrLocomotion)
             {
                 Locomotion = gameObject.GetComponent<QuestVrLocomotion>() ?? gameObject.AddComponent<QuestVrLocomotion>();
             }
+#endif
+#if !BANXIA_PHONE
             RoomUnderstanding = gameObject.GetComponent<RoomUnderstandingService>() ?? gameObject.AddComponent<RoomUnderstandingService>();
             AstrBot.BindSpatialContext(RoomUnderstanding);
+#endif
+#if !BANXIA_PHONE
             if (createAvatarPlacement)
             {
                 Placement = gameObject.GetComponent<AvatarPlacementService>() ?? gameObject.AddComponent<AvatarPlacementService>();
             }
+#endif
             Presence = gameObject.GetComponent<AvatarPresence>() ?? gameObject.AddComponent<AvatarPresence>();
             Outline = gameObject.GetComponent<AvatarOutlineController>() ?? gameObject.AddComponent<AvatarOutlineController>();
             Quality = gameObject.GetComponent<QuestQualitySettings>() ?? gameObject.AddComponent<QuestQualitySettings>();
@@ -116,11 +136,18 @@ namespace QuestMmdPlayer
 
             if (createPrototypeHud)
             {
+#if BANXIA_PHONE
+                // Phone form: world-space pointer menu is XR-only; use the IMGUI
+                // diagnostics overlay instead.
+                PhoneHud = gameObject.GetComponent<PhoneDiagnosticsHud>() ?? gameObject.AddComponent<PhoneDiagnosticsHud>();
+                PhoneHud.Bind(Performance, DiagnosticsReporter);
+#else
                 Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
                 Menu.Initialize(this);
 #if UNITY_EDITOR
                 var hud = gameObject.GetComponent<PrototypeHud>() ?? gameObject.AddComponent<PrototypeHud>();
                 hud.Initialize(this);
+#endif
 #endif
                 BindInteractions();
             }
@@ -336,6 +363,10 @@ namespace QuestMmdPlayer
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = new Color(0.035f, 0.045f, 0.065f, 0f);
             cameraObject.AddComponent<AudioListener>();
+#if BANXIA_PHONE
+            OrbitCamera = cameraObject.AddComponent<PhoneOrbitCamera>();
+            OrbitCamera.SetOrbitTarget(avatarStartPosition);
+#endif
         }
 
         private void EnsureLight()
