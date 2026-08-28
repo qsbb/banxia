@@ -77,16 +77,16 @@ namespace UMT
             internal NativeArray<bool> externalKinematicFlags;
             /// <summary>World targets for externally driven kinematic bodies.</summary>
             internal NativeArray<float4x4> externalKinematicTargets;
-            /// <summary>Last physics-applied bone-local positions, indexed like <see cref="sortedSimulatedRigidBodyIndices"/>. Banxia pose-hold patch: lets zero-substep frames re-assert the last simulated pose instead of decaying to the animation sample.</summary>
-            internal NativeArray<float3> lastPhysicsLocalPositions;
-            /// <summary>Last physics-applied bone-local rotations, indexed like <see cref="sortedSimulatedRigidBodyIndices"/>. Banxia pose-hold patch.</summary>
-            internal NativeArray<quaternion> lastPhysicsLocalRotations;
+            /// <summary>Last physics-step bone WORLD positions, indexed like <see cref="sortedSimulatedRigidBodyIndices"/>. Banxia interpolation patch: cached in world space because simulated bones form chains - interpolating bone-LOCAL poses broke the level-ordered parent conversion (each child's local pose was computed against the parent's interpolated display pose, compounding error down long chains like the cape). World-space per-body interpolation between two valid physics states stays consistent.</summary>
+            internal NativeArray<float3> lastPhysicsWorldPositions;
+            /// <summary>Last physics-step bone WORLD rotations (banxia interpolation patch).</summary>
+            internal NativeArray<quaternion> lastPhysicsWorldRotations;
             /// <summary>Validity flag for the cached physics pose per simulated body; zero until the first substep apply (banxia pose-hold patch).</summary>
             internal NativeArray<byte> lastPhysicsPoseValid;
-            /// <summary>Previous physics-applied bone-local positions (one fixed step behind <see cref="lastPhysicsLocalPositions"/>), indexed like <see cref="sortedSimulatedRigidBodyIndices"/>. Banxia interpolation patch: every rendered frame shows lerp(prev, last, accumulator/h) so simulated bones move at render rate instead of staircase-stepping at the physics frequency.</summary>
-            internal NativeArray<float3> prevPhysicsLocalPositions;
-            /// <summary>Previous physics-applied bone-local rotations (banxia interpolation patch).</summary>
-            internal NativeArray<quaternion> prevPhysicsLocalRotations;
+            /// <summary>Previous physics-step bone WORLD positions (one fixed step behind <see cref="lastPhysicsWorldPositions"/>). Displayed pose = lerp(prev, last, accumulator/h), converted back to bone-local against the parent's already-written display matrix (level order).</summary>
+            internal NativeArray<float3> prevPhysicsWorldPositions;
+            /// <summary>Previous physics-step bone WORLD rotations (banxia interpolation patch).</summary>
+            internal NativeArray<quaternion> prevPhysicsWorldRotations;
             /// <summary>Simulated bones whose local pose deviated from the cached physics pose during the latest zero-substep pass (banxia pose-hold patch).</summary>
             internal int lastPoseSourceFlipCount;
             /// <summary>Cumulative zero-substep frames in which any simulated bone deviated from the cached physics pose (banxia pose-hold patch).</summary>
@@ -846,11 +846,11 @@ namespace UMT
             DisposeNativeArray(ref m_PhysicsSolverContext.currentKineticTargets);
             DisposeNativeArray(ref m_PhysicsSolverContext.externalKinematicFlags);
             DisposeNativeArray(ref m_PhysicsSolverContext.externalKinematicTargets);
-            DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsLocalPositions);
-            DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsLocalRotations);
+            DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsWorldPositions);
+            DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsWorldRotations);
             DisposeNativeArray(ref m_PhysicsSolverContext.lastPhysicsPoseValid);
-            DisposeNativeArray(ref m_PhysicsSolverContext.prevPhysicsLocalPositions);
-            DisposeNativeArray(ref m_PhysicsSolverContext.prevPhysicsLocalRotations);
+            DisposeNativeArray(ref m_PhysicsSolverContext.prevPhysicsWorldPositions);
+            DisposeNativeArray(ref m_PhysicsSolverContext.prevPhysicsWorldRotations);
             DisposeNativeArray(ref m_ExternalPoseScratchTransforms);
             DisposeNativeArray(ref m_ExternalPoseScratchIndices);
         }
@@ -879,11 +879,11 @@ namespace UMT
             ResizePersistent(ref m_PhysicsSolverContext.externalKinematicFlags, totalBodyCount);
             ResizePersistent(ref m_PhysicsSolverContext.externalKinematicTargets, totalBodyCount);
             // Banxia pose-hold patch: per-body cache of the last physics-applied bone pose (fresh arrays are zero-filled, so the validity flags start clear).
-            ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsLocalPositions, totalBodyCount);
-            ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsLocalRotations, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsWorldPositions, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsWorldRotations, totalBodyCount);
             ResizePersistent(ref m_PhysicsSolverContext.lastPhysicsPoseValid, totalBodyCount);
-            ResizePersistent(ref m_PhysicsSolverContext.prevPhysicsLocalPositions, totalBodyCount);
-            ResizePersistent(ref m_PhysicsSolverContext.prevPhysicsLocalRotations, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.prevPhysicsWorldPositions, totalBodyCount);
+            ResizePersistent(ref m_PhysicsSolverContext.prevPhysicsWorldRotations, totalBodyCount);
             m_PhysicsSolverContext.lastPoseSourceFlipCount = 0;
             m_PhysicsSolverContext.totalPoseSourceFlipFrames = 0;
 
@@ -1486,10 +1486,12 @@ namespace UMT
             {
                 int count = runtimeContext.sortedSimulatedRigidBodyIndices.Length;
                 runtimeContext.bulletPhysicsContext.GetRigidBodyMotionTransforms(count, runtimeContext.sortedSimulatedRigidBodyIndices, ref runtimeContext.worldTransforms);
-                // Banxia interpolation patch: render lerp(prevStepPose, newStepPose, accumulator/h)
-                // instead of the raw new pose, so the stepping frame and the following zero-substep
-                // replay frames share one continuous trajectory (standard fixed-step render interpolation;
-                // introduces at most one fixed step of latency).
+                // Banxia interpolation patch (world space): cache the real physics WORLD pose per
+                // body, then render lerp(prevWorld, newWorld, accumulator/h) converted back to local
+                // against the parent's already-written display matrix (bodies are processed in bone
+                // level order, so a simulated parent always holds its display pose when children run).
+                // Local-space interpolation was wrong for chained bones: each child's conversion used
+                // the parent's interpolated matrix, compounding error down long chains (cape "flying").
                 float alpha = ResolveInterpolationAlpha(ref runtimeContext);
 
                 for (int i = 0; i < count; ++i)
@@ -1506,42 +1508,58 @@ namespace UMT
                             out float3 alignedLocalPosition,
                             out quaternion alignedLocalRotation);
                         ShiftKineticBoneAlignedBodyPosition(ref runtimeContext.bulletPhysicsContext, rigidBody, modelTranslationDelta);
-                        // Cache rotation only: bone-aligned bodies keep their bone-driven translation, so the hold replay must never freeze a legitimately animated position.
                         if (cacheValid)
                         {
+                            DecomposeRigid(boneWorldMatrix, out float3 worldPosition, out quaternion worldRotation);
                             bool hadPrev = runtimeContext.lastPhysicsPoseValid[i] != 0;
-                            runtimeContext.prevPhysicsLocalPositions[i] = hadPrev ? runtimeContext.lastPhysicsLocalPositions[i] : alignedLocalPosition;
-                            runtimeContext.prevPhysicsLocalRotations[i] = hadPrev ? runtimeContext.lastPhysicsLocalRotations[i] : alignedLocalRotation;
-                            runtimeContext.lastPhysicsLocalPositions[i] = alignedLocalPosition;
-                            runtimeContext.lastPhysicsLocalRotations[i] = alignedLocalRotation;
+                            runtimeContext.prevPhysicsWorldPositions[i] = hadPrev ? runtimeContext.lastPhysicsWorldPositions[i] : worldPosition;
+                            runtimeContext.prevPhysicsWorldRotations[i] = hadPrev ? runtimeContext.lastPhysicsWorldRotations[i] : worldRotation;
+                            runtimeContext.lastPhysicsWorldPositions[i] = worldPosition;
+                            runtimeContext.lastPhysicsWorldRotations[i] = worldRotation;
                             runtimeContext.lastPhysicsPoseValid[i] = 1;
-                            // Display pose: animation-anchored translation, interpolated rotation.
-                            quaternion displayRotation = math.slerp(runtimeContext.prevPhysicsLocalRotations[i], alignedLocalRotation, alpha);
+                            // Display pose: animation-anchored translation (already applied above),
+                            // world-interpolated rotation converted back against the current parent.
+                            quaternion displayWorldRotation = math.slerp(runtimeContext.prevPhysicsWorldRotations[i], worldRotation, alpha);
+                            quaternion parentRotation = new quaternion(MMDBoneTransform.GetParentWorldMatrix(ref transformManagerContext, rigidBody.relatedBoneIndex));
+                            quaternion displayLocalRotation = math.normalize(math.mul(math.inverse(parentRotation), displayWorldRotation));
                             ref MMDBoneTransform.BoneSolverState alignedState = ref PMXUtilities.ElementAt(transformManagerContext.boneStateData, rigidBody.relatedBoneIndex);
-                            MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, rigidBody.relatedBoneIndex, alignedState.localPosition, displayRotation);
+                            MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, rigidBody.relatedBoneIndex, alignedState.localPosition, displayLocalRotation);
                         }
                         continue;
                     }
 
-                    ApplyKineticWorldMatrixToBone(
-                        ref transformManagerContext,
-                        rigidBody.relatedBoneIndex,
-                        boneWorldMatrix,
-                        out float3 localPosition,
-                        out quaternion localRotation);
+                    DecomposeRigid(boneWorldMatrix, out float3 dynamicWorldPosition, out quaternion dynamicWorldRotation);
                     if (cacheValid)
                     {
                         bool hadPrev = runtimeContext.lastPhysicsPoseValid[i] != 0;
-                        runtimeContext.prevPhysicsLocalPositions[i] = hadPrev ? runtimeContext.lastPhysicsLocalPositions[i] : localPosition;
-                        runtimeContext.prevPhysicsLocalRotations[i] = hadPrev ? runtimeContext.lastPhysicsLocalRotations[i] : localRotation;
-                        runtimeContext.lastPhysicsLocalPositions[i] = localPosition;
-                        runtimeContext.lastPhysicsLocalRotations[i] = localRotation;
+                        runtimeContext.prevPhysicsWorldPositions[i] = hadPrev ? runtimeContext.lastPhysicsWorldPositions[i] : dynamicWorldPosition;
+                        runtimeContext.prevPhysicsWorldRotations[i] = hadPrev ? runtimeContext.lastPhysicsWorldRotations[i] : dynamicWorldRotation;
+                        runtimeContext.lastPhysicsWorldPositions[i] = dynamicWorldPosition;
+                        runtimeContext.lastPhysicsWorldRotations[i] = dynamicWorldRotation;
                         runtimeContext.lastPhysicsPoseValid[i] = 1;
-                        float3 displayPosition = math.lerp(runtimeContext.prevPhysicsLocalPositions[i], localPosition, alpha);
-                        quaternion displayRotation = math.slerp(runtimeContext.prevPhysicsLocalRotations[i], localRotation, alpha);
-                        MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, rigidBody.relatedBoneIndex, displayPosition, displayRotation);
+                        float3 displayWorldPosition = math.lerp(runtimeContext.prevPhysicsWorldPositions[i], dynamicWorldPosition, alpha);
+                        quaternion displayWorldRotation2 = math.slerp(runtimeContext.prevPhysicsWorldRotations[i], dynamicWorldRotation, alpha);
+                        float4x4 parentWorld = MMDBoneTransform.GetParentWorldMatrix(ref transformManagerContext, rigidBody.relatedBoneIndex);
+                        float4x4 displayLocal = math.mul(math.inverse(parentWorld), new float4x4(displayWorldRotation2, displayWorldPosition));
+                        MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, rigidBody.relatedBoneIndex, displayLocal.c3.xyz, math.normalize(new quaternion(displayLocal)));
+                    }
+                    else
+                    {
+                        ApplyKineticWorldMatrixToBone(
+                            ref transformManagerContext,
+                            rigidBody.relatedBoneIndex,
+                            boneWorldMatrix,
+                            out float3 localPosition,
+                            out quaternion localRotation);
                     }
                 }
+            }
+
+            /// <summary>Decomposes a rigid (unscaled) world matrix into position and normalized rotation.</summary>
+            private static void DecomposeRigid(float4x4 worldMatrix, out float3 position, out quaternion rotation)
+            {
+                position = worldMatrix.c3.xyz;
+                rotation = math.normalize(new quaternion(worldMatrix));
             }
 
             /// <summary>
@@ -1590,12 +1608,22 @@ namespace UMT
                         continue;
                     }
 
-                    bool boneAligned = rigidBody.mode == PMXRigidBody.Mode.DynamicBoneAligned;
-                    float3 holdPosition = boneAligned
-                        ? state.localPosition
-                        : math.lerp(runtimeContext.prevPhysicsLocalPositions[i], runtimeContext.lastPhysicsLocalPositions[i], alpha);
-                    quaternion holdRotation = math.slerp(runtimeContext.prevPhysicsLocalRotations[i], runtimeContext.lastPhysicsLocalRotations[i], alpha);
-                    MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, boneIndex, holdPosition, holdRotation);
+                    // World-space interpolation between the previous and latest physics-step pose,
+                    // converted to bone-local against the parent's display matrix (level order).
+                    float3 displayWorldPosition = math.lerp(runtimeContext.prevPhysicsWorldPositions[i], runtimeContext.lastPhysicsWorldPositions[i], alpha);
+                    quaternion displayWorldRotation = math.slerp(runtimeContext.prevPhysicsWorldRotations[i], runtimeContext.lastPhysicsWorldRotations[i], alpha);
+                    float4x4 parentWorld = MMDBoneTransform.GetParentWorldMatrix(ref transformManagerContext, boneIndex);
+                    if (rigidBody.mode == PMXRigidBody.Mode.DynamicBoneAligned)
+                    {
+                        quaternion parentRotation = new quaternion(parentWorld);
+                        quaternion displayLocalRotation = math.normalize(math.mul(math.inverse(parentRotation), displayWorldRotation));
+                        MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, boneIndex, state.localPosition, displayLocalRotation);
+                    }
+                    else
+                    {
+                        float4x4 displayLocal = math.mul(math.inverse(parentWorld), new float4x4(displayWorldRotation, displayWorldPosition));
+                        MMDBoneTransform.ApplyLocalTransformToBone(ref transformManagerContext, boneIndex, displayLocal.c3.xyz, math.normalize(new quaternion(displayLocal)));
+                    }
                 }
 
                 runtimeContext.lastPoseSourceFlipCount = flipBones;

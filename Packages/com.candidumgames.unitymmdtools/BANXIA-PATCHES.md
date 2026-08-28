@@ -74,3 +74,16 @@
 **升级冲突提示**：`ApplyDynamicRigidBodiesToBones` /
 `ReplayLastPhysicsPoseToBones` 已重写，`PhysicsSolverContext` 再增两个
 NativeArray（ResizePersistent/Dispose 配对勿遗漏）。
+
+### 5. MMDPhysicsManager.cs — 插值改世界空间（M4 修正）
+
+**动机**：M4 在骨骼**局部**空间插值，对链式骨骼（披风 10+ 级）致命：
+层级序处理中父骨骼先被改写为插值显示姿态，子骨骼的世界→局部换算
+以父的插值矩阵为基准，误差逐级复合放大——披风飞起/拉伸变形。
+（短链绒球/头发不明显，长链披风最夸张。）
+
+**改动**：缓存改为骨骼**世界**姿态（`prev/lastPhysicsWorldPositions/
+Rotations`）；显示姿态 = 世界空间 lerp(prev, last, α)，再对父骨骼
+**已写入的显示矩阵**（层级序保证）换算回局部。两个合法物理状态之间
+逐刚体世界插值，链内相对姿态保持关节约束，无复合误差。新增
+`DecomposeRigid` 助手；局部空间缓存字段全部移除。
