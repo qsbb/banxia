@@ -87,3 +87,17 @@ Rotations`）；显示姿态 = 世界空间 lerp(prev, last, α)，再对父骨�
 **已写入的显示矩阵**（层级序保证）换算回局部。两个合法物理状态之间
 逐刚体世界插值，链内相对姿态保持关节约束，无复合误差。新增
 `DecomposeRigid` 助手；局部空间缓存字段全部移除。
+
+### 6. MMDPhysicsManager.cs + MMDTransformManager.cs — 根运动补偿（M6）
+
+**动机**：角色根节点大幅移动（瞬移/放置重锚/追踪跳变）时，运动学刚体随骨骼
+瞬间转移，而 Dynamic 刚体（披风/头发）被关节硬拽跨越位移——表现为披风
+突然瞬移重新垂下。待机/满档重建日志排查排除后定位为此类。
+
+**改动**：`MMDTransformManager.LateUpdate` 在 `TransformAll` 前调用
+`physicsManager.CompensateRootMotion()`：根节点单帧位移 >0.15m 或旋转 >12°
+时，将全部刚体、运动学插值基线（previous/currentKineticTargets）与姿态
+缓存（prev/lastPhysicsWorld*）按同一世界刚体变换
+`p' = rootNew + q*(p - rootOld), r' = q*r` 整体搬移（对刚性附着精确，
+与真实支点无关）。平滑移动（~3cm/帧）与平滑转向（~2°/帧）低于阈值，
+保留自然拖曳摆动。

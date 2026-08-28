@@ -21,6 +21,16 @@ namespace UMT
         private const byte k_MMDGroundCollisionGroup = 15;
         private const short k_MMDGroundCollisionMask = -1;
         private const int k_SolverIterations = 4;
+        /// <summary>Per-frame avatar-root world translation above which all physics bodies are rigidly shifted with the root instead of being joint-dragged (banxia root-motion patch). Smooth locomotion (~3cm/frame at 1.5m/s) stays far below; teleports, placement re-anchoring and tracking jumps cross it.</summary>
+        private const float k_RootMotionShiftThreshold = 0.15f;
+        /// <summary>Per-frame root rotation above which bodies are rotated along with the root (snap turns); smooth turning stays below (banxia root-motion patch).</summary>
+        private const float k_RootMotionShiftDegrees = 12f;
+        /// <summary>Last observed avatar-root world position for the root-motion compensation (banxia patch).</summary>
+        private Vector3 m_LastRootPosition;
+        /// <summary>Last observed avatar-root world rotation for the root-motion compensation (banxia patch).</summary>
+        private quaternion m_LastRootRotation = quaternion.identity;
+        /// <summary>Whether the root-motion baseline has been captured (banxia patch).</summary>
+        private bool m_HasLastRootPose;
         private const int k_DefaultSimulationFrequencyHz = 120;
         private const int k_DefaultMaxSubStepsPerFrame = 4;
         private const int k_DefaultLockedTranslationReinforceCount = 2;
@@ -227,6 +237,97 @@ namespace UMT
         {
             m_PhysicsSolverContext.timeAccumulator = 0.0f;
             m_PhysicsSolverContext.resetKineticInterpolation = true;
+        }
+
+        /// <summary>
+        /// Banxia root-motion patch: when the avatar root moves/rotates more than a per-frame
+        /// threshold (teleport, placement re-anchor, snap turn, tracking jump), rigidly transform
+        /// ALL rigid bodies by the same world delta instead of letting the joints yank dynamic
+        /// chains (cape/hair) across the gap - which visually snapped the cape into a fresh drape.
+        /// The transform p' = rootNew + q*(p - rootOld), r' = q*r is exact for anything rigidly
+        /// attached to the root regardless of the true pivot. Smooth locomotion and smooth turning
+        /// stay below the threshold so cape swing from natural motion is preserved. Pose caches and
+        /// kinetic interpolation baselines are shifted identically so render interpolation continues
+        /// seamlessly.
+        /// </summary>
+        internal void CompensateRootMotion()
+        {
+            if (!m_PhysicsSolverContext.bulletPhysicsContext.isValid)
+            {
+                m_HasLastRootPose = false;
+                return;
+            }
+
+            Vector3 rootPosition = transform.position;
+            quaternion rootRotation = new quaternion(transform.rotation);
+            if (!m_HasLastRootPose)
+            {
+                m_LastRootPosition = rootPosition;
+                m_LastRootRotation = rootRotation;
+                m_HasLastRootPose = true;
+                return;
+            }
+
+            float3 translationDelta = new float3(rootPosition - m_LastRootPosition);
+            quaternion rotationDelta = math.mul(rootRotation, math.inverse(m_LastRootRotation));
+            m_LastRootPosition = rootPosition;
+            m_LastRootRotation = rootRotation;
+
+            float rotationDegrees = 2f * math.degrees(math.acos(math.min(1f, math.abs(rotationDelta.value.w))));
+            if (math.lengthsq(translationDelta) < k_RootMotionShiftThreshold * k_RootMotionShiftThreshold &&
+                rotationDegrees < k_RootMotionShiftDegrees)
+            {
+                return;
+            }
+
+            ShiftAllBodiesBy(new float3(m_LastRootPosition) - translationDelta, new float3(m_LastRootPosition), translationDelta, rotationDelta);
+        }
+
+        private void ShiftAllBodiesBy(float3 oldRootPosition, float3 newRootPosition, float3 translationDelta, quaternion rotationDelta)
+        {
+            ref PhysicsSolverContext runtimeContext = ref m_PhysicsSolverContext;
+            int count = runtimeContext.rigidBodyIndices.Length;
+            if (count == 0)
+            {
+                return;
+            }
+
+            runtimeContext.bulletPhysicsContext.GetRigidBodyMotionTransforms(count, runtimeContext.rigidBodyIndices, ref runtimeContext.worldTransforms);
+            for (int i = 0; i < count; ++i)
+            {
+                float4x4 bodyTransform = runtimeContext.worldTransforms[i];
+                float3 offset = bodyTransform.c3.xyz - oldRootPosition;
+                float3 shiftedPosition = newRootPosition + math.mul(rotationDelta, offset);
+                quaternion shiftedRotation = math.normalize(math.mul(rotationDelta, new quaternion(bodyTransform)));
+                runtimeContext.worldTransforms[i] = new float4x4(shiftedRotation, shiftedPosition);
+            }
+            runtimeContext.bulletPhysicsContext.SetRigidBodyTransforms(count, runtimeContext.worldTransforms, runtimeContext.rigidBodyIndices, false);
+
+            for (int i = 0; i < runtimeContext.previousKineticTargets.Length; ++i)
+            {
+                float4x4 target = runtimeContext.previousKineticTargets[i];
+                float3 offset = target.c3.xyz - oldRootPosition;
+                runtimeContext.previousKineticTargets[i] = new float4x4(
+                    math.normalize(math.mul(rotationDelta, new quaternion(target))),
+                    newRootPosition + math.mul(rotationDelta, offset));
+            }
+            for (int i = 0; i < runtimeContext.currentKineticTargets.Length; ++i)
+            {
+                float4x4 target = runtimeContext.currentKineticTargets[i];
+                float3 offset = target.c3.xyz - oldRootPosition;
+                runtimeContext.currentKineticTargets[i] = new float4x4(
+                    math.normalize(math.mul(rotationDelta, new quaternion(target))),
+                    newRootPosition + math.mul(rotationDelta, offset));
+            }
+            for (int i = 0; i < runtimeContext.lastPhysicsWorldPositions.Length; ++i)
+            {
+                runtimeContext.lastPhysicsWorldPositions[i] = newRootPosition + math.mul(rotationDelta, runtimeContext.lastPhysicsWorldPositions[i] - oldRootPosition);
+                runtimeContext.prevPhysicsWorldPositions[i] = newRootPosition + math.mul(rotationDelta, runtimeContext.prevPhysicsWorldPositions[i] - oldRootPosition);
+                runtimeContext.lastPhysicsWorldRotations[i] = math.normalize(math.mul(rotationDelta, runtimeContext.lastPhysicsWorldRotations[i]));
+                runtimeContext.prevPhysicsWorldRotations[i] = math.normalize(math.mul(rotationDelta, runtimeContext.prevPhysicsWorldRotations[i]));
+            }
+
+            Debug.Log($"[Physics] root-motion shift: moved {math.length(translationDelta):F2}m this frame, shifted {count} bodies with the avatar root", this);
         }
 
         /// <summary>

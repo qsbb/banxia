@@ -317,6 +317,14 @@ namespace UMT
                     m_RuntimeContext.physicsInitialized = true;
                 }
 
+                // Banxia root-motion patch: large avatar-root motion (teleport / placement re-anchor /
+                // snap turn / tracking jump) rigidly shifts all physics bodies with the root BEFORE this
+                // frame's step, so dynamic chains follow cleanly instead of being joint-yanked across the gap.
+                if (m_RuntimeContext.physicsInitialized && ShouldRunLivePhysics())
+                {
+                    physicsManager.CompensateRootMotion();
+                }
+
                 // Banxia deltaTime-guard patch: clamp the physics time input to 5-40ms. Quest3+Vulkan+OpenXR
                 // reports high-variance/incorrect frame intervals (Unity IssueTracker #7410 / N-127663), and a
                 // single polluted frame otherwise feeds the accumulator a spurious catch-up spike (dropped time,
