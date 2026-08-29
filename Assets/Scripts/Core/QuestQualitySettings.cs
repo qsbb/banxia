@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UMT;
@@ -41,7 +41,10 @@ namespace QuestMmdPlayer
         [Header("待机物理档")]
         [SerializeField, Range(30, 120)] private int idlePhysicsFrequencyHz = 30;
         [SerializeField, Range(1, 4)] private int idlePhysicsMaximumSubsteps = 1;
-        [SerializeField, Range(0, 2)] private int idlePhysicsReinforcement = 0;
+        // 待机档冗余约束：ForestBerry 137/138 关节锁平移（披风 60/108 还锁旋转），
+        // 4 迭代下无冗余副本时锁死链欠收敛（披风板松散/拉伸）——待机档也保留 1 份
+        // （策略层对 ≥4 关节锁平移连通分量自动提升到满额 2）。
+        [SerializeField, Range(0, 2)] private int idlePhysicsReinforcement = 1;
         [SerializeField] private bool idlePhysicsFullHandContact = false;
 
         private AvatarController idlePhysicsAvatar;
