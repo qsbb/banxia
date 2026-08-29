@@ -256,6 +256,15 @@ banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落
 - **文档与提交纪律**：功能 PR 描述注明双端状态；单端先行时在
   PHONE_PORT_PLAN_CN.md / 开发路线图里登记"待同步"清单
 
+### 待同步清单（单端先行登记处）
+
+- [x] **手机端主界面**（cc7e5b7，2026-08-29）：PhoneHomeMenu（模型列表/
+  进入场景/导入/设置/日志）。UI 壳层本身手机独占（IMGUI 触屏 vs XR 世界
+  空间指针菜单，属"平台壳层"）；其中**日志查看与设置项为双端能力**——
+  Quest 端已有 CompanionWorldMenu 覆盖同能力，无需重复实现。
+  `autoRestoreOnStart` 开关在平台无关层（RuntimeMmdModelLoader），
+  双端语义一致，仅策略不同（Quest=true 直达，Phone=false 进主界面）。
+
 ## 4. 风险与对策
 
 | 风险 | 评估 | 对策 |
