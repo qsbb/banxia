@@ -51,6 +51,8 @@ namespace QuestMmdPlayer
         public PhoneOrbitCamera OrbitCamera { get; private set; }
         /// <summary>Phone-form on-screen diagnostics overlay (BANXIA_PHONE builds only).</summary>
         public PhoneDiagnosticsHud PhoneHud { get; private set; }
+        /// <summary>Phone-form home menu shell (BANXIA_PHONE builds only).</summary>
+        public PhoneHomeMenu PhoneMenu { get; private set; }
 
         private RuntimeMmdModelLoader runtimeMmdLoader;
         private AvatarController fallbackAvatar;
@@ -119,6 +121,14 @@ namespace QuestMmdPlayer
             Quality = gameObject.GetComponent<QuestQualitySettings>() ?? gameObject.AddComponent<QuestQualitySettings>();
             DiagnosticsReporter = gameObject.GetComponent<DiagnosticReporter>() ?? gameObject.AddComponent<DiagnosticReporter>();
             runtimeMmdLoader = GetComponent<RuntimeMmdModelLoader>();
+#if BANXIA_PHONE
+            // 手机端：开机停在主界面（PhoneHomeMenu），不自动恢复上次模型；
+            // 用户点「进入场景」时由菜单显式调 RestoreLastModelAsync()。
+            if (runtimeMmdLoader != null)
+            {
+                runtimeMmdLoader.SetAutoRestoreOnStart(false);
+            }
+#endif
             VmdActions = gameObject.GetComponent<VmdActionLibrary>() ?? gameObject.AddComponent<VmdActionLibrary>();
             _ = VmdActions.RefreshAsync();
             FileImport = gameObject.GetComponent<QuestFileImportService>() ?? gameObject.AddComponent<QuestFileImportService>();
@@ -137,10 +147,13 @@ namespace QuestMmdPlayer
             if (createPrototypeHud)
             {
 #if BANXIA_PHONE
-                // Phone form: world-space pointer menu is XR-only; use the IMGUI
-                // diagnostics overlay instead.
+                // Phone form: world-space pointer menu is XR-only; the IMGUI
+                // home menu is the primary shell and owns the diagnostics HUD.
                 PhoneHud = gameObject.GetComponent<PhoneDiagnosticsHud>() ?? gameObject.AddComponent<PhoneDiagnosticsHud>();
                 PhoneHud.Bind(Performance, DiagnosticsReporter);
+                PhoneMenu = gameObject.GetComponent<PhoneHomeMenu>() ?? gameObject.AddComponent<PhoneHomeMenu>();
+                PhoneMenu.Bind(this, runtimeMmdLoader, FileImport, Performance, DiagnosticsReporter, DebugLog);
+                PhoneMenu.BindHud(PhoneHud);
 #else
                 Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
                 Menu.Initialize(this);
@@ -383,13 +396,18 @@ namespace QuestMmdPlayer
             light.intensity = 1.2f;
         }
 
+        /// <summary>Phone 菜单壳层入口：转发命令（reset 等）给既有命令处理链。</summary>
+        public void SendCommand(AvatarCommand command)
+        {
+            HandleCommand(command);
+        }
+
         private void HandleCommand(AvatarCommand command)
         {
             if (Avatar == null || command == null)
             {
                 return;
             }
-
             switch ((command.name ?? string.Empty).ToLowerInvariant())
             {
                 case "play_motion":

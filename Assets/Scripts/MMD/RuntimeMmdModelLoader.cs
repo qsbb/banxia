@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -61,6 +61,10 @@ namespace QuestMmdPlayer
             };
         [SerializeField, Range(1f, 12f)] private float frameBudgetMilliseconds = 4f;
         [SerializeField] private Vector3 spawnPosition = new Vector3(0f, 0f, 2.2f);
+        // 开机是否自动恢复上次模型。Quest 端保持 true（开机直达角色）；
+        // 手机端由 Bootstrap 关掉——先进主界面，用户选「进入场景」时再
+        // 显式调 RestoreLastModelAsync()。开关本身属于平台无关层。
+        [SerializeField] private bool autoRestoreOnStart = true;
 
         private CancellationTokenSource loadCancellation;
         private long loadGeneration;
@@ -131,6 +135,10 @@ namespace QuestMmdPlayer
                 return;
             }
             restoreStarted = true;
+            if (!autoRestoreOnStart)
+            {
+                return;
+            }
             await RestoreLastModelAsync();
         }
 
@@ -188,6 +196,12 @@ namespace QuestMmdPlayer
             RestorePreference(SelectedModelPreference, savedPath);
             RestorePreference(SelectedModelRelativePreference, savedRelativePath);
             PlayerPrefs.Save();
+        }
+
+        /// <summary>平台壳层入口：开机自动恢复开关（手机端主界面先于场景出现时关闭）。</summary>
+        public void SetAutoRestoreOnStart(bool enabled)
+        {
+            autoRestoreOnStart = enabled;
         }
 
         public async Task<bool> RestoreLastModelAsync()
