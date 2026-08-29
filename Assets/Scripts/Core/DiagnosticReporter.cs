@@ -183,28 +183,6 @@ namespace QuestMmdPlayer
             "GUI.Repaint",
         };
 
-#if UNITY_ANDROID && !UNITY_EDITOR
-        private static int CheckPlayAudioOpMode()
-        {
-            try
-            {
-                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
-                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
-                using (var appOps = activity.Call<AndroidJavaObject>("getSystemService", "appops"))
-                using (var process = new AndroidJavaClass("android.os.Process"))
-                {
-                    var uid = process.CallStatic<int>("myUid");
-                    var packageName = activity.Call<string>("getPackageName");
-                    return appOps.Call<int>("checkOpNoThrow", "android:play_audio", uid, packageName);
-                }
-            }
-            catch (Exception)
-            {
-                return -1;
-            }
-        }
-#endif
-
         private void EnsureSystemRecorders()
         {
             if (systemRecordersReady)
@@ -270,6 +248,30 @@ namespace QuestMmdPlayer
 #endif
 
         public bool UploadEnabled => uploadEnabled;
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        // HorizonOS 会周期性把侧载应用的 PLAY_AUDIO AppOp 置为 ignore。纯 AppOps
+        // 查询，不依赖 Profiler——移出 ENABLE_PROFILER 块，Release 构建同样可用。
+        private static int CheckPlayAudioOpMode()
+        {
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var appOps = activity.Call<AndroidJavaObject>("getSystemService", "appops"))
+                using (var process = new AndroidJavaClass("android.os.Process"))
+                {
+                    var uid = process.CallStatic<int>("myUid");
+                    var packageName = activity.Call<string>("getPackageName");
+                    return appOps.Call<int>("checkOpNoThrow", "android:play_audio", uid, packageName);
+                }
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
+        }
+#endif
 
         public void Bind(
             RuntimePerformanceMonitor performanceMonitor,
