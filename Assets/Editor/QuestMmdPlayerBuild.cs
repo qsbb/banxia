@@ -110,9 +110,25 @@ namespace QuestMmdPlayer.Editor
                     phoneForm ? PhoneApplicationIdentifier : AndroidApplicationIdentifier);
                 PlayerSettings.bundleVersion = AndroidVersionName;
                 PlayerSettings.Android.bundleVersionCode = AndroidVersionCode;
+                // 用户要求去掉 Unity 开场 Logo 动画；Personal 授权若不允许，
+                // 会在日志提示并保持原状，不影响构建。
+                DisableUnitySplash();
                 PlayerSettings.colorSpace = ColorSpace.Linear;
                 PlayerSettings.insecureHttpOption = InsecureHttpOption.AlwaysAllowed;
-                PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { GraphicsDeviceType.Vulkan });
+                // Quest 走 OpenXR 必须 Vulkan；手机端用 GLES3：
+                // 兼容性最好（模拟器/低端机 Vulkan 驱动差异大，会出现
+                // “Desired shader compiler platform 5 is not available in
+                // shader blob”导致整块 UI 画不出来），且手机端无 XR 需求。
+                if (phoneForm)
+                {
+                    PlayerSettings.SetGraphicsAPIs(BuildTarget.Android,
+                        new[] { GraphicsDeviceType.OpenGLES3 });
+                }
+                else
+                {
+                    PlayerSettings.SetGraphicsAPIs(BuildTarget.Android,
+                        new[] { GraphicsDeviceType.Vulkan });
+                }
                 PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
                 PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
                 PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel29;
@@ -156,6 +172,30 @@ namespace QuestMmdPlayer.Editor
                     // editor stays a Quest-first project.
                     ConfigureOpenXr();
                 }
+            }
+        }
+
+        /// <summary>
+        /// 关闭 Unity 开场 Logo 动画（Project Settings &gt; Player &gt; Splash）。
+        /// Personal 授权不允许时 Unity 会提示并保持原状，这里吞掉异常保证构建继续。
+        /// </summary>
+        private static void DisableUnitySplash()
+        {
+            try
+            {
+                PlayerSettings.SplashScreen.show = false;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[BanxiaBuild] Disable splash screen failed: " + exception.Message);
+            }
+            try
+            {
+                PlayerSettings.SplashScreen.showUnityLogo = false;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[BanxiaBuild] Disable unity logo failed: " + exception.Message);
             }
         }
 

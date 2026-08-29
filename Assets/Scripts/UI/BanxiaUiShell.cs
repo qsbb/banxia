@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.TextCore.LowLevel;
+using UnityEngine.TextCore.Text;
 using UnityEngine.UIElements;
 
 namespace QuestMmdPlayer
@@ -78,6 +81,8 @@ namespace QuestMmdPlayer
         private bool built;
         private bool enteringScene;
         private bool refreshingActions;
+
+        public bool IsBuilt => built;
 
         // Dynamic UI handles.
         private VisualElement modelsListContainer;
@@ -194,6 +199,143 @@ namespace QuestMmdPlayer
                     Debug.LogWarning("[BanxiaUi] BanxiaPanelSettings missing; using runtime fallback panel settings.", this);
                 }
             }
+            EnsureEventSystem();
+            EnsureTextSettings(document.panelSettings);
+        }
+
+        // 屏幕空间的 UI Toolkit 面板（手机端）依赖 EventSystem 派发指针事件；
+        // 项目只启用 Input System，老 StandaloneInputModule 会每帧抛
+        // InvalidOperationException 且吞掉所有点击，这里兜底换成
+        // InputSystemUIInputModule。世界空间端走 panel.Pick 自派发，不受影响。
+        private static void EnsureEventSystem()
+        {
+            var eventSystem = UnityEngine.EventSystems.EventSystem.current;
+            if (eventSystem == null)
+            {
+                var existing = UnityEngine.Object.FindObjectOfType<UnityEngine.EventSystems.EventSystem>();
+                eventSystem = existing;
+                if (eventSystem == null)
+                {
+                    var go = new GameObject("BanxiaEventSystem");
+                    UnityEngine.Object.DontDestroyOnLoad(go);
+                    eventSystem = go.AddComponent<UnityEngine.EventSystems.EventSystem>();
+                    Debug.Log("[BanxiaUi] Created EventSystem for UI Toolkit input.");
+                }
+            }
+
+            if (eventSystem.GetComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>() == null)
+            {
+                var legacy = eventSystem.GetComponent<UnityEngine.EventSystems.StandaloneInputModule>();
+                if (legacy != null)
+                {
+                    legacy.enabled = false;
+                }
+                eventSystem.gameObject.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
+                Debug.Log("[BanxiaUi] InputSystemUIInputModule ensured.");
+            }
+        }
+
+        // UI Toolkit 默认动态字体（LegacyRuntime/Liberation Sans）不含 CJK 字形，
+        // 中文界面会整体不渲染；这里运行时优先挑一个系统 CJK 字体建动态
+        // FontAsset。
+        private static void EnsureTextSettings(PanelSettings panelSettings)
+        {
+            if (panelSettings == null || panelSettings.textSettings != null)
+            {
+                return;
+            }
+
+            PanelTextSettings textSettings;
+            FontAsset appliedFontAsset;
+            try
+            {
+                appliedFontAsset = CreateCjkFontAsset();
+                if (appliedFontAsset == null)
+                {
+                    Debug.LogWarning("[BanxiaUi] No usable CJK font asset; falling back to LegacyRuntime.");
+                    var builtin = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                    appliedFontAsset = FontAsset.CreateFontAsset(
+                        builtin, 90, 9, GlyphRenderMode.SDFAA, 1024, 1024,
+                        AtlasPopulationMode.Dynamic, true);
+                }
+                if (appliedFontAsset == null)
+                {
+                    Debug.LogWarning("[BanxiaUi] Font asset creation failed entirely.");
+                    return;
+                }
+
+                textSettings = ScriptableObject.CreateInstance<PanelTextSettings>();
+                var property = typeof(PanelTextSettings).GetProperty(
+                    "defaultFontAsset",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic);
+                if (property != null && property.CanWrite)
+                {
+                    property.SetValue(textSettings, appliedFontAsset);
+                }
+                else
+                {
+                    var field = typeof(PanelTextSettings).GetField(
+                        "m_DefaultFontAsset",
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic);
+                    field?.SetValue(textSettings, appliedFontAsset);
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[BanxiaUi] Panel text settings fallback failed: " + exception.Message);
+                return;
+            }
+
+            panelSettings.textSettings = textSettings;
+            Debug.Log("[BanxiaUi] Panel text settings ready: font=" + appliedFontAsset.name);
+        }
+
+        // Android 系统自带 Noto CJK；这里直接用 FontAsset 的系统字体重载
+        // CreateFontAsset(family, style, weight)（走 FontEngine 系统字体引用，
+        // 而 CreateFontAsset(Font) 对 OS 动态字体拿不到字面数据，会报
+        // “Unable to load font face”）。动态图集按需烘字形，这里只要求
+        // 资产创建成功（字面能加载）；不能用 HasCharacter 判定——动态
+        // 资产的字形字典在真正渲染前是空的。
+        private static readonly (string Family, string Style)[] CjkFontCandidates =
+        {
+            ("Noto Sans CJK SC", "Regular"),
+            ("MiSans", "Regular"),
+            ("HarmonyOS Sans SC", "Regular"),
+            ("Noto Sans SC", "Regular"),
+            ("Noto Sans CJK JP", "Regular"),
+            ("Noto Sans CJK HK", "Regular"),
+            ("Noto Sans CJK KR", "Regular"),
+            ("Droid Sans Fallback", "Regular"),
+            ("Source Han Sans SC", "Regular"),
+            ("Microsoft YaHei", "Regular"),
+        };
+
+        private static FontAsset CreateCjkFontAsset()
+        {
+            foreach (var (family, style) in CjkFontCandidates)
+            {
+                try
+                {
+                    var fontAsset = FontAsset.CreateFontAsset(family, style, 400);
+                    if (fontAsset == null)
+                    {
+                        Debug.Log("[BanxiaUi] OS font asset null: " + family + "/" + style);
+                        continue;
+                    }
+                    Debug.Log("[BanxiaUi] OS font asset accepted: " + family + "/" + style);
+                    return fontAsset;
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning("[BanxiaUi] OS font failed: " + family + "/" + style +
+                                     " " + exception.Message);
+                }
+            }
+            return null;
         }
 
         private void Start()
@@ -227,6 +369,12 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
+            // World-space/动态 UIDocument 有时会在首帧才拿到 rootVisualElement；
+            // 这里做幂等重试，避免“一次性构建失败后永远黑屏”。
+            if (!built)
+            {
+                EnsureBuilt();
+            }
             if (!built)
             {
                 return;
@@ -235,7 +383,7 @@ namespace QuestMmdPlayer
             {
                 toast.style.display = DisplayStyle.None;
             }
-            if (mode == UiMode.Scene && Input.GetKeyDown(KeyCode.Escape))
+            if (mode == UiMode.Scene && Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
             {
                 ReturnToMenu();
                 return;
@@ -274,7 +422,6 @@ namespace QuestMmdPlayer
             }
             else
             {
-                BuildFallbackShell(panelRoot);
                 Debug.LogWarning("[BanxiaUi] BanxiaShell.uxml missing; using fallback visual tree.", this);
             }
             var theme = Resources.Load<StyleSheet>("BanxiaTheme");
@@ -293,11 +440,32 @@ namespace QuestMmdPlayer
 
             if (content == null || tabBar == null || sceneToolbar == null)
             {
-                Debug.LogError("[BanxiaUi] Shell visual tree is incomplete.", this);
-                return;
+                Debug.LogWarning("[BanxiaUi] Shell visual tree incomplete; falling back to runtime shell.", this);
+                panelRoot.Clear();
+                BuildFallbackShell(panelRoot);
+                shellRoot = panelRoot.Q<VisualElement>("root") ?? panelRoot;
+                mainUi = shellRoot.Q<VisualElement>("main-ui") ?? shellRoot;
+                content = shellRoot.Q<VisualElement>("content");
+                tabBar = shellRoot.Q<VisualElement>("tab-bar");
+                sceneToolbar = shellRoot.Q<VisualElement>("scene-toolbar");
+                toast = shellRoot.Q<VisualElement>("toast");
+                toastLabel = shellRoot.Q<Label>("toast-label");
+                if (content == null || tabBar == null || sceneToolbar == null)
+                {
+                    Debug.LogError("[BanxiaUi] Fallback shell is incomplete.", this);
+                    return;
+                }
             }
 
             BuildPages();
+            SanitizeLabels(panelRoot);
+            // 兜底：主界面必须不透明黑底。USS 的 var(--bg) 万一没生效
+            // （老版本解析差异/加载时序），直接用内联样式钉死，
+            // 避免“面板透明”的观感。
+            if (mainUi != null)
+            {
+                mainUi.style.backgroundColor = new Color(0f, 0f, 0f, 1f);
+            }
             BindTab("tab-companion", Tab.Companion);
             BindTab("tab-chat", Tab.Chat);
             BindTab("tab-actions", Tab.Actions);
@@ -310,6 +478,18 @@ namespace QuestMmdPlayer
             built = true;
             SelectTab(Tab.Companion);
             ApplyMode(UiMode.Menu);
+        }
+
+        private static void SanitizeLabels(VisualElement panelRoot)
+        {
+            // 空/NULL 文本的 Label 会触发 TextElement 渲染 NRE，导致整块 UI 黑屏。
+            panelRoot.Query<Label>().ForEach(label =>
+            {
+                if (string.IsNullOrEmpty(label.text))
+                {
+                    label.text = " ";
+                }
+            });
         }
 
         private static void BuildFallbackShell(VisualElement panelRoot)

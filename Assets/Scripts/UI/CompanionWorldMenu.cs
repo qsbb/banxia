@@ -252,6 +252,11 @@ namespace QuestMmdPlayer
                         StartCoroutine(SimulateQaContactWhenAvatarReady(command));
                         return false;
                     }
+                    if (string.Equals(command, "open_world_ui", StringComparison.Ordinal))
+                    {
+                        StartCoroutine(OpenQaWorldUiWhenReady());
+                        return false;
+                    }
                     if (string.Equals(command, "open_text_input", StringComparison.Ordinal))
                     {
                         StartCoroutine(OpenQaTextInputWhenReady());
@@ -333,6 +338,29 @@ namespace QuestMmdPlayer
             }
 
             return false;
+        }
+
+        private IEnumerator OpenQaWorldUiWhenReady()
+        {
+            var remaining = 8f;
+            while (remaining > 0f && (owner == null || owner.WorldUi == null || Camera.main == null))
+            {
+                remaining -= ActiveWaitDelta(Time.unscaledDeltaTime);
+                yield return null;
+            }
+
+            if (owner?.WorldUi == null || Camera.main == null)
+            {
+                Debug.LogWarning("[CompanionMenu] Android QA world UI command timed out.", this);
+                yield break;
+            }
+
+            owner.WorldUi.ShowInFront();
+            // 等 UI Toolkit 完成一帧渲染后再读 RT，避免拿到纯 clear 色。
+            yield return new WaitForSeconds(1f);
+            yield return new WaitForEndOfFrame();
+            var capturedPath = owner.WorldUi.CapturePanelToPngForQa();
+            Debug.Log("[CompanionMenu] Android QA world UI opened; capture=" + capturedPath, this);
         }
 
         private IEnumerator OpenQaModelListWhenReady()
