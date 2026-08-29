@@ -1,0 +1,509 @@
+/* 伴夏 iOS 风格设计系统（深色）
+   双端共享：Phone 全屏 UIDocument + Quest 世界空间 RT 面板。
+   Token 语义对齐 iOS HIG Dark。 */
+:root {
+    --bg: rgb(0, 0, 0);
+    --bg-elevated: rgba(28, 28, 30, 0.92);
+    --bg-card: rgba(44, 44, 46, 0.65);
+    --bg-card-active: rgba(58, 58, 60, 0.9);
+    --separator: rgba(84, 84, 88, 0.6);
+    --label: rgb(255, 255, 255);
+    --label-secondary: rgba(235, 235, 245, 0.6);
+    --label-tertiary: rgba(235, 235, 245, 0.3);
+    --tint: rgb(10, 132, 255);
+    --tint-pressed: rgb(80, 168, 255);
+    --green: rgb(48, 209, 88);
+    --red: rgb(255, 69, 58);
+    --orange: rgb(255, 159, 10);
+    --radius-card: 16px;
+    --radius-button: 12px;
+    --radius-pill: 999px;
+}
+
+/* ── 屏幕根：透明穿透，仅承载悬浮件 ── */
+.screen-root {
+    flex-grow: 1;
+    background-color: rgba(0, 0, 0, 0);
+}
+.screen {
+    flex-grow: 1;
+    background-color: var(--bg);
+}
+
+/* ── 导航栏（大标题式）── */
+.nav-bar {
+    padding: 14px 20px 8px 20px;
+}
+.nav-title {
+    font-size: 34px;
+    -unity-font-style: bold;
+    color: var(--label);
+    margin-bottom: 4px;
+}
+.nav-subtitle {
+    font-size: 15px;
+    color: var(--label-secondary);
+}
+
+/* ── 分组列表（iOS Grouped）── */
+.group {
+    background-color: var(--bg-elevated);
+    border-radius: var(--radius-card);
+    margin: 10px 16px;
+    padding: 2px 0;
+}
+.group-header {
+    font-size: 13px;
+    color: var(--label-secondary);
+    text-transform: uppercase;
+    margin: 18px 32px 6px 32px;
+}
+.row {
+    flex-direction: row;
+    align-items: center;
+    min-height: 52px;
+    padding: 8px 16px;
+    border-bottom-width: 0.5px;
+    border-bottom-color: var(--separator);
+}
+.row:last-child {
+    border-bottom-width: 0;
+}
+.row-label {
+    font-size: 17px;
+    color: var(--label);
+    flex-grow: 1;
+    margin-right: 8px;
+}
+.row-value {
+    font-size: 17px;
+    color: var(--label-secondary);
+    margin-right: 6px;
+}
+.row-chevron {
+    font-size: 18px;
+    color: var(--label-tertiary);
+}
+
+/* ── 按钮 ── */
+.btn {
+    height: 50px;
+    border-radius: var(--radius-button);
+    background-color: var(--bg-card);
+    justify-content: center;
+    align-items: center;
+    margin: 6px 16px;
+}
+.btn:active {
+    background-color: var(--bg-card-active);
+}
+.btn-label {
+    font-size: 17px;
+    color: var(--tint);
+}
+.btn-primary {
+    background-color: var(--tint);
+}
+.btn-primary .btn-label {
+    color: rgb(255, 255, 255);
+    -unity-font-style: bold;
+}
+.btn-primary:active {
+    background-color: var(--tint-pressed);
+}
+.btn-danger .btn-label {
+    color: var(--red);
+}
+.btn-small {
+    height: 36px;
+    border-radius: 10px;
+    background-color: var(--bg-card);
+    justify-content: center;
+    align-items: center;
+    padding: 0 14px;
+}
+.btn-small:active {
+    background-color: var(--bg-card-active);
+}
+.btn-small .btn-label {
+    font-size: 14px;
+    color: var(--tint);
+}
+.btn-row {
+    flex-direction: row;
+    justify-content: space-between;
+    margin: 6px 16px;
+}
+.btn-row .btn {
+    flex-grow: 1;
+    margin: 0 4px;
+}
+.btn-row .btn:first-child {
+    margin-left: 0;
+}
+.btn-row .btn:last-child {
+    margin-right: 0;
+}
+
+/* ── 胶囊按钮（场景悬浮工具条 / 快捷短语）── */
+.pill {
+    border-radius: var(--radius-pill);
+    background-color: var(--bg-elevated);
+    padding: 10px 18px;
+    justify-content: center;
+    align-items: center;
+}
+.pill:active {
+    background-color: var(--bg-card-active);
+}
+.pill.active {
+    background-color: rgba(10, 132, 255, 0.35);
+}
+.pill.active .pill-label {
+    color: var(--tint-pressed);
+    -unity-font-style: bold;
+}
+.pill-label {
+    font-size: 15px;
+    color: var(--label);
+}
+.chip {
+    border-radius: var(--radius-pill);
+    background-color: var(--bg-card);
+    padding: 8px 14px;
+    margin: 0 4px 4px 0;
+}
+.chip:active {
+    background-color: var(--bg-card-active);
+}
+.chip-label {
+    font-size: 14px;
+    color: var(--label);
+}
+.chips-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin: 6px 16px;
+}
+
+/* ── 开关（iOS Switch 视觉近似）── */
+.switch-knob {
+    width: 51px;
+    height: 31px;
+    border-radius: var(--radius-pill);
+    background-color: rgba(120, 120, 128, 0.32);
+    justify-content: flex-end;
+    padding: 2px;
+}
+.switch-knob.on {
+    background-color: var(--green);
+}
+.switch-thumb {
+    width: 27px;
+    height: 27px;
+    border-radius: var(--radius-pill);
+    background-color: rgb(255, 255, 255);
+}
+
+/* ── Tab 栏 ── */
+.tab-bar {
+    flex-direction: row;
+    height: 84px;
+    background-color: rgba(22, 22, 24, 0.94);
+    border-top-width: 0.5px;
+    border-top-color: var(--separator);
+}
+.tab-item {
+    flex-grow: 1;
+    justify-content: center;
+    align-items: center;
+}
+.tab-icon {
+    font-size: 24px;
+    color: var(--label-secondary);
+    margin-bottom: 2px;
+}
+.tab-text {
+    font-size: 10px;
+    color: var(--label-secondary);
+}
+.tab-item.selected .tab-icon {
+    color: var(--tint);
+}
+.tab-item.selected .tab-text {
+    color: var(--tint);
+}
+
+/* ── 分段控件（iOS Segmented）── */
+.seg {
+    flex-direction: row;
+    background-color: rgba(120, 120, 128, 0.18);
+    border-radius: 9px;
+    padding: 2px;
+}
+.seg-item {
+    flex-grow: 1;
+    height: 32px;
+    border-radius: 7px;
+    justify-content: center;
+    align-items: center;
+    margin: 0 1px;
+}
+.seg-item-label {
+    font-size: 13px;
+    color: var(--label);
+}
+.seg-item.selected {
+    background-color: rgba(120, 120, 128, 0.56);
+}
+.seg-item.selected .seg-item-label {
+    color: var(--label);
+    -unity-font-style: bold;
+}
+
+/* ── 数字键盘（配对码）── */
+.numpad {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 8px 48px;
+}
+.numpad-key {
+    width: 76px;
+    height: 60px;
+    border-radius: 999px;
+    background-color: rgba(120, 120, 128, 0.24);
+    justify-content: center;
+    align-items: center;
+    margin: 6px 6px;
+}
+.numpad-key:active {
+    background-color: rgba(120, 120, 128, 0.5);
+}
+.numpad-key-label {
+    font-size: 24px;
+    color: var(--label);
+}
+.code-dots {
+    flex-direction: row;
+    justify-content: center;
+    margin: 10px 0;
+}
+.code-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    background-color: rgba(120, 120, 128, 0.4);
+    margin: 0 8px;
+}
+.code-dot.filled {
+    background-color: var(--label);
+}
+
+/* ── 模型/动作卡片 ── */
+.card {
+    background-color: var(--bg-card);
+    border-radius: var(--radius-card);
+    padding: 14px 16px;
+    margin: 6px 16px;
+    flex-direction: row;
+    align-items: center;
+}
+.card-title {
+    font-size: 17px;
+    -unity-font-style: bold;
+    color: var(--label);
+}
+.card-subtitle {
+    font-size: 13px;
+    color: var(--label-secondary);
+    margin-top: 3px;
+}
+.card-body {
+    flex-grow: 1;
+    margin-right: 10px;
+}
+.card-action {
+    border-radius: var(--radius-pill);
+    background-color: var(--tint);
+    padding: 8px 16px;
+    justify-content: center;
+    align-items: center;
+}
+.card-action:active {
+    background-color: var(--tint-pressed);
+}
+.card-action-label {
+    font-size: 15px;
+    color: rgb(255, 255, 255);
+    -unity-font-style: bold;
+}
+.card-badge {
+    font-size: 12px;
+    color: var(--green);
+    margin-top: 3px;
+}
+.card-more {
+    border-radius: var(--radius-pill);
+    background-color: rgba(120, 120, 128, 0.24);
+    padding: 6px 12px;
+    margin-left: 8px;
+    justify-content: center;
+    align-items: center;
+}
+.card-more:active {
+    background-color: rgba(120, 120, 128, 0.4);
+}
+.card-more-label {
+    font-size: 15px;
+    color: var(--label-secondary);
+}
+.card-confirm {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+.card-confirm-text {
+    font-size: 14px;
+    color: var(--label);
+    flex-grow: 1;
+    margin-right: 8px;
+}
+
+/* ── 输入 ── */
+.field {
+    background-color: rgba(120, 120, 128, 0.18);
+    border-radius: 10px;
+    min-height: 44px;
+    padding: 8px 12px;
+    margin: 6px 16px;
+    font-size: 17px;
+    color: var(--label);
+}
+.field:focus {
+    background-color: rgba(120, 120, 128, 0.28);
+}
+
+/* ── 状态行 / Toast ── */
+.status-line {
+    font-size: 13px;
+    color: var(--label-secondary);
+    margin: 4px 20px;
+    white-space: normal;
+}
+.toast {
+    background-color: var(--bg-elevated);
+    border-radius: var(--radius-pill);
+    padding: 10px 20px;
+    align-self: center;
+    margin: 8px 0;
+    position: absolute;
+    top: 8px;
+    left: 0;
+    right: 0;
+    align-items: center;
+    justify-content: center;
+}
+.toast-label {
+    font-size: 14px;
+    color: var(--label);
+}
+
+/* ── 进度条 ── */
+.progress-track {
+    height: 6px;
+    border-radius: 3px;
+    background-color: rgba(120, 120, 128, 0.3);
+    margin: 8px 16px;
+    overflow: hidden;
+}
+.progress-fill {
+    height: 100%;
+    background-color: var(--tint);
+    border-radius: 3px;
+}
+
+/* ── 列表/空态 ── */
+.scroll {
+    flex-grow: 1;
+}
+.empty-hint {
+    justify-content: center;
+    align-items: center;
+    padding: 40px 32px;
+}
+.empty-hint-label {
+    font-size: 15px;
+    color: var(--label-secondary);
+    -unity-text-align: middle-center;
+    white-space: normal;
+}
+
+/* ── 场景悬浮工具条 ── */
+.scene-toolbar {
+    position: absolute;
+    bottom: 24px;
+    left: 0;
+    right: 0;
+    flex-direction: row;
+    justify-content: center;
+}
+.scene-toolbar .pill {
+    margin: 0 5px;
+}
+.scene-toolbar .pill-label {
+    font-size: 14px;
+}
+
+/* ── 对话 ── */
+.chat-scroll {
+    flex-grow: 1;
+    padding: 8px 16px;
+}
+.bubble-user {
+    background-color: var(--tint);
+    border-radius: 18px;
+    padding: 10px 14px;
+    margin: 4px 0 4px 72px;
+    align-self: flex-end;
+}
+.bubble-reply {
+    background-color: var(--bg-card);
+    border-radius: 18px;
+    padding: 10px 14px;
+    margin: 4px 72px 4px 0;
+    align-self: flex-start;
+}
+.bubble-text {
+    font-size: 16px;
+    color: rgb(255, 255, 255);
+    white-space: normal;
+}
+.chat-input-bar {
+    flex-direction: row;
+    padding: 8px 12px;
+    background-color: rgba(22, 22, 24, 0.94);
+    border-top-width: 0.5px;
+    border-top-color: var(--separator);
+    align-items: center;
+}
+.chat-input-bar .field {
+    flex-grow: 1;
+    margin: 0;
+}
+.chat-send {
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    background-color: var(--tint);
+    justify-content: center;
+    align-items: center;
+    margin-left: 8px;
+}
+.chat-send:active {
+    background-color: var(--tint-pressed);
+}
+.chat-send-label {
+    font-size: 18px;
+    color: rgb(255, 255, 255);
+}

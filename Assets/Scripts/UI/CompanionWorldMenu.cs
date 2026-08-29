@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
@@ -1253,6 +1253,7 @@ namespace QuestMmdPlayer
             CreateButton("设备性能", x[2], y[2], buttonWidth, buttonHeight, ShowPerformancePanel, mainLayer.transform);
 
             statusText = CreateText("", mainLayer.transform, new Vector2(0f, -177f), new Vector2(660f, 60f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
+            CreateButton("新界面", 166f, -278f, 108f, 44f, () => owner?.WorldUi?.ShowInFront(), mainLayer.transform);
             CreateButton("诊断", 286f, -278f, 108f, 44f, ShowDebugPanel, mainLayer.transform);
             CreateText("", mainLayer.transform, Vector2.zero, Vector2.zero, 1, FontStyle.Normal, Color.clear);
 

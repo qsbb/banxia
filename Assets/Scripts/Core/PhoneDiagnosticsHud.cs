@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace QuestMmdPlayer
 {
@@ -33,10 +33,10 @@ namespace QuestMmdPlayer
             visible = !visible;
         }
 
-        /// <summary>当前是否显示（PhoneHomeMenu 读取/控制）。</summary>
+        /// <summary>当前是否显示（新 UI 壳层读取/控制）。</summary>
         public bool IsVisible => visible;
 
-        /// <summary>显式设置显示状态（PhoneHomeMenu 在主界面/场景间切换时调用）。</summary>
+        /// <summary>显式设置显示状态（主界面/场景工具条切换时调用）。</summary>
         public void SetVisible(bool value)
         {
             visible = value;

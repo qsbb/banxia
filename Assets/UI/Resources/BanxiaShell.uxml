@@ -1,0 +1,55 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi:noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <Style src="BanxiaTheme.uss" />
+    <ui:VisualElement name="root" class="screen-root" picking-mode="Ignore">
+
+        <!-- 主界面（菜单模式） -->
+        <ui:VisualElement name="main-ui" class="screen" picking-mode="Position">
+            <ui:VisualElement name="content" style="flex-grow:1;" />
+
+            <!-- Tab 栏 -->
+            <ui:VisualElement name="tab-bar" class="tab-bar">
+                <ui:VisualElement name="tab-companion" class="tab-item selected">
+                    <ui:Label text="伴夏" class="tab-icon" />
+                    <ui:Label text="首页" class="tab-text" />
+                </ui:VisualElement>
+                <ui:VisualElement name="tab-chat" class="tab-item">
+                    <ui:Label text="对话" class="tab-icon" />
+                    <ui:Label text="对话" class="tab-text" />
+                </ui:VisualElement>
+                <ui:VisualElement name="tab-actions" class="tab-item">
+                    <ui:Label text="动作" class="tab-icon" />
+                    <ui:Label text="动作" class="tab-text" />
+                </ui:VisualElement>
+                <ui:VisualElement name="tab-settings" class="tab-item">
+                    <ui:Label text="设置" class="tab-icon" />
+                    <ui:Label text="设置" class="tab-text" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- 场景模式悬浮工具条（进入模型后显示，其余区域穿透触屏） -->
+        <ui:VisualElement name="scene-toolbar" class="scene-toolbar" style="display:none;">
+            <ui:VisualElement name="pill-back" class="pill">
+                <ui:Label text="主界面" class="pill-label" />
+            </ui:VisualElement>
+            <ui:VisualElement name="pill-move" class="pill">
+                <ui:Label text="移动" class="pill-label" />
+            </ui:VisualElement>
+            <ui:VisualElement name="pill-reset" class="pill">
+                <ui:Label text="重置" class="pill-label" />
+            </ui:VisualElement>
+            <ui:VisualElement name="pill-frame" class="pill">
+                <ui:Label text="取景" class="pill-label" />
+            </ui:VisualElement>
+            <ui:VisualElement name="pill-hud" class="pill">
+                <ui:Label text="HUD" class="pill-label" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- 状态 Toast（两种模式共用） -->
+        <ui:VisualElement name="toast" class="toast" style="display:none;">
+            <ui:Label name="toast-label" text="" class="toast-label" />
+        </ui:VisualElement>
+
+    </ui:VisualElement>
+</ui:UXML>

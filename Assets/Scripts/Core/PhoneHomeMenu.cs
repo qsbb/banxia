@@ -145,7 +145,8 @@ namespace QuestMmdPlayer
                 bool loaded;
                 if (target != null)
                 {
-                    loaded = await modelLoader.LoadFromFileAsync(target.Path, target.PackageRoot);
+                    var avatar = await modelLoader.LoadFromFileAsync(target.Path, target.PackageRoot);
+                    loaded = avatar != null;
                 }
                 else
                 {
@@ -160,7 +161,7 @@ namespace QuestMmdPlayer
                 sceneMenuOpen = false;
                 if (hud != null)
                 {
-                    hud.SetDisplayEnabled(false);
+                    hud.SetVisible(false);
                 }
             }
             catch (Exception exception)
@@ -180,7 +181,7 @@ namespace QuestMmdPlayer
             sceneMenuOpen = false;
             if (hud != null)
             {
-                hud.SetDisplayEnabled(PlayerPrefs.GetInt(PrefsPrefix + "hud", 0) == 1);
+                hud.SetVisible(PlayerPrefs.GetInt(PrefsPrefix + "hud", 0) == 1);
             }
             nextModelRefreshAt = 0f;
         }
@@ -206,7 +207,7 @@ namespace QuestMmdPlayer
             // 顶栏：应用名 + 配对状态点
             GUI.Label(new Rect(x, top, width * 0.6f, 44f), "伴夏 Banxia", boldStyle);
             var pairing = owner != null ? owner.Pairing : null;
-            string pairingText = pairing != null && pairing.IsAvailable ? "● 已连接" : "○ 未配对";
+            string pairingText = pairing != null && pairing.Status != null ? "● " + TruncateStatus(pairing.Status) : "○ 未配对";
             GUI.Label(new Rect(x + width * 0.6f, top, width * 0.4f, 44f), pairingText, smallStyle);
             top += 56f;
 
@@ -357,7 +358,7 @@ namespace QuestMmdPlayer
                 PlayerPrefs.Save();
                 if (hud != null)
                 {
-                    hud.SetDisplayEnabled(newHud && mode == Mode.Menu);
+                    hud.SetVisible(newHud);
                 }
             }
             y += 60f;
@@ -463,11 +464,11 @@ namespace QuestMmdPlayer
                     owner?.SendCommand(new AvatarCommand { name = "reset" });
                 }
                 py += 70f;
-                bool hudOn = hud != null && hud.DisplayEnabled;
+                bool hudOn = hud != null && hud.IsVisible;
                 if (GUI.Button(new Rect(panel.x + 14f, py, panelWidth - 28f, 60f),
                     hudOn ? "关闭诊断 HUD" : "打开诊断 HUD", buttonStyle) && hud != null)
                 {
-                    hud.SetDisplayEnabled(!hudOn);
+                    hud.SetVisible(!hudOn);
                 }
                 py += 70f;
                 if (GUI.Button(new Rect(panel.x + 14f, py, panelWidth - 28f, 60f), "关闭面板", buttonStyle))
@@ -519,12 +520,18 @@ namespace QuestMmdPlayer
             boxStyle = new GUIStyle(GUI.skin.box);
         }
 
+        private static string TruncateStatus(string value)
+        {
+            value = value.Replace('\n', ' ').Trim();
+            return value.Length > 14 ? value.Substring(0, 14) : value;
+        }
+
         internal void BindHud(PhoneDiagnosticsHud diagnosticsHud)
         {
             hud = diagnosticsHud;
             if (hud != null && mode == Mode.Menu)
             {
-                hud.SetDisplayEnabled(PlayerPrefs.GetInt(PrefsPrefix + "hud", 0) == 1);
+                hud.SetVisible(PlayerPrefs.GetInt(PrefsPrefix + "hud", 0) == 1);
             }
         }
     }

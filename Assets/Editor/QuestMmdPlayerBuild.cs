@@ -37,8 +37,8 @@ namespace QuestMmdPlayer.Editor
         private const string AndroidApplicationIdentifier = "com.lingxi.banxia";
         private const string PhoneApplicationIdentifier = "com.lingxi.banxia.phone";
         private const string PhoneScriptingDefine = "BANXIA_PHONE";
-        private const string AndroidVersionName = "0.3.0";
-        private const int AndroidVersionCode = 32;
+        private const string AndroidVersionName = "0.3.2";
+        private const int AndroidVersionCode = 34;
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
         private const string EditorSimulationSettingsPath = "Assets/XR/Settings/XRSimulationSettings.asset";
@@ -78,6 +78,7 @@ namespace QuestMmdPlayer.Editor
                 QuestMmdPlayerMenu.CreatePrototypeScene();
             }
             ValidateNoBundledAvatarModels();
+            BanxiaUiAssetSetup.EnsureUiAssets();
 
             if (!EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android))
             {

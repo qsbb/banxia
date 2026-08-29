@@ -29,6 +29,7 @@ namespace QuestMmdPlayer
         public AvatarMmdPhysicsAdapter HandPhysics { get; private set; }
         public QuestAvatarRayInteraction AvatarRayInteraction { get; private set; }
         public CompanionWorldMenu Menu { get; private set; }
+        public BanxiaQuestWorldUiHost WorldUi { get; private set; }
         public ConversationController Conversation { get; private set; }
         public QuestMicrophoneInput VoiceInput { get; private set; }
         public QuestVrLocomotion Locomotion { get; private set; }
@@ -51,8 +52,8 @@ namespace QuestMmdPlayer
         public PhoneOrbitCamera OrbitCamera { get; private set; }
         /// <summary>Phone-form on-screen diagnostics overlay (BANXIA_PHONE builds only).</summary>
         public PhoneDiagnosticsHud PhoneHud { get; private set; }
-        /// <summary>Phone-form home menu shell (BANXIA_PHONE builds only).</summary>
-        public PhoneHomeMenu PhoneMenu { get; private set; }
+        /// <summary>Phone-form iOS-style UI Toolkit shell (BANXIA_PHONE builds only).</summary>
+        public BanxiaUiShell UiShell { get; private set; }
 
         private RuntimeMmdModelLoader runtimeMmdLoader;
         private AvatarController fallbackAvatar;
@@ -122,11 +123,15 @@ namespace QuestMmdPlayer
             DiagnosticsReporter = gameObject.GetComponent<DiagnosticReporter>() ?? gameObject.AddComponent<DiagnosticReporter>();
             runtimeMmdLoader = GetComponent<RuntimeMmdModelLoader>();
 #if BANXIA_PHONE
-            // 手机端：开机停在主界面（PhoneHomeMenu），不自动恢复上次模型；
-            // 用户点「进入场景」时由菜单显式调 RestoreLastModelAsync()。
+            // 手机端：开机停在新 UI Toolkit 主界面，不自动恢复上次模型；
+            // 用户点「进入场景」时由 UI 壳层显式调 RestoreLastModelAsync()/LoadFromFileAsync()。
             if (runtimeMmdLoader != null)
             {
                 runtimeMmdLoader.SetAutoRestoreOnStart(false);
+                // 模型加载完成后按包围盒自动取景（修复固定目标偏移导致的构图
+                // 错位）；双指拖动/移动模式由 PhoneOrbitCamera 调整角色屏幕位置。
+                runtimeMmdLoader.AvatarLoaded -= HandlePhoneAvatarLoaded;
+                runtimeMmdLoader.AvatarLoaded += HandlePhoneAvatarLoaded;
             }
 #endif
             VmdActions = gameObject.GetComponent<VmdActionLibrary>() ?? gameObject.AddComponent<VmdActionLibrary>();
@@ -147,14 +152,16 @@ namespace QuestMmdPlayer
             if (createPrototypeHud)
             {
 #if BANXIA_PHONE
-                // Phone form: world-space pointer menu is XR-only; the IMGUI
-                // home menu is the primary shell and owns the diagnostics HUD.
+                // Phone form: the high-quality iOS-style UI Toolkit shell replaces
+                // the old IMGUI home menu. Diagnostics HUD is kept as a scene overlay.
                 PhoneHud = gameObject.GetComponent<PhoneDiagnosticsHud>() ?? gameObject.AddComponent<PhoneDiagnosticsHud>();
                 PhoneHud.Bind(Performance, DiagnosticsReporter);
-                PhoneMenu = gameObject.GetComponent<PhoneHomeMenu>() ?? gameObject.AddComponent<PhoneHomeMenu>();
-                PhoneMenu.Bind(this, runtimeMmdLoader, FileImport, Performance, DiagnosticsReporter, DebugLog);
-                PhoneMenu.BindHud(PhoneHud);
+                UiShell = gameObject.GetComponent<BanxiaUiShell>() ?? gameObject.AddComponent<BanxiaUiShell>();
+                UiShell.Bind(this, runtimeMmdLoader, FileImport, DebugLog);
+                UiShell.BindHud(PhoneHud);
 #else
+                WorldUi = gameObject.GetComponent<BanxiaQuestWorldUiHost>() ?? gameObject.AddComponent<BanxiaQuestWorldUiHost>();
+                WorldUi.Initialize(this);
                 Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
                 Menu.Initialize(this);
 #if UNITY_EDITOR
@@ -381,6 +388,18 @@ namespace QuestMmdPlayer
             OrbitCamera.SetOrbitTarget(avatarStartPosition);
 #endif
         }
+
+#if BANXIA_PHONE
+        private void HandlePhoneAvatarLoaded(AvatarController avatar)
+        {
+            if (avatar == null || OrbitCamera == null)
+            {
+                return;
+            }
+            OrbitCamera.SetTrackedAvatar(avatar.transform);
+            OrbitCamera.FrameModel(avatar.gameObject);
+        }
+#endif
 
         private void EnsureLight()
         {

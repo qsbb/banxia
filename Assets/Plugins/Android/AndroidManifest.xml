@@ -3,9 +3,13 @@
           xmlns:tools="http://schemas.android.com/tools">
     <!-- Phone form needs INTERNET explicitly: on Quest it is injected by the
          Meta OpenXR SDK, but the phone build boots no XR loader. RECORD_AUDIO
-         is declared for the voice-conversation runtime permission request. -->
+         is declared for the voice-conversation runtime permission request.
+         REQUEST_INSTALL_PACKAGES backs the in-app GitHub-Releases updater
+         (downloads go through the system DownloadManager, whose content URIs
+         the package installer can open without any FileProvider of our own). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application>
         <activity android:name="com.unity3d.player.UnityPlayerActivity">
             <intent-filter>
