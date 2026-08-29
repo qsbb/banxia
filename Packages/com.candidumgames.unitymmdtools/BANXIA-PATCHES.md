@@ -141,3 +141,14 @@ flush 后硬写恰好≈解算值），物理层锚点与渲染层系统性不�
   采样姿态，untouched 骨照旧重置回绑定；`IsCurrentSolvedTransform` 退役
   （保留代码，不再被重置路径调用）。
 - 初始/烘焙路径 flags 默认 true（保守：保留采样姿态）。
+
+### 9. MMDPhysicsManager.cs — M6 越阈根运动后清速度（M11）
+
+**动机**：显示路径盲测报告（4 路披风盲测之一）发现：M6 补偿把全部刚体+缓存
+按根运动刚移，但 `SetRigidBodyTransforms(..., clearVelocity:false)` 不动 Bullet
+速度 → 瞬移/急转/追踪跳变（>0.15m 或 >12°/帧）后，披风/头发动量仍指向旧世界
+方向 → 一次整片甩动直到自然衰减。
+
+**改动**：`ShiftAllBodiesBy` 中该调用改 `clearVelocity:true`。仅越阈帧到达此
+路径（正常帧阈值门早退），速度清零使链条立即静止，杜绝甩动。位置/姿态仍按
+q·(p−oldRoot)+newRoot 完整平移，插值缓存同步旋转。

@@ -302,7 +302,12 @@ namespace UMT
                 quaternion shiftedRotation = math.normalize(math.mul(rotationDelta, new quaternion(bodyTransform)));
                 runtimeContext.worldTransforms[i] = new float4x4(shiftedRotation, shiftedPosition);
             }
-            runtimeContext.bulletPhysicsContext.SetRigidBodyTransforms(count, runtimeContext.worldTransforms, runtimeContext.rigidBodyIndices, false);
+            // Banxia M6b velocity patch: this path only runs on threshold-crossing root motion
+            // (teleport / snap turn / tracking jump). The shifted bodies' Bullet velocities still
+            // point along the OLD world frame, so cape/hair flail after the jump until the motion
+            // damps out. Clearing velocities on this rare path makes the chains settle immediately;
+            // normal frames never reach this code (threshold 0.15m/12deg per frame).
+            runtimeContext.bulletPhysicsContext.SetRigidBodyTransforms(count, runtimeContext.worldTransforms, runtimeContext.rigidBodyIndices, true);
 
             for (int i = 0; i < runtimeContext.previousKineticTargets.Length; ++i)
             {
