@@ -226,7 +226,7 @@ namespace QuestMmdPlayer
             settings.match = 0.5f;
             // 世界空间面板必须有稳定底色；否则空 RT 会透明并继续遮挡射线。
             settings.clearColor = true;
-            settings.colorClearValue = new Color(0f, 0f, 0f, 1f);
+            settings.colorClearValue = new Color(0.949f, 0.949f, 0.969f, 1f); /* #F2F2F7 */
             return settings;
         }
 

@@ -81,12 +81,13 @@ namespace QuestMmdPlayer
             }
 
             var isHttps = uri.Scheme == Uri.UriSchemeHttps;
-            var isPrivateHttp = uri.Scheme == Uri.UriSchemeHttp &&
-                                allowPrivateHttp &&
-                                AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
-            if (!isHttps && !isPrivateHttp)
+            // 明文 HTTP：开关打开即放行任意主机（私网 / 公网 / 内网穿透域名）。
+            // 真正的策略闸门在服务端（allow_private_http_pairing /
+            // allow_insecure_remote_http），未授权组合会被 422 https_required 拒绝。
+            var isPlainHttp = uri.Scheme == Uri.UriSchemeHttp && allowPrivateHttp;
+            if (!isHttps && !isPlainHttp)
             {
-                reason = "Pairing requires HTTPS, or explicit private-LAN HTTP with a literal private IP";
+                reason = "Pairing requires HTTPS, or enabling plain-HTTP connections";
                 return false;
             }
 

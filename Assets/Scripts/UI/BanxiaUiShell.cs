@@ -484,7 +484,7 @@ namespace QuestMmdPlayer
             // 避免“面板透明”的观感。
             if (mainUi != null)
             {
-                mainUi.style.backgroundColor = new Color(0f, 0f, 0f, 1f);
+                mainUi.style.backgroundColor = new Color(0.949f, 0.949f, 0.969f, 1f); /* #F2F2F7 */
             }
             BindTab("tab-companion", Tab.Companion);
             BindTab("tab-chat", Tab.Chat);
@@ -902,7 +902,7 @@ namespace QuestMmdPlayer
             pairingServerField.AddToClassList("field");
             AttachTouchKeyboardFallback(pairingServerField);
             pairingGroup.Add(MakeElementRow("服务器", pairingServerField));
-            pairingGroup.Add(MakeToggleRow("允许私网 HTTP（局域网测试）", owner?.Pairing?.PrivateHttpAllowed ?? false, value =>
+            pairingGroup.Add(MakeToggleRow("允许明文 HTTP（私网/远程）", owner?.Pairing?.PrivateHttpAllowed ?? false, value =>
             {
                 owner?.Pairing?.SetPrivateHttpAllowed(value);
                 RefreshConnectionUi();

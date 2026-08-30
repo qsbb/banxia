@@ -87,7 +87,7 @@ namespace QuestMmdPlayer
             }
             RestorePairingServer();
             SetStatus(allowed
-                ? "Private-LAN HTTP enabled for this pairing session"
+                ? "Plain-HTTP pairing enabled (server policy still applies)"
                 : "HTTPS pairing required");
         }
 

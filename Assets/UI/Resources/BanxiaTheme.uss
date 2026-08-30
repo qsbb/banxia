@@ -1,4 +1,6 @@
-/* 伴夏设计系统：iOS 26 Liquid Glass 风格（深色）v2
+/* 伴夏设计系统：iOS 26 Liquid Glass 风格（浅色）v3
+   深色 → 浅色整套翻转（用户钦定 2026-08-31）：背景 #F2F2F7、卡片纯白、
+   白磨砂玻璃 chrome、深色文字；Tab 栏白玻璃胶囊 + #007AFF 选中。
    双端共享：Phone 全屏 UIDocument + Quest 世界空间 RT 面板（均为 1080x1920 参考画布）。
 
    比例换算（关键）：PanelSettings 参考宽度 1080px = iOS 390pt 画布，
@@ -12,38 +14,38 @@
    - 按压反馈 = 填充变亮 + scale 0.97 + 0.16s ease-out。
    - UI Toolkit 无 backdrop blur，用"半透明暗玻璃 + 描边 + 按压亮态"近似。 */
 :root {
-    /* 内容层背景（实色，iOS insetGrouped 深色值） */
-    --bg: rgb(0, 0, 0);
-    --bg-elevated: rgb(28, 28, 30);           /* #1C1C1E */
-    --bg-card: rgb(28, 28, 30);
-    --bg-card-active: rgb(44, 44, 46);        /* #2C2C2E */
-    --separator: rgba(84, 84, 88, 0.65);
+    /* 内容层背景（实色，iOS insetGrouped 浅色值） */
+    --bg: rgb(242, 242, 247);                 /* #F2F2F7 系统分组底 */
+    --bg-elevated: rgb(255, 255, 255);        /* 卡片/分组列表 = 纯白 */
+    --bg-card: rgb(255, 255, 255);
+    --bg-card-active: rgb(229, 229, 234);     /* #E5E5EA */
+    --separator: rgba(60, 60, 67, 0.29);
 
-    /* 文字（iOS 语义色） */
-    --label: rgb(255, 255, 255);
-    --label-secondary: rgba(235, 235, 245, 0.6);
-    --label-tertiary: rgba(235, 235, 245, 0.3);
+    /* 文字（iOS 语义色 浅色档） */
+    --label: rgb(0, 0, 0);
+    --label-secondary: rgba(60, 60, 67, 0.6);
+    --label-tertiary: rgba(60, 60, 67, 0.3);
 
-    /* 系统色（深色档） */
-    --tint: rgb(10, 132, 255);                /* #0A84FF */
-    --tint-pressed: rgb(80, 168, 255);
-    --tint-fill: rgba(10, 132, 255, 0.85);
-    --tint-fill-pressed: rgba(0, 98, 204, 0.92);
-    --green: rgb(48, 209, 88);                /* #30D158 */
-    --red: rgb(255, 69, 58);
-    --orange: rgb(255, 159, 10);
+    /* 系统色（浅色档） */
+    --tint: rgb(0, 122, 255);                 /* #007AFF */
+    --tint-pressed: rgb(0, 98, 204);
+    --tint-fill: rgba(0, 122, 255, 0.9);
+    --tint-fill-pressed: rgba(0, 86, 180, 0.95);
+    --green: rgb(52, 199, 89);                /* #34C759 */
+    --red: rgb(255, 59, 48);                  /* #FF3B30 */
+    --orange: rgb(255, 149, 0);
 
-    /* Liquid Glass 材质（深色：暗玻璃） */
-    --glass: rgba(120, 120, 128, 0.24);       /* 普通控件填充 */
-    --glass-pressed: rgba(120, 120, 128, 0.42);
-    --glass-chrome: rgba(44, 44, 52, 0.78);   /* 悬浮 chrome（Tab 栏/输入行/pill） */
-    --glass-chrome-pressed: rgba(64, 64, 74, 0.9);
-    --glass-selected: rgba(255, 255, 255, 0.24); /* Tab 选中白色高亮胶囊（深色规范 0.20~0.25） */
-    /* 玻璃描边：顶亮 / 底暗 / 侧微光 */
-    --glass-edge-top: rgba(255, 255, 255, 0.30);
-    --glass-edge-bottom: rgba(255, 255, 255, 0.06);
-    --glass-edge-side: rgba(255, 255, 255, 0.10);
-    --glass-edge-top-strong: rgba(255, 255, 255, 0.42);
+    /* Liquid Glass 材质（浅色：白磨砂玻璃） */
+    --glass: rgba(120, 120, 128, 0.12);       /* 普通控件填充 */
+    --glass-pressed: rgba(120, 120, 128, 0.2);
+    --glass-chrome: rgba(255, 255, 255, 0.78); /* 悬浮 chrome（Tab 栏/输入行/pill） */
+    --glass-chrome-pressed: rgba(244, 244, 246, 0.95);
+    --glass-selected: rgba(0, 0, 0, 0.06);    /* 玻璃上的选中衬底（浅色规范） */
+    /* 玻璃描边：顶亮 / 底暗 / 侧微光（浅色模式） */
+    --glass-edge-top: rgba(255, 255, 255, 0.9);
+    --glass-edge-bottom: rgba(0, 0, 0, 0.08);
+    --glass-edge-side: rgba(255, 255, 255, 0.55);
+    --glass-edge-top-strong: rgba(255, 255, 255, 0.95);
 
     /* 圆角（胶囊 = 高度一半；嵌套同心：内层 = 外层 − 内边距） */
     --radius-card: 54px;                      /* 大卡 20pt */
@@ -234,8 +236,8 @@
     scale: 0.97;
 }
 .pill.active {
-    background-color: rgba(10, 132, 255, 0.4);
-    border-top-color: rgba(120, 190, 255, 0.5);
+    background-color: rgba(0, 122, 255, 0.35);
+    border-top-color: rgba(0, 122, 255, 0.45);
 }
 .pill.active .pill-label {
     color: var(--tint-pressed);
@@ -278,9 +280,9 @@
     width: 140px;
     height: 85px;
     border-radius: var(--radius-capsule);
-    background-color: rgb(57, 57, 61);
+    background-color: rgba(120, 120, 128, 0.16);
     border-width: 2px;
-    border-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(0, 0, 0, 0.06);
     justify-content: flex-end;
     padding: 6px;
 }
@@ -355,7 +357,9 @@
     color: var(--label);
 }
 .seg-item.selected {
-    background-color: rgba(255, 255, 255, 0.25);
+    background-color: rgb(255, 255, 255);
+    border-width: 2px;
+    border-color: rgba(0, 0, 0, 0.06);
 }
 .seg-item.selected .seg-item-label {
     color: var(--label);
@@ -644,8 +648,11 @@
 }
 .bubble-text {
     font-size: var(--fs-callout);
-    color: rgb(255, 255, 255);
+    color: var(--label);
     white-space: normal;
+}
+.bubble-user .bubble-text {
+    color: rgb(255, 255, 255);
 }
 .chat-input-bar {
     flex-shrink: 0;
