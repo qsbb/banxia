@@ -89,7 +89,10 @@ namespace QuestMmdPlayer
         private VisualElement modelsEmptyContainer;
         private Label importStatusLabel;
         private VisualElement chatPairingCard;
+        private ScrollView chatPairingScroll;
         private VisualElement chatConversationCard;
+        private VisualElement chatQuickPhrasesRow;
+        private VisualElement chatInputBarRoot;
         private Label connectionBadge;
         private Label pairingStatusLabel;
         private TextField pairingServerField;
@@ -530,11 +533,8 @@ namespace QuestMmdPlayer
         {
             var item = new VisualElement { name = name };
             item.AddToClassList("tab-item");
-            var iconLabel = new Label(icon);
-            iconLabel.AddToClassList("tab-icon");
             var textLabel = new Label(text);
-            textLabel.AddToClassList("tab-text");
-            item.Add(iconLabel);
+            textLabel.AddToClassList("tab-label");
             item.Add(textLabel);
             parent.Add(item);
         }
@@ -670,9 +670,33 @@ namespace QuestMmdPlayer
             scroll.Add(MakeButton("导入模型 / 动作文件", false, () => OpenImportPicker("正在打开导入器…")));
             scroll.Add(MakeButton("刷新模型列表", false, () => RefreshModels(forceInvalidate: true)));
 
+            // 快捷入口：填充首页纵向空间，同时把高频路径缩短为一跳。
+            scroll.Add(MakeGroupHeader("快捷入口"));
+            var grid = new VisualElement();
+            grid.AddToClassList("tile-grid");
+            grid.Add(MakeTile("对话", "和 TA 聊天 · 可拍一拍", () => SelectTab(Tab.Chat)));
+            grid.Add(MakeTile("动作", "VMD · 待机 · 表情", () => SelectTab(Tab.Actions)));
+            grid.Add(MakeTile("设置", "画质 · 摄像头 · 音量", () => SelectTab(Tab.Settings)));
+            grid.Add(MakeTile("更新", "检查新版本并安装", () => _ = CheckUpdateAsync()));
+            scroll.Add(grid);
+
             page.Add(scroll);
             tabPages[Tab.Companion] = page;
             content.Add(page);
+        }
+
+        private static VisualElement MakeTile(string title, string subtitle, Action onClick)
+        {
+            var tile = new VisualElement();
+            tile.AddToClassList("tile");
+            var titleLabel = new Label(title);
+            titleLabel.AddToClassList("tile-title");
+            var subtitleLabel = new Label(subtitle);
+            subtitleLabel.AddToClassList("tile-sub");
+            tile.Add(titleLabel);
+            tile.Add(subtitleLabel);
+            tile.RegisterCallback<ClickEvent>(_ => onClick?.Invoke());
+            return tile;
         }
 
         private void RefreshModels(bool forceInvalidate)
@@ -845,12 +869,13 @@ namespace QuestMmdPlayer
         {
             var page = new VisualElement { style = { flexGrow = 1f } };
             page.Add(MakeNavBar("对话", "AstrBot 配对、文字与语音"));
-            var scroll = new ScrollView();
-            scroll.AddToClassList("scroll");
 
+            // 未连接：配对流程独占页面（徽标 + 绑定卡）；已连接：隐藏。
+            chatPairingScroll = new ScrollView();
+            chatPairingScroll.AddToClassList("scroll");
             connectionBadge = new Label("○ 未连接");
             connectionBadge.AddToClassList("status-line");
-            scroll.Add(connectionBadge);
+            chatPairingScroll.Add(connectionBadge);
 
             chatPairingCard = new VisualElement();
             chatPairingCard.Add(MakeGroupHeader("绑定后端"));
@@ -883,21 +908,24 @@ namespace QuestMmdPlayer
                 ShowToast("正在重新连接后端");
             }));
             chatPairingCard.Add(MakeButton("解除绑定", false, ClearPairingConfiguration, danger: true));
-            scroll.Add(chatPairingCard);
+            chatPairingScroll.Add(chatPairingCard);
+            page.Add(chatPairingScroll);
 
+            // 已连接：会话区充满剩余空间，输入行钉底（iOS Messages 式）。
             chatConversationCard = new VisualElement();
+            chatConversationCard.style.flexGrow = 1f;
             chatStateLabel = new Label("会话待命");
             chatStateLabel.AddToClassList("status-line");
             chatConversationCard.Add(chatStateLabel);
             chatTranscript = new ScrollView();
             chatTranscript.AddToClassList("chat-scroll");
             chatConversationCard.Add(chatTranscript);
-            AddQuickPhrases(chatConversationCard);
-            AddChatInputBar(chatConversationCard);
             AddVoiceControls(chatConversationCard);
-            scroll.Add(chatConversationCard);
+            page.Add(chatConversationCard);
 
-            page.Add(scroll);
+            AddQuickPhrases(page);
+            AddChatInputBar(page);
+
             tabPages[Tab.Chat] = page;
             content.Add(page);
             RefreshPairingCodeDisplay();
@@ -933,6 +961,7 @@ namespace QuestMmdPlayer
                     }
                 }));
             }
+            chatQuickPhrasesRow = row;
             parent.Add(row);
         }
 
@@ -957,6 +986,7 @@ namespace QuestMmdPlayer
             send.Add(label);
             send.RegisterCallback<ClickEvent>(_ => SendChatText());
             bar.Add(send);
+            chatInputBarRoot = bar;
             parent.Add(bar);
         }
 
@@ -1152,9 +1182,21 @@ namespace QuestMmdPlayer
             {
                 chatPairingCard.style.display = connected ? DisplayStyle.None : DisplayStyle.Flex;
             }
+            if (chatPairingScroll != null)
+            {
+                chatPairingScroll.style.display = connected ? DisplayStyle.None : DisplayStyle.Flex;
+            }
             if (chatConversationCard != null)
             {
                 chatConversationCard.style.display = connected ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+            if (chatQuickPhrasesRow != null)
+            {
+                chatQuickPhrasesRow.style.display = connected ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+            if (chatInputBarRoot != null)
+            {
+                chatInputBarRoot.style.display = connected ? DisplayStyle.Flex : DisplayStyle.None;
             }
             var pairing = owner.Pairing;
             if (pairingStatusLabel != null)
