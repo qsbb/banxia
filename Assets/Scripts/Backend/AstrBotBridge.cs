@@ -497,6 +497,14 @@ namespace QuestMmdPlayer
 
         public void StartTurn(string turnId, string userText)
         {
+            StartTurn(turnId, userText, null);
+        }
+
+        /// <summary>文本轮次；attachment 非空时随轮上送摄像头单帧。image 为
+        /// 可选字段：序列化经 TurnStartJson.Serialize 注入，纯文本轮次请求体
+        /// 与旧版 Bridge 完全一致（StrictModel 向后兼容）。</summary>
+        public void StartTurn(string turnId, string userText, TurnImageAttachment attachment)
+        {
             activeTurnId = string.Empty;
             CancelAudioUpload();
             ClearIncomingFrames();
@@ -522,7 +530,7 @@ namespace QuestMmdPlayer
             activeTurnId = turnId;
             ResetReceivedTurnCounters();
             RecordStage("eventbus", "processing");
-            StartCoroutine(PostJson("turn/start", JsonUtility.ToJson(request), turnId, true));
+            StartCoroutine(PostJson("turn/start", TurnStartJson.Serialize(request, attachment), turnId, true));
         }
 
         public bool BeginAudioTurn(string turnId)

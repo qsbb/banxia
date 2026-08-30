@@ -27,9 +27,20 @@ namespace QuestMmdPlayer
 
         public void StartTurn(string turnId, string userText)
         {
+            StartTurn(turnId, userText, null);
+        }
+
+        public void StartTurn(string turnId, string userText, TurnImageAttachment attachment)
+        {
+            // 本地演示链路不消费摄像头单帧：回执文案如实体现在回复里。
+            var text = userText ?? string.Empty;
+            if (attachment != null)
+            {
+                text += "\n" + RealityCameraTurn.ComposeFailureReceipt("本地演示链路不支持摄像头画面");
+            }
             StopActiveRoutine();
             activeTurnId = turnId ?? string.Empty;
-            activeRoutine = StartCoroutine(StreamReply(activeTurnId, userText ?? string.Empty));
+            activeRoutine = StartCoroutine(StreamReply(activeTurnId, text));
         }
 
         public bool BeginAudioTurn(string turnId)

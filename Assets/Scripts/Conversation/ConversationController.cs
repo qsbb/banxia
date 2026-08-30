@@ -382,6 +382,12 @@ namespace QuestMmdPlayer
 
         public void StartConversation(string userText)
         {
+            StartConversation(userText, null);
+        }
+
+        /// <summary>文本轮次；attachment 非空时随轮上送摄像头单帧（可选）。</summary>
+        public void StartConversation(string userText, TurnImageAttachment attachment)
+        {
             if (transport == null || !transport.IsConnected)
             {
                 LastErrorCode = "bridge_disconnected";
@@ -403,10 +409,10 @@ namespace QuestMmdPlayer
             var turnId = stateMachine.Begin(text);
             ResetTurnTiming();
             NotifyStateChanged();
-            transport.StartTurn(turnId, text);
+            transport.StartTurn(turnId, text, attachment);
             BeginResponseWait(Time.unscaledTime);
             RecordStage("eventbus", "processing");
-            Debug.Log("[Conversation] Text turn started.", this);
+            Debug.Log(attachment != null ? "[Conversation] Text turn started with camera frame." : "[Conversation] Text turn started.", this);
         }
 
         public void Interrupt()

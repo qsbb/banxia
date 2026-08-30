@@ -1,6 +1,10 @@
-/* 伴夏 iOS 风格设计系统（深色）
+/* 伴夏设计系统：iOS 26 Liquid Glass 风格（深色）
    双端共享：Phone 全屏 UIDocument + Quest 世界空间 RT 面板。
-   Token 语义对齐 iOS HIG Dark。 */
+   Token 语义对齐 iOS HIG Dark + Liquid Glass：
+   - 玻璃只用于“控制层”（Tab 栏 / 工具条 / 按钮 / Toast / 输入框），
+     内容层（卡片 / 列表）保持标准表面 —— Apple HIG 铁律；
+   - 控件一律胶囊形（concentric 圆角）+ 半透明材质 + 1px 高光描边；
+   - UI Toolkit 无 backdrop blur，用“半透明 + 描边 + 亮态反馈”近似玻璃质感。 */
 :root {
     --bg: rgb(0, 0, 0);
     --bg-elevated: rgba(28, 28, 30, 0.92);
@@ -15,8 +19,14 @@
     --green: rgb(48, 209, 88);
     --red: rgb(255, 69, 58);
     --orange: rgb(255, 159, 10);
-    --radius-card: 16px;
-    --radius-button: 12px;
+    /* Liquid Glass 材质（regular 近似）：深色底上的浅玻璃 */
+    --glass: rgba(120, 120, 128, 0.24);
+    --glass-pressed: rgba(120, 120, 128, 0.42);
+    --glass-border: rgba(255, 255, 255, 0.16);
+    --glass-border-strong: rgba(255, 255, 255, 0.24);
+    --glass-selected: rgba(255, 255, 255, 0.18);
+    --radius-card: 20px;
+    --radius-button: 999px;
     --radius-pill: 999px;
 }
 
@@ -85,17 +95,20 @@
     color: var(--label-tertiary);
 }
 
-/* ── 按钮 ── */
+/* ── 按钮：胶囊玻璃（Liquid Glass regular 近似）── */
 .btn {
     height: 50px;
     border-radius: var(--radius-button);
-    background-color: var(--bg-card);
+    background-color: var(--glass);
+    border-width: 1px;
+    border-color: var(--glass-border);
     justify-content: center;
     align-items: center;
     margin: 6px 16px;
 }
 .btn:active {
-    background-color: var(--bg-card-active);
+    background-color: var(--glass-pressed);
+    border-color: var(--glass-border-strong);
 }
 .btn-label {
     font-size: 17px;
@@ -103,6 +116,7 @@
 }
 .btn-primary {
     background-color: var(--tint);
+    border-color: rgba(255, 255, 255, 0.2);
 }
 .btn-primary .btn-label {
     color: rgb(255, 255, 255);
@@ -116,14 +130,16 @@
 }
 .btn-small {
     height: 36px;
-    border-radius: 10px;
-    background-color: var(--bg-card);
+    border-radius: var(--radius-button);
+    background-color: var(--glass);
+    border-width: 1px;
+    border-color: var(--glass-border);
     justify-content: center;
     align-items: center;
-    padding: 0 14px;
+    padding: 0 16px;
 }
 .btn-small:active {
-    background-color: var(--bg-card-active);
+    background-color: var(--glass-pressed);
 }
 .btn-small .btn-label {
     font-size: 14px;
@@ -145,19 +161,23 @@
     margin-right: 0;
 }
 
-/* ── 胶囊按钮（场景悬浮工具条 / 快捷短语）── */
+/* ── 胶囊按钮（场景悬浮工具条 / 快捷短语）：悬浮玻璃层 ── */
 .pill {
     border-radius: var(--radius-pill);
-    background-color: var(--bg-elevated);
+    background-color: rgba(30, 30, 32, 0.5);
+    border-width: 1px;
+    border-color: var(--glass-border);
     padding: 10px 18px;
     justify-content: center;
     align-items: center;
 }
 .pill:active {
-    background-color: var(--bg-card-active);
+    background-color: rgba(60, 60, 64, 0.6);
+    border-color: var(--glass-border-strong);
 }
 .pill.active {
     background-color: rgba(10, 132, 255, 0.35);
+    border-color: rgba(120, 190, 255, 0.45);
 }
 .pill.active .pill-label {
     color: var(--tint-pressed);
@@ -169,12 +189,15 @@
 }
 .chip {
     border-radius: var(--radius-pill);
-    background-color: var(--bg-card);
+    background-color: var(--glass);
+    border-width: 1px;
+    border-color: var(--glass-border);
     padding: 8px 14px;
     margin: 0 4px 4px 0;
 }
 .chip:active {
-    background-color: var(--bg-card-active);
+    background-color: var(--glass-pressed);
+    border-color: var(--glass-border-strong);
 }
 .chip-label {
     font-size: 14px;
@@ -205,21 +228,31 @@
     background-color: rgb(255, 255, 255);
 }
 
-/* ── Tab 栏 ── */
+/* ── Tab 栏：悬浮玻璃胶囊（iOS 26 Liquid Glass tab bar）── */
 .tab-bar {
     flex-direction: row;
-    height: 84px;
-    background-color: rgba(22, 22, 24, 0.94);
-    border-top-width: 0.5px;
-    border-top-color: var(--separator);
+    height: 64px;
+    margin: 0 16px 20px 16px;
+    border-radius: var(--radius-pill);
+    background-color: rgba(30, 30, 32, 0.55);
+    border-width: 1px;
+    border-color: var(--glass-border);
 }
 .tab-item {
     flex-grow: 1;
     justify-content: center;
     align-items: center;
+    border-radius: var(--radius-pill);
+    margin: 5px 2px;
+    border-width: 1px;
+    border-color: rgba(0, 0, 0, 0);
+}
+.tab-item.selected {
+    background-color: var(--glass-selected);
+    border-color: var(--glass-border-strong);
 }
 .tab-icon {
-    font-size: 24px;
+    font-size: 22px;
     color: var(--label-secondary);
     margin-bottom: 2px;
 }
@@ -272,13 +305,16 @@
     width: 76px;
     height: 60px;
     border-radius: 999px;
-    background-color: rgba(120, 120, 128, 0.24);
+    background-color: var(--glass);
+    border-width: 1px;
+    border-color: var(--glass-border);
     justify-content: center;
     align-items: center;
     margin: 6px 6px;
 }
 .numpad-key:active {
-    background-color: rgba(120, 120, 128, 0.5);
+    background-color: var(--glass-pressed);
+    border-color: var(--glass-border-strong);
 }
 .numpad-key-label {
     font-size: 24px;
@@ -345,14 +381,17 @@
 }
 .card-more {
     border-radius: var(--radius-pill);
-    background-color: rgba(120, 120, 128, 0.24);
+    background-color: var(--glass);
+    border-width: 1px;
+    border-color: var(--glass-border);
     padding: 6px 12px;
     margin-left: 8px;
     justify-content: center;
     align-items: center;
 }
 .card-more:active {
-    background-color: rgba(120, 120, 128, 0.4);
+    background-color: var(--glass-pressed);
+    border-color: var(--glass-border-strong);
 }
 .card-more-label {
     font-size: 15px;
@@ -370,18 +409,21 @@
     margin-right: 8px;
 }
 
-/* ── 输入 ── */
+/* ── 输入：胶囊玻璃输入框 ── */
 .field {
-    background-color: rgba(120, 120, 128, 0.18);
-    border-radius: 10px;
+    background-color: var(--glass);
+    border-width: 1px;
+    border-color: var(--glass-border);
+    border-radius: 22px;
     min-height: 44px;
-    padding: 8px 12px;
+    padding: 8px 14px;
     margin: 6px 16px;
     font-size: 17px;
     color: var(--label);
 }
 .field:focus {
-    background-color: rgba(120, 120, 128, 0.28);
+    background-color: var(--glass-pressed);
+    border-color: var(--glass-border-strong);
 }
 
 /* ── 状态行 / Toast ── */
@@ -392,7 +434,9 @@
     white-space: normal;
 }
 .toast {
-    background-color: var(--bg-elevated);
+    background-color: rgba(30, 30, 32, 0.6);
+    border-width: 1px;
+    border-color: var(--glass-border);
     border-radius: var(--radius-pill);
     padding: 10px 20px;
     align-self: center;
@@ -455,21 +499,21 @@
     font-size: 14px;
 }
 
-/* ── 对话 ── */
+/* ── 对话：浮动胶囊输入行（iOS 26 Messages 式，无整条底栏）── */
 .chat-scroll {
     flex-grow: 1;
     padding: 8px 16px;
 }
 .bubble-user {
     background-color: var(--tint);
-    border-radius: 18px;
+    border-radius: 20px;
     padding: 10px 14px;
     margin: 4px 0 4px 72px;
     align-self: flex-end;
 }
 .bubble-reply {
     background-color: var(--bg-card);
-    border-radius: 18px;
+    border-radius: 20px;
     padding: 10px 14px;
     margin: 4px 72px 4px 0;
     align-self: flex-start;
@@ -481,15 +525,31 @@
 }
 .chat-input-bar {
     flex-direction: row;
-    padding: 8px 12px;
-    background-color: rgba(22, 22, 24, 0.94);
-    border-top-width: 0.5px;
-    border-top-color: var(--separator);
+    padding: 8px 12px 12px 12px;
     align-items: center;
 }
 .chat-input-bar .field {
     flex-grow: 1;
     margin: 0;
+}
+.chat-camera {
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    background-color: var(--glass);
+    border-width: 1px;
+    border-color: var(--glass-border);
+    justify-content: center;
+    align-items: center;
+    margin-left: 8px;
+}
+.chat-camera:active {
+    background-color: var(--glass-pressed);
+    border-color: var(--glass-border-strong);
+}
+.chat-camera-label {
+    font-size: 16px;
+    color: var(--tint);
 }
 .chat-send {
     width: 44px;

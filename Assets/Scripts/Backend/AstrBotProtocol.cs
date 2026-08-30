@@ -870,6 +870,67 @@ namespace QuestMmdPlayer
         public bool cancel_previous = true;
     }
 
+    /// <summary>
+    /// 摄像头单帧附件（turn/start 可选 image 字段）。独立于 TurnStartRequest
+    /// 序列化：JsonUtility 无法表达"字段不存在"，而旧版 Bridge 的 StrictModel
+    /// 会拒绝未知字段——因此 image 轮次经由 SerializeTurnStart 手工注入，
+    /// 纯文本轮次的请求体与旧版完全一致。
+    /// </summary>
+    [Serializable]
+    public sealed class TurnImageAttachment
+    {
+        public const string MimeJpeg = "image/jpeg";
+        public string data_base64;
+        public string purpose;
+    }
+
+    internal static class TurnStartJson
+    {
+        /// <summary>序列化 turn/start；attachment 为 null 时不注入 image 字段。</summary>
+        public static string Serialize(TurnStartRequest request, TurnImageAttachment attachment)
+        {
+            var json = JsonUtility.ToJson(request);
+            if (attachment == null || string.IsNullOrEmpty(attachment.data_base64))
+            {
+                return json;
+            }
+            var imageJson = "{\"mime\":\"" + TurnImageAttachment.MimeJpeg
+                + "\",\"data_base64\":\"" + attachment.data_base64
+                + "\",\"purpose\":\"" + EscapeJson(attachment.purpose ?? string.Empty) + "\"}";
+            var closing = json.LastIndexOf('}');
+            return closing >= 0
+                ? json.Substring(0, closing) + ",\"image\":" + imageJson + "}"
+                : json;
+        }
+
+        private static string EscapeJson(string value)
+        {
+            var builder = new System.Text.StringBuilder(value.Length + 8);
+            foreach (var character in value)
+            {
+                switch (character)
+                {
+                    case '"': builder.Append("\\\""); break;
+                    case '\\': builder.Append("\\\\"); break;
+                    case '\n': builder.Append("\\n"); break;
+                    case '\r': builder.Append("\\r"); break;
+                    case '\t': builder.Append("\\t"); break;
+                    default:
+                        if (character < ' ')
+                        {
+                            builder.Append("\\u").Append(((int)character).ToString("x4"));
+                        }
+                        else
+                        {
+                            builder.Append(character);
+                        }
+                        break;
+                }
+            }
+            return builder.ToString();
+        }
+    }
+
     [Serializable]
     internal sealed class AudioChunkRequest
     {

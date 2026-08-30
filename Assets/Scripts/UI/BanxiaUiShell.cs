@@ -943,6 +943,13 @@ namespace QuestMmdPlayer
             chatInputField = new TextField { multiline = false };
             chatInputField.AddToClassList("field");
             bar.Add(chatInputField);
+            var camera = new VisualElement();
+            camera.AddToClassList("chat-camera");
+            var cameraLabel = new Label("拍");
+            cameraLabel.AddToClassList("chat-camera-label");
+            camera.Add(cameraLabel);
+            camera.RegisterCallback<ClickEvent>(_evt => { _ = SendChatWithCameraFrameAsync(); });
+            bar.Add(camera);
             var send = new VisualElement();
             send.AddToClassList("chat-send");
             var label = new Label("发");
@@ -951,6 +958,54 @@ namespace QuestMmdPlayer
             send.RegisterCallback<ClickEvent>(_ => SendChatText());
             bar.Add(send);
             parent.Add(bar);
+        }
+
+        /// <summary>
+        /// 摄像头单帧入口：默认关（设置页开关），拍摄前 toast 明示；帧只存在于
+        /// 内存，拍完即发；拍摄失败时上送如实回执（must_not_claim_observed）。
+        /// </summary>
+        private async System.Threading.Tasks.Task SendChatWithCameraFrameAsync()
+        {
+            if (PlayerPrefs.GetInt(PrefsPrefix + "camera", 0) != 1)
+            {
+                ShowToast("请先在「设置 → 通用」开启摄像头单帧");
+                return;
+            }
+            if (owner?.AstrBot == null || !owner.AstrBot.IsConnected || owner.Conversation == null)
+            {
+                ShowToast("真实后端尚未连接");
+                return;
+            }
+            var userInput = chatInputField?.value?.Trim() ?? string.Empty;
+            ShowToast("正在拍摄一帧（不会保存）…");
+            var (frame, failureReason) = await PhoneRealityCameraSnapshot.CaptureSingleFrameAsync();
+            if (frame != null)
+            {
+                var frameText = RealityCameraTurn.ComposeFrameText(userInput);
+                var attachment = new TurnImageAttachment
+                {
+                    data_base64 = frame.JpegBase64,
+                    purpose = frameText
+                };
+                AddChatBubble(true, frameText + "（附摄像头单帧）");
+                chatInputField?.SetValueWithoutNotify(string.Empty);
+                lastReplyText = string.Empty;
+                lastTranscriptText = frameText;
+                owner.Conversation.StartConversation(frameText, attachment);
+                RefreshChatUi();
+                return;
+            }
+
+            // 拍摄失败：上送如实回执，角色必须承认失败而不编造画面。
+            var receipt = string.IsNullOrEmpty(userInput)
+                ? RealityCameraTurn.ComposeFailureReceipt(failureReason)
+                : userInput + "\n" + RealityCameraTurn.ComposeFailureReceipt(failureReason);
+            AddChatBubble(true, receipt);
+            chatInputField?.SetValueWithoutNotify(string.Empty);
+            lastReplyText = string.Empty;
+            lastTranscriptText = userInput;
+            owner.Conversation.StartConversation(receipt);
+            RefreshChatUi();
         }
 
         private void AddVoiceControls(VisualElement parent)
@@ -1521,6 +1576,15 @@ namespace QuestMmdPlayer
                     hud.SetVisible(value);
                 }
             }));
+            generalGroup.Add(MakeToggleRow("摄像头单帧（拍给 TA 看）", PlayerPrefs.GetInt(PrefsPrefix + "camera", 0) == 1, value =>
+            {
+                PlayerPrefs.SetInt(PrefsPrefix + "camera", value ? 1 : 0);
+                PlayerPrefs.Save();
+                // 授权能力化：默认关；开启即视为授予"按请求拍单帧"能力，
+                // 关闭后拍摄入口直接拒绝。
+                ShowToast(value ? "摄像头单帧已开启：对话页「拍」按钮可用" : "摄像头单帧已关闭");
+            }));
+            generalGroup.Add(MakeInfoRow("摄像头单帧说明", "每次只拍一帧，不保存不录像"));
             generalGroup.Add(MakeSegmentedRow("目标帧率",
                 new SegmentChoice("30", () => Application.targetFrameRate == 30, () => SetTargetFps(30)),
                 new SegmentChoice("60", () => Application.targetFrameRate == 60 || Application.targetFrameRate <= 0, () => SetTargetFps(60)),

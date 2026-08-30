@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -1668,6 +1668,11 @@ namespace QuestMmdPlayer.Tests
                 TextStartCount++;
                 StartedTextTurnId = turnId;
                 LastText = userText;
+            }
+
+            public void StartTurn(string turnId, string userText, TurnImageAttachment attachment)
+            {
+                StartTurn(turnId, userText);
             }
 
             public void Interrupt(string turnId)

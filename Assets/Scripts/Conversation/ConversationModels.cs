@@ -422,6 +422,8 @@ namespace QuestMmdPlayer
         bool IsConnected { get; }
         string Status { get; }
         void StartTurn(string turnId, string userText);
+        /// <summary>文本轮次 + 可选摄像头单帧附件；attachment 为 null 等价于两参版本。</summary>
+        void StartTurn(string turnId, string userText, TurnImageAttachment attachment);
         void Interrupt(string turnId);
         bool BeginAudioTurn(string turnId);
         bool QueueAudioChunk(string turnId, byte[] pcm16);
