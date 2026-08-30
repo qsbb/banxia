@@ -101,6 +101,8 @@ namespace QuestMmdPlayer
         private Label chatStateLabel;
         private ScrollView chatTranscript;
         private TextField chatInputField;
+        private TouchScreenKeyboard activeTouchKeyboard;
+        private TextField activeTouchField;
         private Label voiceStatusLabel;
         private Label actionsStatusLabel;
         private VisualElement actionsListContainer;
@@ -385,6 +387,21 @@ namespace QuestMmdPlayer
             if (toast.style.display == DisplayStyle.Flex && Time.unscaledTime >= toastHideAt)
             {
                 toast.style.display = DisplayStyle.None;
+            }
+            // Android 上 UI Toolkit TextField 聚焦不会弹起系统软键盘（2022.3 已知行为），
+            // 这里用 TouchScreenKeyboard 显式打开并在 Update 里回写文本。
+            if (activeTouchKeyboard != null)
+            {
+                if (activeTouchField != null && activeTouchField.value != activeTouchKeyboard.text)
+                {
+                    activeTouchField.value = activeTouchKeyboard.text;
+                }
+                if (activeTouchKeyboard.status == TouchScreenKeyboard.Status.Done ||
+                    activeTouchKeyboard.status == TouchScreenKeyboard.Status.Canceled)
+                {
+                    activeTouchKeyboard = null;
+                    activeTouchField = null;
+                }
             }
             if (mode == UiMode.Scene && Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
             {
@@ -883,6 +900,7 @@ namespace QuestMmdPlayer
             pairingGroup.AddToClassList("group");
             pairingServerField = new TextField("服务器域名 / IP:端口");
             pairingServerField.AddToClassList("field");
+            AttachTouchKeyboardFallback(pairingServerField);
             pairingGroup.Add(MakeElementRow("服务器", pairingServerField));
             pairingGroup.Add(MakeToggleRow("允许私网 HTTP（局域网测试）", owner?.Pairing?.PrivateHttpAllowed ?? false, value =>
             {
@@ -965,12 +983,40 @@ namespace QuestMmdPlayer
             parent.Add(row);
         }
 
+        /// <summary>
+        /// Android 上 UI Toolkit TextField 聚焦不弹系统软键盘（2022.3 已知行为），
+        /// 用 TouchScreenKeyboard 显式打开；文本在 Update 里逐帧回写。
+        /// FocusIn 与 Click 双通道兜底：部分机型 FocusIn 被内部输入域吃掉时，
+        /// ClickEvent 仍能到达。
+        /// </summary>
+        private void AttachTouchKeyboardFallback(TextField field)
+        {
+            void Open()
+            {
+                if (Application.platform != RuntimePlatform.Android)
+                {
+                    return;
+                }
+                if (activeTouchKeyboard != null && activeTouchKeyboard.active)
+                {
+                    return;
+                }
+                activeTouchField = field;
+                activeTouchKeyboard = TouchScreenKeyboard.Open(
+                    field.value ?? string.Empty, TouchScreenKeyboardType.Default,
+                    false, false, false, false);
+            }
+            field.RegisterCallback<FocusInEvent>(_ => Open());
+            field.RegisterCallback<ClickEvent>(_ => Open());
+        }
+
         private void AddChatInputBar(VisualElement parent)
         {
             var bar = new VisualElement();
             bar.AddToClassList("chat-input-bar");
             chatInputField = new TextField { multiline = false };
             chatInputField.AddToClassList("field");
+            AttachTouchKeyboardFallback(chatInputField);
             bar.Add(chatInputField);
             var camera = new VisualElement();
             camera.AddToClassList("chat-camera");

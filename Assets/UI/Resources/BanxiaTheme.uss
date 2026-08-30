@@ -79,6 +79,7 @@
 
 /* ── 导航栏（iOS 大标题）── */
 .nav-bar {
+    flex-shrink: 0;
     padding: 40px 54px 20px 54px;
 }
 .nav-title {
@@ -100,6 +101,7 @@
     padding: 6px 0;
 }
 .group-header {
+    flex-shrink: 0;
     font-size: var(--fs-footnote);
     color: var(--label-secondary);
     text-transform: uppercase;
@@ -265,6 +267,7 @@
     color: var(--label);
 }
 .chips-row {
+    flex-shrink: 0;
     flex-direction: row;
     flex-wrap: wrap;
     margin: 12px 54px;
@@ -291,20 +294,22 @@
     background-color: rgb(255, 255, 255);
 }
 
-/* ── Tab 栏（iOS 26：居中悬浮玻璃胶囊，21pt inset，选中白色高亮）── */
+/* ── Tab 栏（iOS 26 浅色悬浮玻璃胶囊：白色磨砂 + 深色文字，21pt inset）── */
 .tab-bar {
     flex-direction: row;
+    flex-shrink: 0;                            /* 长内容页（设置）不挤压底栏 */
     height: 152px;                            /* 56pt */
     margin: 0 56px 56px 56px;                 /* 21pt inset */
     border-radius: 76px;                      /* 胶囊 = 高/2 */
-    background-color: var(--glass-chrome);
-    border-top-width: 3px;    border-top-color: var(--glass-edge-top);
-    border-bottom-width: 2px; border-bottom-color: var(--glass-edge-bottom);
-    border-left-width: 2px;   border-left-color: var(--glass-edge-side);
-    border-right-width: 2px;  border-right-color: var(--glass-edge-side);
+    background-color: rgba(255, 255, 255, 0.92);   /* 浅色 Liquid Glass */
+    border-top-width: 3px;    border-top-color: rgba(255, 255, 255, 0.6);
+    border-bottom-width: 2px; border-bottom-color: rgba(0, 0, 0, 0.06);
+    border-left-width: 2px;   border-left-color: rgba(255, 255, 255, 0.4);
+    border-right-width: 2px;  border-right-color: rgba(255, 255, 255, 0.4);
 }
 .tab-item {
     flex-grow: 1;
+    flex-shrink: 0;
     justify-content: center;
     align-items: center;
     border-radius: 66px;                      /* 与 tab-bar 同心：76 − 10 */
@@ -316,15 +321,15 @@
     transition-timing-function: ease-out;
 }
 .tab-item.selected {
-    background-color: var(--glass-selected);
-    border-color: var(--glass-edge-top-strong);
+    background-color: rgba(0, 0, 0, 0.06);    /* 浅色胶囊上的选中衬底 */
+    border-color: rgba(0, 0, 0, 0.04);
 }
 .tab-label {
     font-size: var(--fs-tab);
-    color: var(--label-secondary);
+    color: rgba(0, 0, 0, 0.6);                /* 浅色玻璃上的深色文字 */
 }
 .tab-item.selected .tab-label {
-    color: var(--tint-pressed);
+    color: rgb(0, 122, 255);                  /* 选中 = tint（白底用 #007AFF） */
     -unity-font-style: bold;
 }
 
@@ -488,6 +493,7 @@
 
 /* ── 快捷入口网格（首页）── */
 .tile-grid {
+    flex-shrink: 0;
     flex-direction: row;
     flex-wrap: wrap;
     justify-content: space-between;
@@ -642,6 +648,7 @@
     white-space: normal;
 }
 .chat-input-bar {
+    flex-shrink: 0;
     flex-direction: row;
     padding: 16px 54px 28px 54px;
     align-items: center;
