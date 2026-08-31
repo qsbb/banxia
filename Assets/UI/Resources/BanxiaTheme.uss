@@ -632,6 +632,62 @@
     flex-grow: 1;
     padding: 22px 54px;
 }
+/* ── 对话页：未连接引导卡（效果 02 稿：白卡居中引导）── */
+.chat-guide-card {
+    background-color: var(--bg-card);
+    border-radius: 36px;
+    border-width: 2px;
+    border-color: var(--glass-edge-bottom);
+    padding: 60px 48px;
+    margin: 30px 54px;
+    align-items: center;
+}
+.chat-guide-title {
+    font-size: var(--fs-title3);
+    color: var(--label);
+    -unity-font-style: bold;
+    margin-bottom: 18px;
+}
+.chat-guide-body {
+    font-size: var(--fs-subhead);
+    color: var(--label-secondary);
+    white-space: normal;
+    margin-bottom: 40px;
+    -unity-text-align: middle-center;
+}
+/* ── 对话页：伴夏状态卡（名字 + 实时状态 + 头像点）── */
+.chat-status-card {
+    flex-direction: row;
+    align-items: center;
+    background-color: var(--bg-card);
+    border-radius: 36px;
+    border-width: 2px;
+    border-color: var(--glass-edge-bottom);
+    padding: 26px 34px;
+    margin: 12px 54px 6px 54px;
+}
+.chat-status-avatar {
+    width: 88px;
+    height: 88px;
+    border-radius: 44px;
+    background-color: var(--tint-fill);
+    margin-right: 26px;
+    flex-shrink: 0;
+}
+.chat-status-texts {
+    flex-grow: 1;
+}
+.chat-status-name {
+    font-size: var(--fs-headline);
+    color: var(--label);
+    -unity-font-style: bold;
+    margin-bottom: 6px;
+}
+.chat-status-sub {
+    font-size: var(--fs-subhead);
+    color: var(--label-secondary);
+    white-space: normal;
+}
 .bubble-user {
     background-color: var(--tint-fill);
     border-radius: 54px;

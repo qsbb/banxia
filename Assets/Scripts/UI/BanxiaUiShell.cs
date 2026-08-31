@@ -217,6 +217,47 @@ namespace QuestMmdPlayer
             EnsureTextSettings(document.panelSettings);
         }
 
+        /// <summary>
+        /// 给 ScrollView 挂自实现的触摸拖拽滚动。
+        /// 背景：内置 pan 手势在当前输入配置（activeInputHandler=旧版）下收不到
+        /// pointer move 序列，导致页面滚不动（存量问题，配对表单迁入设置页后
+        /// 内容超屏才暴露）。这里用 PointerDown/Move 事件手动滚 contentContainer。
+        /// </summary>
+        private static void EnableTouchDragScroll(ScrollView scrollView)
+        {
+            if (scrollView == null)
+            {
+                return;
+            }
+            bool dragging = false;
+            float lastY = 0f;
+            scrollView.RegisterCallback<PointerDownEvent>(e =>
+            {
+                dragging = true;
+                lastY = e.position.y;
+                scrollView.CapturePointer(e.pointerId);
+            });
+            scrollView.RegisterCallback<PointerMoveEvent>(e =>
+            {
+                if (!dragging)
+                {
+                    return;
+                }
+                float delta = e.position.y - lastY;
+                lastY = e.position.y;
+                var scroller = scrollView.verticalScroller;
+                float range = Mathf.Max(1f, scroller.highValue - scroller.lowValue);
+                float viewport = Mathf.Max(1f, scrollView.contentContainer.worldBound.height - scrollView.worldBound.height);
+                scroller.value -= delta * range / viewport;
+            });
+            scrollView.RegisterCallback<PointerUpEvent>(e =>
+            {
+                dragging = false;
+                scrollView.ReleasePointer(e.pointerId);
+            });
+            scrollView.RegisterCallback<PointerLeaveEvent>(e => dragging = false);
+        }
+
         // 屏幕空间的 UI Toolkit 面板（手机端）依赖 EventSystem 派发指针事件；
         // 项目只启用 Input System，老 StandaloneInputModule 会每帧抛
         // InvalidOperationException 且吞掉所有点击，这里兜底换成
@@ -684,6 +725,7 @@ namespace QuestMmdPlayer
             page.Add(MakeNavBar("伴夏", "模型、导入与陪伴入口"));
             var scroll = new ScrollView();
             scroll.AddToClassList("scroll");
+            EnableTouchDragScroll(scroll);
             modelsListContainer = new VisualElement();
             scroll.Add(modelsListContainer);
 
@@ -898,58 +940,52 @@ namespace QuestMmdPlayer
         private void BuildChatPage()
         {
             var page = new VisualElement { style = { flexGrow = 1f } };
-            page.Add(MakeNavBar("对话", "AstrBot 配对、文字与语音"));
+            page.Add(MakeNavBar("伴夏", "和她说说话"));
 
-            // 未连接：配对流程独占页面（徽标 + 绑定卡）；已连接：隐藏。
+            // ── 未连接：引导去设置绑定（配对表单已迁移到设置页「连接后端」）──
             chatPairingScroll = new ScrollView();
             chatPairingScroll.AddToClassList("scroll");
+            EnableTouchDragScroll(chatPairingScroll);
             connectionBadge = new Label("○ 未连接");
             connectionBadge.AddToClassList("status-line");
             chatPairingScroll.Add(connectionBadge);
 
             chatPairingCard = new VisualElement();
-            chatPairingCard.Add(MakeGroupHeader("绑定后端"));
-            var pairingGroup = new VisualElement();
-            pairingGroup.AddToClassList("group");
-            pairingServerField = new TextField("服务器域名 / IP:端口");
-            pairingServerField.AddToClassList("field");
-            AttachTouchKeyboardFallback(pairingServerField);
-            pairingGroup.Add(MakeElementRow("服务器", pairingServerField));
-            pairingGroup.Add(MakeToggleRow("允许明文 HTTP（私网/远程）", owner?.Pairing?.PrivateHttpAllowed ?? false, value =>
-            {
-                owner?.Pairing?.SetPrivateHttpAllowed(value);
-                RefreshConnectionUi();
-            }));
-            chatPairingCard.Add(pairingGroup);
-
-            pairingCodeLabel = new Label("_ _ _   _ _ _");
-            pairingCodeLabel.AddToClassList("status-line");
-            chatPairingCard.Add(pairingCodeLabel);
-            pairingDots = new VisualElement();
-            pairingDots.AddToClassList("code-dots");
-            chatPairingCard.Add(pairingDots);
-            BuildPairingNumpad(chatPairingCard);
-            pairingStatusLabel = new Label(string.Empty);
-            pairingStatusLabel.AddToClassList("status-line");
-            chatPairingCard.Add(pairingStatusLabel);
-            chatPairingCard.Add(MakeButton("连接后端", true, TryPair));
-            chatPairingCard.Add(MakeButton("重新连接", false, () =>
-            {
-                owner?.AstrBot?.ReloadConfiguration();
-                ShowToast("正在重新连接后端");
-            }));
-            chatPairingCard.Add(MakeButton("解除绑定", false, ClearPairingConfiguration, danger: true));
+            chatPairingCard.AddToClassList("chat-guide-card");
+            var guideTitle = new Label("还没有连上伴夏");
+            guideTitle.AddToClassList("chat-guide-title");
+            chatPairingCard.Add(guideTitle);
+            var guideBody = new Label("在「设置 → 连接后端」里填服务器地址并绑定，\n之后就能在这里文字与语音对话。");
+            guideBody.AddToClassList("chat-guide-body");
+            chatPairingCard.Add(guideBody);
+            chatPairingCard.Add(MakeButton("去设置绑定", true, () => SelectTab(Tab.Settings)));
             chatPairingScroll.Add(chatPairingCard);
             page.Add(chatPairingScroll);
 
-            // 已连接：会话区充满剩余空间，输入行钉底（iOS Messages 式）。
+            // ── 已连接：状态卡 + 纯消息流 + 输入条（iOS Messages 式）──
             chatConversationCard = new VisualElement();
             chatConversationCard.style.flexGrow = 1f;
+
+            // 伴夏状态卡（对应效果图：名字 + 实时连接状态）
+            var statusCard = new VisualElement();
+            statusCard.AddToClassList("chat-status-card");
+            var statusAvatar = new VisualElement();
+            statusAvatar.AddToClassList("chat-status-avatar");
+            statusCard.Add(statusAvatar);
+            var statusTexts = new VisualElement();
+            statusTexts.AddToClassList("chat-status-texts");
+            var statusName = new Label("伴夏");
+            statusName.AddToClassList("chat-status-name");
+            statusTexts.Add(statusName);
             chatStateLabel = new Label("会话待命");
-            chatStateLabel.AddToClassList("status-line");
-            chatConversationCard.Add(chatStateLabel);
+            chatStateLabel.AddToClassList("chat-status-sub");
+            statusTexts.Add(chatStateLabel);
+            statusCard.Add(statusTexts);
+            chatConversationCard.Add(statusCard);
+
             chatTranscript = new ScrollView();
             chatTranscript.AddToClassList("chat-scroll");
+            EnableTouchDragScroll(chatTranscript);
             chatConversationCard.Add(chatTranscript);
             AddVoiceControls(chatConversationCard);
             page.Add(chatConversationCard);
@@ -959,7 +995,6 @@ namespace QuestMmdPlayer
 
             tabPages[Tab.Chat] = page;
             content.Add(page);
-            RefreshPairingCodeDisplay();
         }
 
         private void BuildPairingNumpad(VisualElement parent)
@@ -1099,7 +1134,7 @@ namespace QuestMmdPlayer
 
         private void AddVoiceControls(VisualElement parent)
         {
-            parent.Add(MakeGroupHeader("语音"));
+            parent.Add(MakeGroupHeader("语音（可选）"));
             var group = new VisualElement();
             group.AddToClassList("group");
             group.Add(MakeToggleRow("常开监听", owner?.VoiceInput?.AlwaysListening ?? false, value =>
@@ -1421,6 +1456,7 @@ namespace QuestMmdPlayer
             page.Add(MakeNavBar("动作", "外部 VMD、待机与表情"));
             var scroll = new ScrollView();
             scroll.AddToClassList("scroll");
+            EnableTouchDragScroll(scroll);
 
             idlePresetLabel = new Label("默认待机：—");
             idlePresetLabel.AddToClassList("status-line");
@@ -1633,9 +1669,42 @@ namespace QuestMmdPlayer
         private void BuildSettingsPage()
         {
             var page = new VisualElement { style = { flexGrow = 1f } };
-            page.Add(MakeNavBar("设置", "画质、诊断与在线更新"));
+            page.Add(MakeNavBar("设置", "连接、画质与诊断"));
             var scroll = new ScrollView();
             scroll.AddToClassList("scroll");
+            EnableTouchDragScroll(scroll);
+
+            // ── 连接后端（绑定服务器 IP + 配对码，从对话页迁移至此）──
+            scroll.Add(MakeGroupHeader("连接后端"));
+            var pairingGroup = new VisualElement();
+            pairingGroup.AddToClassList("group");
+            pairingServerField = new TextField("服务器域名 / IP:端口");
+            pairingServerField.AddToClassList("field");
+            AttachTouchKeyboardFallback(pairingServerField);
+            pairingGroup.Add(MakeElementRow("服务器", pairingServerField));
+            pairingGroup.Add(MakeToggleRow("允许明文 HTTP（私网/远程）", owner?.Pairing?.PrivateHttpAllowed ?? false, value =>
+            {
+                owner?.Pairing?.SetPrivateHttpAllowed(value);
+                RefreshConnectionUi();
+            }));
+            pairingCodeLabel = new Label("_ _ _   _ _ _");
+            pairingCodeLabel.AddToClassList("status-line");
+            pairingGroup.Add(pairingCodeLabel);
+            pairingDots = new VisualElement();
+            pairingDots.AddToClassList("code-dots");
+            pairingGroup.Add(pairingDots);
+            BuildPairingNumpad(pairingGroup);
+            pairingStatusLabel = new Label(string.Empty);
+            pairingStatusLabel.AddToClassList("status-line");
+            pairingGroup.Add(pairingStatusLabel);
+            pairingGroup.Add(MakeButton("连接后端", true, TryPair));
+            pairingGroup.Add(MakeButton("重新连接", false, () =>
+            {
+                owner?.AstrBot?.ReloadConfiguration();
+                ShowToast("正在重新连接后端");
+            }));
+            pairingGroup.Add(MakeButton("解除绑定", false, ClearPairingConfiguration, danger: true));
+            scroll.Add(pairingGroup);
 
             scroll.Add(MakeGroupHeader("画质与物理"));
             var qualityGroup = new VisualElement();
@@ -1744,6 +1813,7 @@ namespace QuestMmdPlayer
             page.Add(scroll);
             tabPages[Tab.Settings] = page;
             content.Add(page);
+            RefreshPairingCodeDisplay();
         }
 
         private void SetTargetFps(int fps)
