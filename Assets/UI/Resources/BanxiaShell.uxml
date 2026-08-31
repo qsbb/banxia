@@ -7,18 +7,18 @@
             <ui:VisualElement name="content" style="flex-grow:1;" />
 
             <!-- Tab 栏（iOS 26：悬浮胶囊，单标签，选中白色高亮胶囊由 USS :selected 表达） -->
-            <ui:VisualElement name="tab-bar" class="tab-bar">
-                <ui:VisualElement name="tab-companion" class="tab-item selected">
-                    <ui:Label text="首页" class="tab-label" />
+            <ui:VisualElement name="tab-bar" class="tab-bar ds-bottom-nav">
+                <ui:VisualElement name="tab-companion" class="tab-item ds-bottom-nav__item is-active">
+                    <ui:Label text="首页" class="tab-label ds-bottom-nav__label" />
                 </ui:VisualElement>
-                <ui:VisualElement name="tab-chat" class="tab-item">
-                    <ui:Label text="对话" class="tab-label" />
+                <ui:VisualElement name="tab-chat" class="tab-item ds-bottom-nav__item">
+                    <ui:Label text="对话" class="tab-label ds-bottom-nav__label" />
                 </ui:VisualElement>
-                <ui:VisualElement name="tab-actions" class="tab-item">
-                    <ui:Label text="动作" class="tab-label" />
+                <ui:VisualElement name="tab-actions" class="tab-item ds-bottom-nav__item">
+                    <ui:Label text="动作" class="tab-label ds-bottom-nav__label" />
                 </ui:VisualElement>
-                <ui:VisualElement name="tab-settings" class="tab-item">
-                    <ui:Label text="设置" class="tab-label" />
+                <ui:VisualElement name="tab-settings" class="tab-item ds-bottom-nav__item">
+                    <ui:Label text="设置" class="tab-label ds-bottom-nav__label" />
                 </ui:VisualElement>
             </ui:VisualElement>
         </ui:VisualElement>
@@ -43,7 +43,7 @@
         </ui:VisualElement>
 
         <!-- 状态 Toast（两种模式共用） -->
-        <ui:VisualElement name="toast" class="toast" style="display:none;">
+        <ui:VisualElement name="toast" class="toast ds-toast" style="display:none;">
             <ui:Label name="toast-label" text="" class="toast-label" />
         </ui:VisualElement>
 

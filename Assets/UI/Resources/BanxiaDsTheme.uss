@@ -1,0 +1,202 @@
+/* ============================================================================
+   Banxia × Design System —— iOS 26 浅色 Liquid Glass 主题层
+   选型：sinanata/unity-ui-toolkit-design-system（MIT，vendored 于
+   Assets/DesignSystem）。本文件把冻结的 iOS 26 浅色色板映射到 DS 令牌，
+   并为移动端面板（1080×1920 参考分辨率，≈3.3× 桌面比例）放大 DS 组件的
+   硬编码尺寸。加载顺序：DS 14 张样式表 → 本文件 → BanxiaTheme.uss。
+   ============================================================================ */
+
+:root {
+    /* ---------- 色板：iOS 26 浅色 ---------- */
+    --color-primary:        rgb(0, 122, 255);            /* #007AFF */
+    --color-primary-hover:  rgb(10, 102, 220);
+    --color-primary-press:  rgb(0, 86, 180);
+    --color-primary-soft:   rgba(0, 122, 255, 0.12);
+
+    --color-danger:         rgb(255, 59, 48);            /* #FF3B30 */
+    --color-danger-hover:   rgb(229, 52, 42);
+    --color-danger-press:   rgb(204, 42, 34);
+    --color-danger-soft:    rgba(255, 59, 48, 0.12);
+
+    --color-secondary:      rgb(0, 122, 255);
+    --color-secondary-hover: rgb(10, 102, 220);
+    --color-secondary-press: rgb(0, 86, 180);
+    --color-secondary-soft: rgba(0, 122, 255, 0.12);
+
+    --color-text-primary:   rgb(0, 0, 0);
+    --color-text-secondary: rgba(60, 60, 67, 0.6);
+    --color-text-disabled:  rgba(60, 60, 67, 0.3);
+    --color-text-on-accent: rgb(255, 255, 255);
+
+    --color-bg:             rgb(242, 242, 247);          /* #F2F2F7 分组底 */
+    --color-surface:        rgb(255, 255, 255);          /* 卡片 = 纯白 */
+    --color-surface-elev:   rgba(120, 120, 128, 0.12);  /* 玻璃填充 */
+    --color-surface-hover:  rgba(120, 120, 128, 0.2);
+    --color-border:         rgba(60, 60, 67, 0.12);
+    --color-border-strong:  rgba(60, 60, 67, 0.2);
+    --color-overlay:        rgba(0, 0, 0, 0.32);
+
+    /* ---------- 字号（对齐 BanxiaTheme 的 iOS 字阶）---------- */
+    --font-size-h1:        76px;    /* title1 28pt */
+    --font-size-h2:        60px;    /* title2 22pt */
+    --font-size-h3:        54px;    /* title3 20pt */
+    --font-size-body-1:    46px;    /* body 17pt */
+    --font-size-body-2:    40px;    /* subhead 15pt */
+    --font-size-caption:   32px;    /* caption 12pt */
+
+    /* ---------- 间距（移动端 3.3×）---------- */
+    --space-1:  12px;
+    --space-2:  20px;
+    --space-3:  28px;
+    --space-4:  40px;
+    --space-5:  50px;
+    --space-6:  60px;
+    --space-8:  80px;
+
+    /* ---------- 圆角（iOS 大圆角）---------- */
+    --radius-xs:  8px;
+    --radius-sm:  12px;
+    --radius-md:  20px;
+    --radius-lg:  28px;    /* 分组列表 10pt */
+    --radius-xl:  44px;    /* 大卡 */
+
+    /* ---------- 动效 ---------- */
+    --transition-fast:   120ms;
+    --transition-medium: 200ms;
+}
+
+/* ============================================================================
+   移动端缩放适配：DS 组件的硬编码尺寸按 1080 宽面板放大（触控 ≥120px）
+   ============================================================================ */
+
+/* ── 按钮：iOS 胶囊 ── */
+.ds-btn {
+    height: 116px;
+    padding-left: 48px;
+    padding-right: 48px;
+    border-radius: 999px;
+    font-size: var(--font-size-body-1);
+}
+.ds-btn--sm {
+    height: 92px;
+    font-size: var(--font-size-body-2);
+}
+.ds-btn--lg {
+    height: 140px;
+    font-size: var(--font-size-h3);
+}
+.ds-btn--block {
+    align-self: stretch;
+}
+
+/* ── 输入 ── */
+.ds-input {
+    height: 120px;
+}
+.ds-input .unity-text-field__input {
+    font-size: var(--font-size-body-1);
+    -unity-text-align: middle-left;
+}
+
+/* ── 开关（iOS 式拨动）── */
+.ds-toggle .unity-toggle__checkmark {
+    width: 132px;
+    height: 80px;
+    border-radius: 999px;
+}
+.ds-toggle__knob {
+    top: 7px;             /* (80 - 66) / 2 */
+    left: 7px;
+    width: 66px;
+    height: 66px;
+    border-radius: 999px;
+    box-shadow: none;
+}
+.ds-toggle:checked .ds-toggle__knob {
+    translate: 52px 0;    /* 132 - 66 - 2×7 */
+}
+.ds-toggle__label {
+    font-size: var(--font-size-body-1);
+}
+
+/* ── 徽章 / 筹码 ── */
+.ds-badge {
+    height: 60px;
+    padding-left: 26px;
+    padding-right: 26px;
+    border-radius: 999px;
+    font-size: var(--font-size-caption);
+}
+.ds-chip {
+    height: 80px;
+    padding-left: 36px;
+    padding-right: 36px;
+    border-radius: 999px;
+    font-size: var(--font-size-body-2);
+}
+
+/* ── Tab / 分段控件 ── */
+.ds-tabs {
+    border-radius: 999px;
+    padding: 8px;
+}
+.ds-tab {
+    height: 96px;
+    border-radius: 999px;
+    font-size: var(--font-size-body-2);
+}
+
+/* ── 底部导航 ── */
+.ds-bottom-nav {
+    height: 190px;
+    border-radius: 999px;
+    padding: 10px;
+}
+.ds-bottom-nav__item {
+    height: 150px;
+    border-radius: 999px;
+}
+.ds-bottom-nav__label {
+    font-size: var(--font-size-caption);
+}
+
+/* ── 卡片 / 分组 ── */
+.ds-card {
+    border-radius: var(--radius-xl);
+}
+.ds-section__title {
+    font-size: var(--font-size-body-2);
+    letter-spacing: 2px;
+}
+
+/* ── Toast / 进度 / 空态 ── */
+.ds-toast {
+    min-height: 100px;
+    border-radius: 999px;
+    padding-left: 40px;
+    padding-right: 40px;
+}
+.ds-toast__message {
+    font-size: var(--font-size-body-2);
+}
+.ds-progress {
+    height: 22px;
+    min-height: 22px;
+    max-height: 22px;
+}
+.ds-progress .unity-progress-bar__container {
+    height: 22px;
+    border-radius: 999px;
+}
+.ds-progress .unity-progress-bar__background {
+    border-radius: 999px;
+}
+.ds-progress .unity-progress-bar__progress {
+    border-radius: 999px;
+}
+.ds-empty__title {
+    font-size: var(--font-size-h3);
+}
+.ds-empty__message {
+    font-size: var(--font-size-body-2);
+}

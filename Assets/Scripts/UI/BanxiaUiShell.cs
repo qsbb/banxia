@@ -229,22 +229,39 @@ namespace QuestMmdPlayer
             {
                 return;
             }
+            // 拖拽阈值（屏幕像素）：超过才进入滚动捕获。
+            // 没有 SlopVersion 时代的 CapturePointer 会把 PointerUp 一并抢走，
+            // ScrollView 里的 Button/Toggle 永远收不到完整序列 → 点击失效。
+            const float dragSlop = 12f;
+            bool tracking = false;
             bool dragging = false;
             float lastY = 0f;
             scrollView.RegisterCallback<PointerDownEvent>(e =>
             {
-                dragging = true;
+                tracking = true;
+                dragging = false;
                 lastY = e.position.y;
-                scrollView.CapturePointer(e.pointerId);
             });
             scrollView.RegisterCallback<PointerMoveEvent>(e =>
             {
-                if (!dragging)
+                if (!tracking)
                 {
                     return;
                 }
                 float delta = e.position.y - lastY;
-                lastY = e.position.y;
+                if (!dragging)
+                {
+                    if (Mathf.Abs(delta) < dragSlop)
+                    {
+                        return;
+                    }
+                    dragging = true;
+                    scrollView.CapturePointer(e.pointerId);
+                }
+                else
+                {
+                    lastY = e.position.y;
+                }
                 var scroller = scrollView.verticalScroller;
                 float range = Mathf.Max(1f, scroller.highValue - scroller.lowValue);
                 float viewport = Mathf.Max(1f, scrollView.contentContainer.worldBound.height - scrollView.worldBound.height);
@@ -252,10 +269,18 @@ namespace QuestMmdPlayer
             });
             scrollView.RegisterCallback<PointerUpEvent>(e =>
             {
+                if (dragging)
+                {
+                    scrollView.ReleasePointer(e.pointerId);
+                }
+                tracking = false;
                 dragging = false;
-                scrollView.ReleasePointer(e.pointerId);
             });
-            scrollView.RegisterCallback<PointerLeaveEvent>(e => dragging = false);
+            scrollView.RegisterCallback<PointerLeaveEvent>(e =>
+            {
+                tracking = false;
+                dragging = false;
+            });
         }
 
         // 屏幕空间的 UI Toolkit 面板（手机端）依赖 EventSystem 派发指针事件；
@@ -498,6 +523,38 @@ namespace QuestMmdPlayer
             {
                 Debug.LogWarning("[BanxiaUi] BanxiaShell.uxml missing; using fallback visual tree.", this);
             }
+            // 设计系统基座（vendored：sinanata/unity-ui-toolkit-design-system，MIT）。
+            // 2022.3 不支持 USS @import，所以逐张挂载；顺序必须先 DS 令牌/组件，
+            // 再挂 iOS 26 浅色覆盖层（BanxiaDsTheme），最后是 BanxiaTheme 既有层。
+            foreach (var sheetName in new[]
+                     {
+                         "UI/Styles/DesignSystem/DesignTokens",
+                         "UI/Styles/DesignSystem/Typography",
+                         "UI/Styles/DesignSystem/Icons",
+                         "UI/Styles/DesignSystem/Buttons",
+                         "UI/Styles/DesignSystem/Inputs",
+                         "UI/Styles/DesignSystem/TabsAndFilters",
+                         "UI/Styles/DesignSystem/Cards",
+                         "UI/Styles/DesignSystem/Navigation",
+                         "UI/Styles/DesignSystem/Badges",
+                         "UI/Styles/DesignSystem/Controls",
+                         "UI/Styles/DesignSystem/Overlays",
+                         "UI/Styles/DesignSystem/Feedback",
+                         "UI/Styles/DesignSystem/Mobile",
+                         "UI/Styles/DesignSystem/DropdownPopup",
+                     })
+            {
+                var ds = Resources.Load<StyleSheet>(sheetName);
+                if (ds != null)
+                {
+                    panelRoot.styleSheets.Add(ds);
+                }
+            }
+            var dsTheme = Resources.Load<StyleSheet>("BanxiaDsTheme");
+            if (dsTheme != null)
+            {
+                panelRoot.styleSheets.Add(dsTheme);
+            }
             var theme = Resources.Load<StyleSheet>("BanxiaTheme");
             if (theme != null)
             {
@@ -671,6 +728,7 @@ namespace QuestMmdPlayer
         {
             var element = shellRoot?.Q<VisualElement>(name);
             element?.EnableInClassList("selected", selected);
+            element?.EnableInClassList("is-active", selected); // DS ds-bottom-nav__item 选中态
         }
 
         private void BindSceneToolbar()
@@ -1063,6 +1121,7 @@ namespace QuestMmdPlayer
             var bar = new VisualElement();
             bar.AddToClassList("chat-input-bar");
             chatInputField = new TextField { multiline = false };
+            chatInputField.AddToClassList("ds-input");
             chatInputField.AddToClassList("field");
             AttachTouchKeyboardFallback(chatInputField);
             bar.Add(chatInputField);
@@ -1137,6 +1196,7 @@ namespace QuestMmdPlayer
             parent.Add(MakeGroupHeader("语音（可选）"));
             var group = new VisualElement();
             group.AddToClassList("group");
+            group.AddToClassList("ds-card");
             group.Add(MakeToggleRow("常开监听", owner?.VoiceInput?.AlwaysListening ?? false, value =>
             {
                 owner?.VoiceInput?.ToggleAlwaysListening();
@@ -1678,7 +1738,9 @@ namespace QuestMmdPlayer
             scroll.Add(MakeGroupHeader("连接后端"));
             var pairingGroup = new VisualElement();
             pairingGroup.AddToClassList("group");
+            pairingGroup.AddToClassList("ds-card");
             pairingServerField = new TextField("服务器域名 / IP:端口");
+            pairingServerField.AddToClassList("ds-input");
             pairingServerField.AddToClassList("field");
             AttachTouchKeyboardFallback(pairingServerField);
             pairingGroup.Add(MakeElementRow("服务器", pairingServerField));
@@ -1709,6 +1771,7 @@ namespace QuestMmdPlayer
             scroll.Add(MakeGroupHeader("画质与物理"));
             var qualityGroup = new VisualElement();
             qualityGroup.AddToClassList("group");
+            qualityGroup.AddToClassList("ds-card");
             qualityGroup.Add(MakeSegmentedRow("渲染画质",
                 new SegmentChoice("性能", () => owner?.Quality?.CurrentPreset == QuestQualityPreset.Performance,
                     () => owner?.Quality?.ApplyPreset(QuestQualityPreset.Performance)),
@@ -1736,6 +1799,7 @@ namespace QuestMmdPlayer
             scroll.Add(MakeGroupHeader("通用"));
             var generalGroup = new VisualElement();
             generalGroup.AddToClassList("group");
+            generalGroup.AddToClassList("ds-card");
             generalGroup.Add(MakeToggleRow("场景诊断 HUD", PlayerPrefs.GetInt(PrefsPrefix + "hud", 0) == 1, value =>
             {
                 PlayerPrefs.SetInt(PrefsPrefix + "hud", value ? 1 : 0);
@@ -1765,6 +1829,7 @@ namespace QuestMmdPlayer
             scroll.Add(MakeGroupHeader("设备性能"));
             var performanceGroup = new VisualElement();
             performanceGroup.AddToClassList("group");
+            performanceGroup.AddToClassList("ds-card");
             settingsPerformanceText = new Label("性能采样待刷新");
             settingsPerformanceText.AddToClassList("status-line");
             performanceGroup.Add(settingsPerformanceText);
@@ -1773,6 +1838,7 @@ namespace QuestMmdPlayer
             scroll.Add(MakeGroupHeader("关于"));
             var aboutGroup = new VisualElement();
             aboutGroup.AddToClassList("group");
+            aboutGroup.AddToClassList("ds-card");
             aboutGroup.Add(MakeInfoRow("版本", Application.version));
             aboutGroup.Add(MakeInfoRow("设备", string.IsNullOrEmpty(SystemInfo.deviceModel) ? SystemInfo.deviceName : SystemInfo.deviceModel));
             aboutGroup.Add(MakeInfoRow("内存", SystemInfo.systemMemorySize + " MB"));
@@ -1781,6 +1847,7 @@ namespace QuestMmdPlayer
             scroll.Add(MakeGroupHeader("软件更新"));
             var updateGroup = new VisualElement();
             updateGroup.AddToClassList("group");
+            updateGroup.AddToClassList("ds-card");
             updateStatusLabel = new Label("检查 GitHub Releases 上的新版本");
             updateStatusLabel.AddToClassList("status-line");
             updateGroup.Add(updateStatusLabel);
@@ -1798,6 +1865,7 @@ namespace QuestMmdPlayer
             scroll.Add(MakeGroupHeader("运行诊断"));
             var logGroup = new VisualElement();
             logGroup.AddToClassList("group");
+            logGroup.AddToClassList("ds-card");
             settingsLogText = new Label("暂无日志");
             settingsLogText.AddToClassList("status-line");
             logGroup.Add(settingsLogText);
@@ -2441,41 +2509,37 @@ namespace QuestMmdPlayer
         private static Label MakeGroupHeader(string title)
         {
             var header = new Label(title);
-            header.AddToClassList("group-header");
+            header.AddToClassList("ds-section__title");
+            header.AddToClassList("group-header"); // 兼容既有边距微调
             return header;
         }
 
         private static VisualElement MakeButton(string text, bool primary, Action click, bool danger = false)
         {
-            var button = new VisualElement();
-            button.AddToClassList("btn");
+            var button = new Button(() => click?.Invoke()) { text = text };
+            button.AddToClassList("ds-btn");
+            button.AddToClassList("ds-btn--block");
             if (primary)
             {
-                button.AddToClassList("btn-primary");
+                button.AddToClassList("ds-btn--primary");
             }
-            if (danger)
+            else if (danger)
             {
-                button.AddToClassList("btn-danger");
+                button.AddToClassList("ds-btn--danger");
             }
-            var label = new Label(text);
-            label.AddToClassList("btn-label");
-            button.Add(label);
-            button.RegisterCallback<ClickEvent>(_ => click?.Invoke());
+            else
+            {
+                button.AddToClassList("ds-btn--secondary");
+            }
             return button;
         }
 
         private static VisualElement MakeSmallButton(string text, bool danger, Action click)
         {
-            var button = new VisualElement();
-            button.AddToClassList("btn-small");
-            if (danger)
-            {
-                button.AddToClassList("btn-danger");
-            }
-            var label = new Label(text);
-            label.AddToClassList("btn-label");
-            button.Add(label);
-            button.RegisterCallback<ClickEvent>(_ => click?.Invoke());
+            var button = new Button(() => click?.Invoke()) { text = text };
+            button.AddToClassList("ds-btn");
+            button.AddToClassList("ds-btn--sm");
+            button.AddToClassList(danger ? "ds-btn--danger" : "ds-btn--secondary");
             return button;
         }
 
@@ -2504,12 +2568,8 @@ namespace QuestMmdPlayer
 
         private static VisualElement MakeChip(string text, Action click)
         {
-            var chip = new VisualElement();
-            chip.AddToClassList("chip");
-            var label = new Label(text);
-            label.AddToClassList("chip-label");
-            chip.Add(label);
-            chip.RegisterCallback<ClickEvent>(_ => click?.Invoke());
+            var chip = new Button(() => click?.Invoke()) { text = text };
+            chip.AddToClassList("ds-chip");
             return chip;
         }
 
@@ -2556,20 +2616,15 @@ namespace QuestMmdPlayer
             var labelElement = new Label(label);
             labelElement.AddToClassList("row-label");
             row.Add(labelElement);
+            // ds-toggle：库的标准开关（Toggle + 手写 knob 子元素，:checked 驱动滑块位移）
+            var toggle = new Toggle { value = initial };
+            toggle.AddToClassList("ds-toggle");
             var knob = new VisualElement();
-            knob.AddToClassList("switch-knob");
-            var thumb = new VisualElement();
-            thumb.AddToClassList("switch-thumb");
-            knob.Add(thumb);
-            bool state = initial;
-            knob.EnableInClassList("on", state);
-            knob.RegisterCallback<ClickEvent>(_ =>
-            {
-                state = !state;
-                knob.EnableInClassList("on", state);
-                changed?.Invoke(state);
-            });
-            row.Add(knob);
+            knob.AddToClassList("ds-toggle__knob");
+            toggle.Add(knob);
+            toggle.RegisterValueChangedCallback(evt => changed?.Invoke(evt.newValue));
+            toggle.style.flexShrink = 0f;
+            row.Add(toggle);
             return row;
         }
 
@@ -2581,7 +2636,8 @@ namespace QuestMmdPlayer
             labelElement.AddToClassList("row-label");
             row.Add(labelElement);
             var seg = new VisualElement();
-            seg.AddToClassList("seg");
+            seg.AddToClassList("ds-tabs");
+            seg.AddToClassList("seg"); // 复用既有 flexGrow 布局微调
             var items = new List<VisualElement>();
             Action refresh = () =>
             {
@@ -2593,17 +2649,14 @@ namespace QuestMmdPlayer
                         selected = options[i].IsSelected?.Invoke() ?? false;
                     }
                     catch (NullReferenceException) { }
-                    items[i].EnableInClassList("selected", selected);
+                    items[i].EnableInClassList("is-active", selected);
                 }
             };
             for (int i = 0; i < options.Length; i++)
             {
                 int captured = i;
-                var item = new VisualElement();
-                item.AddToClassList("seg-item");
-                var itemLabel = new Label(options[i].Label);
-                itemLabel.AddToClassList("seg-item-label");
-                item.Add(itemLabel);
+                var item = new Button { text = options[i].Label };
+                item.AddToClassList("ds-tab");
                 item.RegisterCallback<ClickEvent>(_ =>
                 {
                     options[captured].Activate?.Invoke();
