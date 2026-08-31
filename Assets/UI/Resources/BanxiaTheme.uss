@@ -720,3 +720,193 @@
     color: rgb(255, 255, 255);
     -unity-font-style: bold;
 }
+
+/* ═══ 同框三模式（虚拟场景 / 视频通话 / 同框现实 AR）═══ */
+
+/* 模式选择 / 环境 Sheet 遮罩 */
+.cp-backdrop {
+    position: absolute; inset: 0;
+    background-color: rgba(0, 0, 0, 0.32);
+}
+
+/* 模式选择 / 环境 Sheet 本体 */
+.cp-sheet {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background-color: var(--bg-elevated);
+    border-top-left-radius: 40px;
+    border-top-right-radius: 40px;
+    border-top-width: 2px;
+    border-top-color: var(--glass-edge-top);
+    padding: 20px 42px 34px;
+}
+.cp-grabber {
+    height: 8px; width: 120px; border-radius: 999px;
+    background-color: var(--glass);
+    align-self: center; margin-bottom: 14px;
+}
+.cp-title {
+    font-size: var(--fs-title3);
+    color: var(--label);
+    -unity-font-style: bold;
+    margin-bottom: 14px;
+}
+
+/* 模式卡 */
+.cp-card {
+    background-color: var(--bg-card);
+    border-radius: 28px;
+    border-width: 2px;
+    border-color: var(--glass-edge-bottom);
+    padding: 16px 26px;
+    margin-bottom: 12px;
+}
+.cp-card.current {
+    border-color: rgba(0, 122, 255, 0.45);
+}
+.cp-card.disabled {
+    opacity: 0.45;
+}
+.cp-card-head {
+    flex-direction: row; align-items: center; margin-bottom: 6px;
+}
+.cp-card-title {
+    font-size: var(--fs-body);
+    color: var(--label);
+    -unity-font-style: bold;
+}
+.cp-card-tag {
+    font-size: var(--fs-caption);
+    color: var(--tint);
+    margin-left: 20px;
+}
+.cp-card-desc {
+    font-size: var(--fs-subhead);
+    color: var(--label-secondary);
+    white-space: normal;
+}
+
+/* 环境 chips */
+.cp-chip-row {
+    flex-direction: row; flex-wrap: wrap; margin-bottom: 26px;
+}
+.cp-chip {
+    background-color: var(--glass);
+    border-radius: 999px;
+    border-width: 2px;
+    border-color: rgba(0, 0, 0, 0.06);
+    color: var(--label-secondary);
+    font-size: var(--fs-subhead);
+    padding: 18px 42px;
+    margin-right: 18px; margin-bottom: 18px;
+}
+.cp-chip.current {
+    background-color: var(--glass-selected);
+    border-color: rgba(0, 122, 255, 0.45);
+    color: var(--tint);
+    -unity-font-style: bold;
+}
+/* AR 放置提示卡（玻璃，不拦截点击）*/
+.ar-hint {
+    position: absolute; left: 150px; right: 150px; top: 68%;
+    background-color: var(--glass-chrome);
+    border-radius: 32px;
+    border-width: 2px;
+    border-top-color: var(--glass-edge-top-strong);
+    border-bottom-color: var(--glass-edge-bottom);
+    padding: 30px 36px;
+    align-items: center;
+}
+.ar-hint-title {
+    font-size: var(--fs-body);
+    color: var(--label);
+    -unity-font-style: bold;
+    margin-bottom: 10px;
+}
+.ar-hint-sub {
+    font-size: var(--fs-subhead);
+    color: var(--label-secondary);
+}
+
+/* 视频通话 chrome */
+.call-chrome {
+    position: absolute;
+    left: 0; right: 0; top: 0; bottom: 0;
+    width: 100%; height: 100%;
+    justify-content: space-between;
+}
+.call-top {
+    flex-direction: row; align-items: center;
+    background-color: var(--glass-chrome);
+    border-radius: 50px;
+    border-width: 2px;
+    border-top-color: var(--glass-edge-top-strong);
+    border-bottom-color: var(--glass-edge-bottom);
+    padding: 22px 40px;
+    margin: 56px 54px 0;
+}
+.call-dot {
+    width: 24px; height: 24px; border-radius: 999px;
+    background-color: var(--green);
+    margin-right: 22px;
+}
+.call-name {
+    font-size: var(--fs-body);
+    color: var(--label);
+    -unity-font-style: bold;
+}
+.call-timer {
+    font-size: var(--fs-body);
+    color: var(--label-secondary);
+    margin-left: auto;
+    -unity-font-style: bold;
+}
+.call-subtitle {
+    background-color: var(--glass-chrome);
+    border-radius: 40px;
+    border-width: 2px;
+    border-top-color: var(--glass-edge-top-strong);
+    border-bottom-color: var(--glass-edge-bottom);
+    color: var(--label);
+    font-size: var(--fs-callout);
+    -unity-text-align: middle-center;
+    padding: 24px 44px;
+    margin: 0 90px;
+    white-space: normal;
+    max-visible-lines: 2;
+    text-overflow: ellipsis;
+}
+.call-controls {
+    flex-direction: row;
+    justify-content: center;
+    margin-bottom: 240px;
+}
+.call-btn {
+    background-color: var(--glass-chrome);
+    border-radius: 999px;
+    border-width: 2px;
+    border-top-color: var(--glass-edge-top-strong);
+    border-bottom-color: var(--glass-edge-bottom);
+    color: var(--label);
+    font-size: var(--fs-subhead);
+    padding: 34px 52px;
+    margin: 0 22px;
+}
+.call-hangup {
+    background-color: var(--red);
+    color: rgb(255, 255, 255);
+    border-color: rgba(0, 0, 0, 0.08);
+    -unity-font-style: bold;
+}
+.cp-note {
+    font-size: var(--fs-caption);
+    color: var(--label-tertiary);
+    white-space: normal;
+}
+.cp-more {
+    color: var(--tint);
+    font-size: var(--fs-subhead);
+    -unity-font-style: bold;
+    align-self: center;
+    margin-top: 8px;
+    padding: 18px 42px;
+}

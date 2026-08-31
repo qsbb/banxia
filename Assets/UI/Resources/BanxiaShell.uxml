@@ -31,8 +31,8 @@
             <ui:VisualElement name="pill-move" class="pill">
                 <ui:Label text="移动" class="pill-label" />
             </ui:VisualElement>
-            <ui:VisualElement name="pill-reset" class="pill">
-                <ui:Label text="重置" class="pill-label" />
+            <ui:VisualElement name="pill-mode" class="pill">
+                <ui:Label text="环境" class="pill-label" />
             </ui:VisualElement>
             <ui:VisualElement name="pill-frame" class="pill">
                 <ui:Label text="取景" class="pill-label" />

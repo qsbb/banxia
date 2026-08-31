@@ -107,7 +107,7 @@ namespace QuestMmdPlayer
             }
         }
 
-        private static async Task<string> EnsureCameraPermissionAsync()
+        public static async Task<string> EnsureCameraPermissionAsync()
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
             // UnityEngine.Android.Permission 的权限名是字符串常量（Permission.Camera），

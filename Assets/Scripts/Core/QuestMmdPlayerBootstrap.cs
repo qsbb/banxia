@@ -50,6 +50,7 @@ namespace QuestMmdPlayer
 
         /// <summary>Phone-form orbit camera (BANXIA_PHONE builds only).</summary>
         public PhoneOrbitCamera OrbitCamera { get; private set; }
+        public PhoneCoPresenceDirector CoPresence { get; private set; }
         /// <summary>Phone-form on-screen diagnostics overlay (BANXIA_PHONE builds only).</summary>
         public PhoneDiagnosticsHud PhoneHud { get; private set; }
         /// <summary>Phone-form iOS-style UI Toolkit shell (BANXIA_PHONE builds only).</summary>
@@ -370,6 +371,25 @@ namespace QuestMmdPlayer
         }
         private void EnsureCamera()
         {
+#if BANXIA_PHONE
+            // 手机端：场景可能自带 MainCamera（XR rig 遗留），但 orbit/同框导演
+            // 必须挂上——挂在现有主相机上，而不是因 Camera.main 非空直接短路。
+            // 否则取景/移动手势与同框三模式全部失效（QA 实测根因）。
+            var existing = Camera.main;
+            if (existing != null)
+            {
+                OrbitCamera = existing.GetComponent<PhoneOrbitCamera>()
+                    ?? existing.gameObject.AddComponent<PhoneOrbitCamera>();
+                OrbitCamera.SetOrbitTarget(avatarStartPosition);
+                CoPresence = existing.GetComponent<PhoneCoPresenceDirector>();
+                if (CoPresence == null)
+                {
+                    CoPresence = existing.gameObject.AddComponent<PhoneCoPresenceDirector>();
+                    CoPresence.Initialize(existing, OrbitCamera);
+                }
+                return;
+            }
+#endif
             if (!createCameraIfMissing || Camera.main != null)
             {
                 return;
@@ -386,6 +406,8 @@ namespace QuestMmdPlayer
 #if BANXIA_PHONE
             OrbitCamera = cameraObject.AddComponent<PhoneOrbitCamera>();
             OrbitCamera.SetOrbitTarget(avatarStartPosition);
+            CoPresence = cameraObject.AddComponent<PhoneCoPresenceDirector>();
+            CoPresence.Initialize(camera, OrbitCamera);
 #endif
         }
 
@@ -398,6 +420,10 @@ namespace QuestMmdPlayer
             }
             OrbitCamera.SetTrackedAvatar(avatar.transform);
             OrbitCamera.FrameModel(avatar.gameObject);
+            if (CoPresence != null)
+            {
+                CoPresence.SetAvatar(avatar.transform);
+            }
         }
 #endif
 

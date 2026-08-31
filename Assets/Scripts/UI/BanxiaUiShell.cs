@@ -57,6 +57,15 @@ namespace QuestMmdPlayer
         private PhoneDiagnosticsHud hud;
         private BanxiaUpdateChecker updateChecker;
         private bool worldSpaceHost;
+        private VisualElement coPresenceSheet;
+        private VisualElement coPresenceBackdrop;
+        private VisualElement videoCallChrome;
+        private Label videoCallTimerLabel;
+        private Label videoCallSubtitleLabel;
+        private VisualElement arPlaceHint;
+        private bool arPlacedOnce;
+        private double nextCallUiRefreshAt;
+        private PhoneCoPresenceDirector.CoPresenceMode lastCoPresenceMode;
         private Action closeRequested;
 
         private UIDocument document;
@@ -408,6 +417,10 @@ namespace QuestMmdPlayer
                 ReturnToMenu();
                 return;
             }
+            if (mode == UiMode.Scene)
+            {
+                HandleCoPresenceFrame();
+            }
             if (Time.unscaledTime < nextPollAt)
             {
                 return;
@@ -533,7 +546,7 @@ namespace QuestMmdPlayer
             toolbar.AddToClassList("scene-toolbar");
             AddToolbarPill(toolbar, "pill-back", "主界面");
             AddToolbarPill(toolbar, "pill-move", "移动");
-            AddToolbarPill(toolbar, "pill-reset", "重置");
+            AddToolbarPill(toolbar, "pill-mode", "环境");
             AddToolbarPill(toolbar, "pill-frame", "取景");
             AddToolbarPill(toolbar, "pill-hud", "HUD");
             root.Add(toolbar);
@@ -624,7 +637,7 @@ namespace QuestMmdPlayer
             sceneToolbar.Q<VisualElement>("pill-back")?.RegisterCallback<ClickEvent>(_ => ReturnToMenu());
             movePill = sceneToolbar.Q<VisualElement>("pill-move");
             movePill?.RegisterCallback<ClickEvent>(_ => ToggleMoveMode());
-            sceneToolbar.Q<VisualElement>("pill-reset")?.RegisterCallback<ClickEvent>(_ => ResetAvatar());
+            sceneToolbar.Q<VisualElement>("pill-mode")?.RegisterCallback<ClickEvent>(_ => OnSceneModePillPressed());
             sceneToolbar.Q<VisualElement>("pill-frame")?.RegisterCallback<ClickEvent>(_ => ReframeCamera());
             sceneToolbar.Q<VisualElement>("pill-hud")?.RegisterCallback<ClickEvent>(_ => ToggleHud());
         }
@@ -1845,6 +1858,16 @@ namespace QuestMmdPlayer
                 else
                 {
                     loaded = await modelLoader.RestoreLastModelAsync();
+                    // 无已安装模型时启动器已生成 fallback 角色（HandleLastModelRestoreCompleted），
+                    // 直接放行进入场景，同框三模式不因“没装模型”被挡在门外。
+                    if (!loaded && owner?.Avatar != null)
+                    {
+                        loaded = true;
+                        if (CoPresenceDirector != null)
+                        {
+                            CoPresenceDirector.SetAvatar(owner.Avatar.transform);
+                        }
+                    }
                 }
                 if (!loaded)
                 {
@@ -1859,6 +1882,14 @@ namespace QuestMmdPlayer
                 else
                 {
                     ApplyMode(UiMode.Scene);
+                    var director = owner?.CoPresence;
+                    if (director != null)
+                    {
+                        director.SetAvatar(owner.Avatar != null ? owner.Avatar.transform : null);
+                        director.ApplyOnEnterScene();
+                    }
+                    arPlacedOnce = false;
+                    UpdateCoPresenceChrome();
                     if (hud != null)
                     {
                         hud.SetVisible(PlayerPrefs.GetInt(PrefsPrefix + "hud", 0) == 1);
@@ -1877,9 +1908,403 @@ namespace QuestMmdPlayer
             }
         }
 
+        // ═══════════════════════ 同框三模式 ═══════════════════════
+
+        private PhoneCoPresenceDirector CoPresenceDirector => owner?.CoPresence;
+
+        private void HandleCoPresenceFrame()
+        {
+            var director = CoPresenceDirector;
+            if (director == null)
+            {
+                return;
+            }
+            if (director.CurrentMode != lastCoPresenceMode)
+            {
+                // 覆盖一切模式转换（含 AR 权限拒绝后的异步回落），刷新 pill 文案与 chrome。
+                lastCoPresenceMode = director.CurrentMode;
+                UpdateCoPresenceChrome();
+            }
+            if (director.VideoCallActive && videoCallChrome != null
+                && Time.unscaledTime >= nextCallUiRefreshAt)
+            {
+                nextCallUiRefreshAt = Time.unscaledTime + 0.5;
+                if (videoCallTimerLabel != null)
+                {
+                    videoCallTimerLabel.text = director.CallDurationText;
+                }
+                if (videoCallSubtitleLabel != null)
+                {
+                    var reply = owner?.Conversation?.ReplyText ?? string.Empty;
+                    videoCallSubtitleLabel.text = string.IsNullOrWhiteSpace(reply)
+                        ? string.Empty
+                        : "「" + reply.Trim() + "」";
+                    videoCallSubtitleLabel.style.display =
+                        string.IsNullOrWhiteSpace(reply) ? DisplayStyle.None : DisplayStyle.Flex;
+                }
+            }
+            if (director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.ArReality && !arPlacedOnce)
+            {
+                HandleArTapPlacement();
+            }
+        }
+
+        private void HandleArTapPlacement()
+        {
+            // 与 PhoneOrbitCamera 同源的 legacy 触摸 API（项目 Active Input Handling = Both）
+            if (Input.touchCount == 0)
+            {
+                return;
+            }
+            for (int i = 0; i < Input.touchCount; i++)
+            {
+                var touch = Input.GetTouch(i);
+                if (touch.phase != UnityEngine.TouchPhase.Ended || touch.tapCount < 1)
+                {
+                    continue;
+                }
+                if (touch.deltaTime <= 0f || touch.deltaTime > 0.6f)
+                {
+                    continue;
+                }
+                if (touch.deltaPosition.sqrMagnitude > 24f * 24f)
+                {
+                    continue;
+                }
+                if (CoPresenceDirector == null ||
+                    !CoPresenceDirector.PlaceAvatarAtScreenPoint(touch.position))
+                {
+                    continue;
+                }
+                arPlacedOnce = true;
+                if (arPlaceHint != null)
+                {
+                    arPlaceHint.style.display = DisplayStyle.None;
+                }
+                ShowToast("已放置 · 拖动移动 · 双指缩放");
+                return;
+            }
+        }
+
+        private void OnSceneModePillPressed()
+        {
+            var director = CoPresenceDirector;
+            if (director == null)
+            {
+                ShowToast("同框导演不可用");
+                return;
+            }
+            if (director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.VirtualScene)
+            {
+                ToggleEnvironmentSheet();
+            }
+            else
+            {
+                ToggleCoPresenceSheet();
+            }
+        }
+
+        private void UpdateCoPresenceChrome()
+        {
+            var director = CoPresenceDirector;
+            if (director == null)
+            {
+                return;
+            }
+            var modePill = sceneToolbar?.Q<VisualElement>("pill-mode");
+            var modeLabel = modePill?.Q<Label>(className: "pill-label");
+            if (modeLabel != null)
+            {
+                modeLabel.text = director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.VirtualScene
+                    ? "环境"
+                    : "模式";
+            }
+            bool inScene = mode == UiMode.Scene;
+            bool videoCall = director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.VideoCall;
+            // 通话/AR chrome 是惰性创建的：以记忆模式直接进场景时从未打开过
+            // Sheet，overlays 不存在 → 必须在这里确保已建，否则 chrome 永不显示。
+            if (inScene && videoCall)
+            {
+                EnsureCoPresenceOverlays();
+            }
+            if (sceneToolbar != null && inScene)
+            {
+                // 视频通话底部由通话控件行接管，隐藏场景工具条避免双层堆叠。
+                sceneToolbar.style.display = videoCall ? DisplayStyle.None : DisplayStyle.Flex;
+            }
+            if (videoCallChrome != null)
+            {
+                videoCallChrome.style.display = inScene && videoCall ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+            if (arPlaceHint != null)
+            {
+                arPlaceHint.style.display =
+                    inScene && !videoCall
+                    && director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.ArReality && !arPlacedOnce
+                        ? DisplayStyle.Flex
+                        : DisplayStyle.None;
+            }
+        }
+
+        private void ToggleCoPresenceSheet()
+        {
+            EnsureCoPresenceOverlays();
+            bool show = coPresenceSheet == null || coPresenceSheet.style.display != DisplayStyle.Flex;
+            HideCoPresenceSheets();
+            if (show && coPresenceSheet != null)
+            {
+                ShowModeCards();
+            }
+        }
+
+        /// <summary>强制显示模式卡视图（pill 与「换种同框方式」共用）。</summary>
+        private void ShowModeCards()
+        {
+            EnsureCoPresenceOverlays();
+            HideCoPresenceSheets();
+            if (coPresenceSheet == null)
+            {
+                return;
+            }
+            RebuildModeCards();
+            coPresenceSheet.style.display = DisplayStyle.Flex;
+            if (coPresenceBackdrop != null)
+            {
+                coPresenceBackdrop.style.display = DisplayStyle.Flex;
+            }
+        }
+
+        private void ToggleEnvironmentSheet()
+        {
+            EnsureCoPresenceOverlays();
+            var director = CoPresenceDirector;
+            if (director == null)
+            {
+                return;
+            }
+            bool show = coPresenceSheet == null || coPresenceSheet.style.display != DisplayStyle.Flex;
+            HideCoPresenceSheets();
+            if (show && coPresenceSheet != null)
+            {
+                RebuildEnvironmentChips();
+                coPresenceSheet.style.display = DisplayStyle.Flex;
+                if (coPresenceBackdrop != null)
+                {
+                    coPresenceBackdrop.style.display = DisplayStyle.Flex;
+                }
+            }
+        }
+
+        private void HideCoPresenceSheets()
+        {
+            if (coPresenceSheet != null)
+            {
+                coPresenceSheet.style.display = DisplayStyle.None;
+            }
+            if (coPresenceBackdrop != null)
+            {
+                coPresenceBackdrop.style.display = DisplayStyle.None;
+            }
+        }
+
+        private void EnsureCoPresenceOverlays()
+        {
+            if (coPresenceSheet != null || shellRoot == null)
+            {
+                return;
+            }
+            coPresenceBackdrop = new VisualElement { name = "copresence-backdrop" };
+            coPresenceBackdrop.AddToClassList("cp-backdrop");
+            coPresenceBackdrop.style.display = DisplayStyle.None;
+            coPresenceBackdrop.RegisterCallback<ClickEvent>(_ => HideCoPresenceSheets());
+            shellRoot.Add(coPresenceBackdrop);
+
+            coPresenceSheet = new VisualElement { name = "copresence-sheet" };
+            coPresenceSheet.AddToClassList("cp-sheet");
+            coPresenceSheet.style.display = DisplayStyle.None;
+            shellRoot.Add(coPresenceSheet);
+
+            // AR 放置提示（不拦截点击）
+            arPlaceHint = new VisualElement { name = "ar-place-hint", pickingMode = PickingMode.Ignore };
+            arPlaceHint.AddToClassList("ar-hint");
+            var hintTitle = new Label("点按地面，把她放进来");
+            hintTitle.AddToClassList("ar-hint-title");
+            var hintSub = new Label("拖动移动 · 双指缩放 · 长按环绕");
+            hintSub.AddToClassList("ar-hint-sub");
+            arPlaceHint.Add(hintTitle);
+            arPlaceHint.Add(hintSub);
+            arPlaceHint.style.display = DisplayStyle.None;
+            shellRoot.Add(arPlaceHint);
+
+            // 视频通话 chrome。容器全屏铺开只为 space-between 定位胶囊与控件行，
+            // 自身必须忽略点击：否则会盖在模式卡 Sheet 上拦截全部卡片点击
+            // （chrome 在 shellRoot 中晚于 sheet 加入，层级更高）。
+            videoCallChrome = new VisualElement { name = "video-call-chrome", pickingMode = PickingMode.Ignore };
+            videoCallChrome.AddToClassList("call-chrome");
+            videoCallChrome.style.display = DisplayStyle.None;
+
+            var callTop = new VisualElement();
+            callTop.AddToClassList("call-top");
+            var callDot = new VisualElement();
+            callDot.AddToClassList("call-dot");
+            callTop.Add(callDot);
+            var callName = new Label("伴夏");
+            callName.AddToClassList("call-name");
+            callTop.Add(callName);
+            videoCallTimerLabel = new Label("00:00");
+            videoCallTimerLabel.AddToClassList("call-timer");
+            callTop.Add(videoCallTimerLabel);
+            videoCallChrome.Add(callTop);
+
+            videoCallSubtitleLabel = new Label(string.Empty);
+            videoCallSubtitleLabel.AddToClassList("call-subtitle");
+            videoCallSubtitleLabel.style.display = DisplayStyle.None;
+            videoCallChrome.Add(videoCallSubtitleLabel);
+
+            var callControls = new VisualElement();
+            callControls.AddToClassList("call-controls");
+            var hangup = new Label("挂断");
+            hangup.AddToClassList("call-btn");
+            hangup.AddToClassList("call-hangup");
+            hangup.RegisterCallback<ClickEvent>(_ => ReturnToMenu());
+            callControls.Add(hangup);
+            var switchMode = new Label("模式");
+            switchMode.AddToClassList("call-btn");
+            switchMode.RegisterCallback<ClickEvent>(_ => ToggleCoPresenceSheet());
+            callControls.Add(switchMode);
+            var backChat = new Label("去聊天");
+            backChat.AddToClassList("call-btn");
+            backChat.RegisterCallback<ClickEvent>(_ => ReturnToMenu());
+            callControls.Add(backChat);
+            videoCallChrome.Add(callControls);
+
+            shellRoot.Add(videoCallChrome);
+        }
+
+        private void RebuildModeCards()
+        {
+            var director = CoPresenceDirector;
+            if (coPresenceSheet == null || director == null)
+            {
+                return;
+            }
+            coPresenceSheet.Clear();
+            var grabber = new VisualElement();
+            grabber.AddToClassList("cp-grabber");
+            coPresenceSheet.Add(grabber);
+            var title = new Label("和她同框");
+            title.AddToClassList("cp-title");
+            coPresenceSheet.Add(title);
+
+            var modes = new (string title, string tag, string desc, PhoneCoPresenceDirector.CoPresenceMode value)[]
+            {
+                ("同框现实", "AR · 相机取景", "点按地面，把她放进你的房间", PhoneCoPresenceDirector.CoPresenceMode.ArReality),
+                ("虚拟场景", "伪 AR · 虚拟环境", "夜街 / 星空 / 卧室 / 海边", PhoneCoPresenceDirector.CoPresenceMode.VirtualScene),
+                ("视频通话", "半身 · 通话感", "胸像出镜 · 字幕 · 通话计时", PhoneCoPresenceDirector.CoPresenceMode.VideoCall),
+            };
+            foreach (var entry in modes)
+            {
+                bool current = director.CurrentMode == entry.value;
+                bool disabled = entry.value == PhoneCoPresenceDirector.CoPresenceMode.ArReality
+                    && !director.ArCameraAvailable;
+                var card = new VisualElement();
+                card.AddToClassList("cp-card");
+                if (current)
+                {
+                    card.AddToClassList("current");
+                }
+                if (disabled)
+                {
+                    card.AddToClassList("disabled");
+                }
+                var head = new VisualElement();
+                head.AddToClassList("cp-card-head");
+                var cardTitle = new Label(entry.title);
+                cardTitle.AddToClassList("cp-card-title");
+                head.Add(cardTitle);
+                var cardTag = new Label(entry.tag);
+                cardTag.AddToClassList("cp-card-tag");
+                head.Add(cardTag);
+                card.Add(head);
+                var cardDesc = new Label(entry.desc);
+                cardDesc.AddToClassList("cp-card-desc");
+                card.Add(cardDesc);
+                if (!disabled)
+                {
+                    var target = entry.value;
+                    card.RegisterCallback<ClickEvent>(_ =>
+                    {
+                        director.SwitchMode(target);
+                        HideCoPresenceSheets();
+                        UpdateCoPresenceChrome();
+                        ShowToast("已切换：" + entry.title);
+                    });
+                }
+                coPresenceSheet.Add(card);
+            }
+        }
+
+        private void RebuildEnvironmentChips()
+        {
+            var director = CoPresenceDirector;
+            if (coPresenceSheet == null || director == null)
+            {
+                return;
+            }
+            coPresenceSheet.Clear();
+            var grabber = new VisualElement();
+            grabber.AddToClassList("cp-grabber");
+            coPresenceSheet.Add(grabber);
+            var title = new Label("虚拟环境");
+            title.AddToClassList("cp-title");
+            coPresenceSheet.Add(title);
+
+            var envs = new (string name, PhoneCoPresenceDirector.VirtualEnvironment value)[]
+            {
+                ("夜街", PhoneCoPresenceDirector.VirtualEnvironment.NightStreet),
+                ("星空", PhoneCoPresenceDirector.VirtualEnvironment.StarrySky),
+                ("卧室", PhoneCoPresenceDirector.VirtualEnvironment.Bedroom),
+                ("海边", PhoneCoPresenceDirector.VirtualEnvironment.Seaside),
+            };
+            var row = new VisualElement();
+            row.AddToClassList("cp-chip-row");
+            foreach (var entry in envs)
+            {
+                bool current = director.CurrentEnvironment == entry.value;
+                var chip = new Label(entry.name);
+                chip.AddToClassList("cp-chip");
+                if (current)
+                {
+                    chip.AddToClassList("current");
+                }
+                var target = entry.value;
+                chip.RegisterCallback<ClickEvent>(_ =>
+                {
+                    director.SwitchEnvironment(target);
+                    RebuildEnvironmentChips();
+                });
+                row.Add(chip);
+            }
+            coPresenceSheet.Add(row);
+            var note = new Label("环境光照自动匹配角色亮度 · 物理与画质跟随设置");
+            note.AddToClassList("cp-note");
+            coPresenceSheet.Add(note);
+            // 虚拟场景是默认模式，从这里必须能到达模式选择，否则三模式成死路。
+            // 注意：必须强制切换到模式卡视图（toggle 语义在 sheet 已开时会变成纯关闭）。
+            var more = new Label("换种同框方式");
+            more.AddToClassList("cp-more");
+            more.RegisterCallback<ClickEvent>(_ => ShowModeCards());
+            coPresenceSheet.Add(more);
+        }
+
         private void ReturnToMenu()
         {
+            owner?.CoPresence?.Suspend();
+            HideCoPresenceSheets();
             ApplyMode(UiMode.Menu);
+            // 必须在 ApplyMode 之后：chrome 显隐依赖 mode == Scene，
+            // 早于 ApplyMode 调用会把通话 chrome 误判为 inScene 而重新显示。
+            UpdateCoPresenceChrome();
             RefreshModels(forceInvalidate: true);
             RefreshLogPreview();
         }

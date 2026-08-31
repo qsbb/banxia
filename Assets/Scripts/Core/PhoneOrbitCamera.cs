@@ -45,6 +45,42 @@ namespace QuestMmdPlayer
 
         public float Distance => distance;
 
+        /// <summary>轨道距离（夹到 [MinDistance, MaxDistance]）。供同框导演做胸像构图。</summary>
+        public float OrbitDistance
+        {
+            get => distance;
+            set
+            {
+                distance = Mathf.Clamp(value, MinDistance, MaxDistance);
+                ApplyTransform();
+            }
+        }
+
+        /// <summary>轨道目标点（只读快照）。</summary>
+        public Vector3 OrbitTargetPoint => orbitTarget;
+
+        /// <summary>水平环绕角（度）。供同框导演保存/恢复视角。</summary>
+        public float OrbitYawAngle
+        {
+            get => yaw;
+            set
+            {
+                yaw = value;
+                ApplyTransform();
+            }
+        }
+
+        /// <summary>俯仰角（度，夹到合法范围）。</summary>
+        public float OrbitPitchAngle
+        {
+            get => pitch;
+            set
+            {
+                pitch = Mathf.Clamp(value, MinPitch, MaxPitch);
+                ApplyTransform();
+            }
+        }
+
         private void Start()
         {
             cachedCamera = GetComponent<Camera>();

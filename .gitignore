@@ -48,3 +48,4 @@ quest_avatar_bridge.json
 # External motions are installed on-device or in persistent data, never committed by default.
 /Assets/StreamingAssets/Motions/
 *.vmd
+diagnostics/
