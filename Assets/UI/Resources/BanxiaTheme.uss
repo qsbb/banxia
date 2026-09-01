@@ -102,6 +102,21 @@
     margin: 26px 54px;
     padding: 6px 0;
 }
+.settings-back {
+    height: 220px;           /* 100 顶部安全留白 + 120 点击热区 */
+    flex-shrink: 0;
+    align-items: flex-end;   /* 文字落在热区底部（居中会跑到留白里） */
+    padding-left: 54px;
+    padding-bottom: 20px;
+    margin: 0;
+}
+.settings-back:hover {
+    background-color: rgba(120, 120, 128, 0.08);
+}
+.settings-back-label {
+    font-size: var(--fs-body);
+    color: var(--tint);
+}
 .group-header {
     flex-shrink: 0;
     font-size: var(--fs-footnote);

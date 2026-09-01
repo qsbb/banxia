@@ -71,22 +71,49 @@
 
 /* ── 按钮：iOS 胶囊 ── */
 .ds-btn {
-    height: 116px;
+    height: 120px;
     padding-left: 48px;
     padding-right: 48px;
-    border-radius: 999px;
+    /* Unity USS 按轴钳制 border-radius：999px 在非正方形上渲染成椭圆。
+       真胶囊必须精确取 height/2。 */
+    border-radius: 60px;
     font-size: var(--font-size-body-1);
 }
 .ds-btn--sm {
     height: 92px;
+    border-radius: 46px;
     font-size: var(--font-size-body-2);
 }
 .ds-btn--lg {
     height: 140px;
+    border-radius: 70px;
     font-size: var(--font-size-h3);
 }
 .ds-btn--block {
     align-self: stretch;
+}
+
+/* iOS 语义修正：secondary 应为灰玻璃底黑字（旧版 .btn 视觉语言），
+   蓝底只留给 primary，避免「满屏蓝按钮」。 */
+.ds-btn--secondary {
+    background-color: var(--glass);
+    color: var(--color-text-primary);
+    border-width: 0;
+    border-top-width: 3px;
+    border-top-color: var(--glass-edge-top);
+    border-bottom-width: 2px;
+    border-bottom-color: var(--glass-edge-bottom);
+    border-left-width: 2px;
+    border-left-color: var(--glass-edge-side);
+    border-right-width: 2px;
+    border-right-color: var(--glass-edge-side);
+}
+.ds-btn--secondary:hover {
+    background-color: var(--color-surface-hover);
+}
+.ds-btn--secondary:active,
+.ds-btn--secondary.ds-btn--pressed {
+    background-color: var(--glass-pressed);
 }
 
 /* ── 输入 ── */
@@ -102,14 +129,14 @@
 .ds-toggle .unity-toggle__checkmark {
     width: 132px;
     height: 80px;
-    border-radius: 999px;
+    border-radius: 40px;
 }
 .ds-toggle__knob {
     top: 7px;             /* (80 - 66) / 2 */
     left: 7px;
     width: 66px;
     height: 66px;
-    border-radius: 999px;
+    border-radius: 33px;
     box-shadow: none;
 }
 .ds-toggle:checked .ds-toggle__knob {
@@ -124,37 +151,37 @@
     height: 60px;
     padding-left: 26px;
     padding-right: 26px;
-    border-radius: 999px;
+    border-radius: 30px;
     font-size: var(--font-size-caption);
 }
 .ds-chip {
     height: 80px;
     padding-left: 36px;
     padding-right: 36px;
-    border-radius: 999px;
+    border-radius: 40px;
     font-size: var(--font-size-body-2);
 }
 
 /* ── Tab / 分段控件 ── */
 .ds-tabs {
-    border-radius: 999px;
+    border-radius: 56px;
     padding: 8px;
 }
 .ds-tab {
     height: 96px;
-    border-radius: 999px;
+    border-radius: 48px;
     font-size: var(--font-size-body-2);
 }
 
 /* ── 底部导航 ── */
 .ds-bottom-nav {
     height: 190px;
-    border-radius: 999px;
+    border-radius: 95px;
     padding: 10px;
 }
 .ds-bottom-nav__item {
     height: 150px;
-    border-radius: 999px;
+    border-radius: 75px;
 }
 .ds-bottom-nav__label {
     font-size: var(--font-size-caption);
@@ -172,7 +199,7 @@
 /* ── Toast / 进度 / 空态 ── */
 .ds-toast {
     min-height: 100px;
-    border-radius: 999px;
+    border-radius: 50px;
     padding-left: 40px;
     padding-right: 40px;
 }
@@ -186,13 +213,13 @@
 }
 .ds-progress .unity-progress-bar__container {
     height: 22px;
-    border-radius: 999px;
+    border-radius: 11px;
 }
 .ds-progress .unity-progress-bar__background {
-    border-radius: 999px;
+    border-radius: 11px;
 }
 .ds-progress .unity-progress-bar__progress {
-    border-radius: 999px;
+    border-radius: 11px;
 }
 .ds-empty__title {
     font-size: var(--font-size-h3);

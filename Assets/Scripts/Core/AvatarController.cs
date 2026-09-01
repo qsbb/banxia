@@ -307,7 +307,19 @@ namespace QuestMmdPlayer
             {
                 // Idle is the captured natural pose. Applying it before the
                 // transition lets an action return smoothly without a bind-pose pop.
-                RestoreActionPose();
+                // Blend window closed: stop writing the skeleton so the MMD
+                // physics solver and VMD playback own the bones. The old
+                // per-frame base restore fought the solver and looped the
+                // legs (bend-straight-bend flicker on physics-enabled models).
+                if (actionTransitionActive)
+                {
+                    RestoreActionPose();
+                }
+                else
+                {
+                    isPlaying = false;
+                    return;
+                }
             }
             ApplyActionTransition();
         }

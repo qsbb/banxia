@@ -46,7 +46,15 @@ namespace QuestMmdPlayer
             if (renderer != null)
             {
                 var material = new Material(FindDefaultShader());
+                // URP 项目 build 常剥离未被材质引用的 shader，
+                // Shader.Find 全空导致 renderer.material = null（全隐形）。
+                // 兜底链最后追加 Sprites/Default：URP 保留的内置 shader，
+                // 顶点色路径渲染纯色胶囊，保证 fallback 角色永远可见。
                 material.color = color;
+                if (material.shader == null)
+                {
+                    material.shader = Shader.Find("Sprites/Default");
+                }
                 renderer.material = material;
             }
         }
@@ -55,6 +63,7 @@ namespace QuestMmdPlayer
         {
             return Shader.Find("Universal Render Pipeline/Unlit")
                 ?? Shader.Find("Unlit/Texture")
+                ?? Shader.Find("Sprites/Default")
                 ?? Shader.Find("Standard");
         }
     }

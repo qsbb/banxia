@@ -65,6 +65,8 @@ namespace QuestMmdPlayer
         private VisualElement arPlaceHint;
         private bool arPlacedOnce;
         private double nextCallUiRefreshAt;
+        private VisualElement settingsRootList;
+        private readonly List<VisualElement> settingsDetailPages = new List<VisualElement>();
         private PhoneCoPresenceDirector.CoPresenceMode lastCoPresenceMode;
         private Action closeRequested;
 
@@ -1729,13 +1731,133 @@ namespace QuestMmdPlayer
         private void BuildSettingsPage()
         {
             var page = new VisualElement { style = { flexGrow = 1f } };
-            page.Add(MakeNavBar("设置", "连接、画质与诊断"));
+            settingsDetailPages.Clear();
+
+            // ── 二级详情页（内容与旧版逐条一致，收进各自页面）──
+            var connectionPage = MakeSettingsDetailPage("连接后端", "服务器地址与配对码", FillConnectionSection);
+            var qualityPage = MakeSettingsDetailPage("画质与物理", "渲染画质 · MMD 物理", FillQualitySection);
+            var generalPage = MakeSettingsDetailPage("通用", "HUD · 摄像头 · 帧率 · 音量", FillGeneralSection);
+            var performancePage = MakeSettingsDetailPage("设备性能", "实时性能采样", FillPerformanceSection);
+            var aboutPage = MakeSettingsDetailPage("关于", "版本 · 设备 · 内存", FillAboutSection);
+            var updatePage = MakeSettingsDetailPage("软件更新", "检查 GitHub Releases", FillUpdateSection);
+            var logPage = MakeSettingsDetailPage("运行诊断", "日志查看与清空", FillLogSection);
+            settingsDetailPages.AddRange(new[]
+            {
+                connectionPage, qualityPage, generalPage, performancePage,
+                aboutPage, updatePage, logPage,
+            });
+
+            // ── 一级：设置根列表（iOS Settings 式分组入口行）──
+            var rootList = new VisualElement { style = { flexGrow = 1f } };
+            rootList.Add(MakeNavBar("设置", "连接、画质与诊断"));
+            var rootScroll = new ScrollView();
+            rootScroll.AddToClassList("scroll");
+            EnableTouchDragScroll(rootScroll);
+            var sectionCard = new VisualElement();
+            sectionCard.AddToClassList("group");
+            sectionCard.AddToClassList("ds-card");
+            sectionCard.Add(MakeSettingsRow("连接后端", "服务器地址与配对码", () => ShowSettingsPage(connectionPage)));
+            sectionCard.Add(MakeSettingsRow("画质与物理", "渲染画质 · MMD 物理", () => ShowSettingsPage(qualityPage)));
+            sectionCard.Add(MakeSettingsRow("通用", "HUD · 摄像头 · 帧率 · 音量", () => ShowSettingsPage(generalPage)));
+            sectionCard.Add(MakeSettingsRow("设备性能", "实时性能采样", () => ShowSettingsPage(performancePage)));
+            sectionCard.Add(MakeSettingsRow("关于", "版本 · 设备 · 内存", () => ShowSettingsPage(aboutPage)));
+            sectionCard.Add(MakeSettingsRow("软件更新", "检查 GitHub Releases", () => ShowSettingsPage(updatePage)));
+            sectionCard.Add(MakeSettingsRow("运行诊断", "日志查看与清空", () => ShowSettingsPage(logPage)));
+            rootScroll.Add(sectionCard);
+            rootList.Add(rootScroll);
+            settingsRootList = rootList;
+
+            page.Add(rootList);
+            page.Add(connectionPage);
+            page.Add(qualityPage);
+            page.Add(generalPage);
+            page.Add(performancePage);
+            page.Add(aboutPage);
+            page.Add(updatePage);
+            page.Add(logPage);
+            tabPages[Tab.Settings] = page;
+            content.Add(page);
+            RefreshPairingCodeDisplay();
+        }
+
+        /// <summary>显示设置某个二级页（其余隐藏，含根列表）。</summary>
+        private void ShowSettingsPage(VisualElement page)
+        {
+
+            if (settingsRootList != null)
+            {
+                settingsRootList.style.display = DisplayStyle.None;
+            }
+            foreach (var detail in settingsDetailPages)
+            {
+                detail.style.display = detail == page ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+        }
+
+        /// <summary>返回设置根列表。</summary>
+        private void ShowSettingsRoot()
+        {
+            if (settingsRootList != null)
+            {
+                settingsRootList.style.display = DisplayStyle.Flex;
+            }
+            foreach (var detail in settingsDetailPages)
+            {
+                detail.style.display = DisplayStyle.None;
+            }
+        }
+
+        /// <summary>设置二级页骨架：返回行 + 导航标题 + 滚动容器，内容由 fill 填充。</summary>
+        private VisualElement MakeSettingsDetailPage(string title, string subtitle, Action<VisualElement> fill)
+        {
+            var detail = new VisualElement { style = { flexGrow = 1f, display = DisplayStyle.None } };
+            // 返回行：VisualElement + ClickEvent（绕开 Button 控件的全部默认
+            // USS——unity-button 的 flex 压缩曾把 120px 高度压成 16px）。
+            var back = new VisualElement();
+            back.AddToClassList("settings-back");
+            back.style.height = 220f;
+            back.style.flexShrink = 0f;
+            back.style.alignSelf = Align.Stretch;
+            back.style.paddingTop = 100f; // 顶部安全留白（其他页 navbar 从 y≈100 起）
+            var backLabel = new Label("< 设置");
+            backLabel.AddToClassList("settings-back-label");
+            back.Add(backLabel);
+            back.RegisterCallback<ClickEvent>(_ => ShowSettingsRoot());
+            detail.Add(back);
+            detail.Add(MakeNavBar(title, subtitle));
             var scroll = new ScrollView();
             scroll.AddToClassList("scroll");
             EnableTouchDragScroll(scroll);
+            fill(scroll);
+            detail.Add(scroll);
+            return detail;
+        }
 
-            // ── 连接后端（绑定服务器 IP + 配对码，从对话页迁移至此）──
-            scroll.Add(MakeGroupHeader("连接后端"));
+        /// <summary>设置根列表的一级行（标题 + 灰色摘要 + chevron）。</summary>
+        private static VisualElement MakeSettingsRow(string title, string subtitle, Action open)
+        {
+            var row = new VisualElement();
+            row.AddToClassList("row");
+            var label = new Label(title);
+            label.AddToClassList("row-label");
+            row.Add(label);
+            if (!string.IsNullOrEmpty(subtitle))
+            {
+                var hint = new Label(subtitle);
+                hint.AddToClassList("row-value");
+                row.Add(hint);
+            }
+            var chevron = new Label(">");
+            chevron.AddToClassList("row-chevron");
+            row.Add(chevron);
+            row.RegisterCallback<ClickEvent>(_ => open?.Invoke());
+            return row;
+        }
+
+        // ── 设置各二级页内容（从旧版单页逐条迁移）──
+
+        private void FillConnectionSection(VisualElement scroll)
+        {
             var pairingGroup = new VisualElement();
             pairingGroup.AddToClassList("group");
             pairingGroup.AddToClassList("ds-card");
@@ -1767,8 +1889,10 @@ namespace QuestMmdPlayer
             }));
             pairingGroup.Add(MakeButton("解除绑定", false, ClearPairingConfiguration, danger: true));
             scroll.Add(pairingGroup);
+        }
 
-            scroll.Add(MakeGroupHeader("画质与物理"));
+        private void FillQualitySection(VisualElement scroll)
+        {
             var qualityGroup = new VisualElement();
             qualityGroup.AddToClassList("group");
             qualityGroup.AddToClassList("ds-card");
@@ -1795,8 +1919,10 @@ namespace QuestMmdPlayer
                 owner?.Quality?.ResetToDefault();
                 RefreshSettingsUi();
             }));
+        }
 
-            scroll.Add(MakeGroupHeader("通用"));
+        private void FillGeneralSection(VisualElement scroll)
+        {
             var generalGroup = new VisualElement();
             generalGroup.AddToClassList("group");
             generalGroup.AddToClassList("ds-card");
@@ -1825,8 +1951,10 @@ namespace QuestMmdPlayer
                 new SegmentChoice("120", () => Application.targetFrameRate == 120, () => SetTargetFps(120))));
             generalGroup.Add(MakeSliderRow("音量", AudioListener.volume, value => AudioListener.volume = value));
             scroll.Add(generalGroup);
+        }
 
-            scroll.Add(MakeGroupHeader("设备性能"));
+        private void FillPerformanceSection(VisualElement scroll)
+        {
             var performanceGroup = new VisualElement();
             performanceGroup.AddToClassList("group");
             performanceGroup.AddToClassList("ds-card");
@@ -1834,8 +1962,10 @@ namespace QuestMmdPlayer
             settingsPerformanceText.AddToClassList("status-line");
             performanceGroup.Add(settingsPerformanceText);
             scroll.Add(performanceGroup);
+        }
 
-            scroll.Add(MakeGroupHeader("关于"));
+        private void FillAboutSection(VisualElement scroll)
+        {
             var aboutGroup = new VisualElement();
             aboutGroup.AddToClassList("group");
             aboutGroup.AddToClassList("ds-card");
@@ -1843,8 +1973,10 @@ namespace QuestMmdPlayer
             aboutGroup.Add(MakeInfoRow("设备", string.IsNullOrEmpty(SystemInfo.deviceModel) ? SystemInfo.deviceName : SystemInfo.deviceModel));
             aboutGroup.Add(MakeInfoRow("内存", SystemInfo.systemMemorySize + " MB"));
             scroll.Add(aboutGroup);
+        }
 
-            scroll.Add(MakeGroupHeader("软件更新"));
+        private void FillUpdateSection(VisualElement scroll)
+        {
             var updateGroup = new VisualElement();
             updateGroup.AddToClassList("group");
             updateGroup.AddToClassList("ds-card");
@@ -1861,8 +1993,10 @@ namespace QuestMmdPlayer
             updateGroup.Add(updateProgressRow);
             updateGroup.Add(MakeButton("检查更新", true, () => _ = CheckUpdateAsync()));
             scroll.Add(updateGroup);
+        }
 
-            scroll.Add(MakeGroupHeader("运行诊断"));
+        private void FillLogSection(VisualElement scroll)
+        {
             var logGroup = new VisualElement();
             logGroup.AddToClassList("group");
             logGroup.AddToClassList("ds-card");
@@ -1877,11 +2011,6 @@ namespace QuestMmdPlayer
                     RefreshLogPreview();
                 })));
             scroll.Add(logGroup);
-
-            page.Add(scroll);
-            tabPages[Tab.Settings] = page;
-            content.Add(page);
-            RefreshPairingCodeDisplay();
         }
 
         private void SetTargetFps(int fps)

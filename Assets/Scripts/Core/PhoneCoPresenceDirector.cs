@@ -315,14 +315,46 @@ namespace QuestMmdPlayer
             SaveOrbitState();
             if (orbitCamera != null)
             {
-                // 胸像构图：轨道目标 = 角色所在水平位置的胸高（MMD 角色 y≈1.15m），
-                // 距离 1.35m 产生半身特写；俯仰归零为平视通话感。
+                // 胸像构图按模型实际渲染包围盒自适应：胸口取身高 72% 处，
+                // 距离 = 身高 × 0.85（夹到可用范围）。旧的固定值（1.15m / 1.35m）
+                // 假设模型恰好 1.6m 高——偏高模型构图只剩下半身、偏矮模型只剩头。
+                var bustHeight = VideoCallBustHeight;
+                var bustDistance = VideoCallBustDistance;
+                if (avatarRoot != null)
+                {
+                    var bounds = PhoneOrbitCamera.ComputeRenderBounds(avatarRoot.gameObject);
+                    if (bounds.size.sqrMagnitude > 1e-8f)
+                    {
+                        bustHeight = bounds.min.y + bounds.size.y * 0.72f;
+                        bustDistance = Mathf.Clamp(bounds.size.y * 0.85f, 0.9f, 2.2f);
+                    }
+                }
                 var focus = avatarRoot != null
-                    ? new Vector3(avatarRoot.position.x, VideoCallBustHeight, avatarRoot.position.z)
-                    : new Vector3(0f, VideoCallBustHeight, 0f);
+                    ? new Vector3(avatarRoot.position.x, bustHeight, avatarRoot.position.z)
+                    : new Vector3(0f, bustHeight, 0f);
                 orbitCamera.SetOrbitTarget(focus);
                 orbitCamera.OrbitPitchAngle = 0f;
-                orbitCamera.OrbitDistance = VideoCallBustDistance;
+                // 归零环绕角并让角色面对镜头：通话开始必须正脸出镜。
+                // 旧实现保留进入前的 yaw（用户在虚拟场景转到角色侧面/背面后
+                // 切通话，竖屏窄 FOV 下角色直接出画 = 全屏只剩底色）。
+                if (avatarRoot != null)
+                {
+                    var forward = avatarRoot.forward;
+                    forward.y = 0f;
+                    if (forward.sqrMagnitude < 1e-4f)
+                    {
+                        forward = Vector3.forward;
+                    }
+                    // 相机在 focus 后方（-forward），角色要看向相机方向：
+                    var toCamera = (focus - Vector3.forward * bustDistance) - avatarRoot.position;
+                    toCamera.y = 0f;
+                    if (toCamera.sqrMagnitude > 1e-4f)
+                    {
+                        avatarRoot.rotation = Quaternion.LookRotation(toCamera.normalized, Vector3.up);
+                    }
+                }
+                orbitCamera.OrbitYawAngle = 0f;
+                orbitCamera.OrbitDistance = bustDistance;
             }
             callStartedAt = Time.unscaledTime;
         }

@@ -132,7 +132,8 @@ namespace QuestMmdPlayer
             ApplyTransform();
         }
 
-        private static Bounds ComputeRenderBounds(GameObject root)
+        /// <summary>合并根下全部 Renderer（跳过粒子）的世界包围盒，供取景与构图共享。</summary>
+        public static Bounds ComputeRenderBounds(GameObject root)
         {
             var bounds = default(Bounds);
             bool any = false;
