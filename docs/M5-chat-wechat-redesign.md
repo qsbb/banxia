@@ -80,7 +80,8 @@
 
 ### M5B 建议回复协议（双端）
 **Unity 侧**
-- `AstrBotProtocol.cs`：新增 case `"reply.suggestions"` → `ConversationEventType.ReplySuggestions`，解析 `suggestions`（≤3 条、各 ≤200 字符、strip）。
+- `AstrBotBridge.cs`：迟到建议帧放行——`reply.end` 会清空 `activeTurnId`，而建议在回合结束后异步生成到达；新增 `lastCompletedTurnId`（15s 宽限）+ `IsLateSuggestionForCompletedTurn`，仅对 `ReplySuggestions` 帧生效，其余迟到事件仍丢弃；新回合开始时清空。盲测中建议帧在 reply.end 后 ~300ms 到达，被 `ShouldDispatchTurn` 以 turn 不匹配静默丢弃——这是本修复的根因。
+`AstrBotProtocol.cs`：新增 case `"reply.suggestions"` → `ConversationEventType.ReplySuggestions`，解析 `suggestions`（≤3 条、各 ≤200 字符、strip）。
 - `ConversationStateMachine.cs`：存 `SuggestedReplies`（数组），收到新建议覆盖旧值；用户发送后清空。
 - `BanxiaUiShell.cs`：`AddQuickPhrases` 替换为 `BuildChatSuggestions`（3 条纵向、序号+文本、点击直发）；空时隐藏。
 

@@ -128,6 +128,12 @@ namespace QuestMmdPlayer
         private bool receivedReplyText;
         private string receivedErrorCode = string.Empty;
         private string activeTurnId = string.Empty;
+        // 最近一个已完成轮次：reply.suggestions 在 reply.end 之后由后端异步
+        // 补发（FastActionDecisionAdapter 同款模式），此时 activeTurnId 已清空，
+        // 需要宽限期让迟到的建议帧仍可分发；控制器侧另有 turn_id 精确校验兜底。
+        private string lastCompletedTurnId = string.Empty;
+        private float lastCompletedTurnAt;
+        private const float LateSuggestionGraceSeconds = 15f;
         private string currentTraceId = string.Empty;
         private int sseFramesReceived;
         private int sseFramesDispatched;
@@ -245,7 +251,8 @@ namespace QuestMmdPlayer
                 var queueDelayMs = ElapsedMs(frame.ReceivedAtTicks);
                 if (AstrBotProtocol.TryMapSseEventPooled(sessionId, frame.EventName, frame.Data, out var message, out var error))
                 {
-                    if (!ShouldDispatchTurn(message, activeTurnId))
+                    if (!ShouldDispatchTurn(message, activeTurnId) &&
+                        !IsLateSuggestionForCompletedTurn(message))
                     {
                         message.ReleasePcm16();
                         continue;
@@ -506,6 +513,7 @@ namespace QuestMmdPlayer
         public void StartTurn(string turnId, string userText, TurnImageAttachment attachment)
         {
             activeTurnId = string.Empty;
+            lastCompletedTurnId = string.Empty;
             CancelAudioUpload();
             ClearIncomingFrames();
             // Do not require the SSE stream to be attached before sending a
@@ -536,6 +544,7 @@ namespace QuestMmdPlayer
         public bool BeginAudioTurn(string turnId)
         {
             activeTurnId = string.Empty;
+            lastCompletedTurnId = string.Empty;
             // Do not require the SSE stream to be attached before sending an
             // audio turn. See the same comment in StartTurn for reasoning.
             if (!CanSend(turnId, true, false))
@@ -1208,6 +1217,20 @@ namespace QuestMmdPlayer
             // Generation zero is retained for deterministic parser/unit tests
             // and for frames injected by the local mock harness.
             return frameGeneration == 0L || frameGeneration == currentGeneration;
+        }
+
+        /// <summary>reply.suggestions 迟到帧判定：reply.end 已把 activeTurnId
+        /// 清空，但建议由后端在 turn 结束后异步生成（插件侧 6s 超时、静默失败），
+        /// 会在宽限期内继续到达。仅放行建议帧，其余迟到事件仍按旧规则丢弃。</summary>
+        private bool IsLateSuggestionForCompletedTurn(ConversationEvent message)
+        {
+            if (message == null || message.Type != ConversationEventType.ReplySuggestions)
+            {
+                return false;
+            }
+            return !string.IsNullOrEmpty(message.TurnId) &&
+                string.Equals(message.TurnId, lastCompletedTurnId, StringComparison.Ordinal) &&
+                Time.unscaledTime - lastCompletedTurnAt <= LateSuggestionGraceSeconds;
         }
 
         public static bool ShouldDispatchTurn(ConversationEvent message, string currentTurnId)
@@ -2131,6 +2154,11 @@ namespace QuestMmdPlayer
                 if (string.Equals(message.TurnId, activeTurnId, StringComparison.Ordinal))
                 {
                     activeTurnId = string.Empty;
+                }
+                if (message.Type == ConversationEventType.ReplyEnd)
+                {
+                    lastCompletedTurnId = message.TurnId ?? string.Empty;
+                    lastCompletedTurnAt = Time.unscaledTime;
                 }
             }
         }
