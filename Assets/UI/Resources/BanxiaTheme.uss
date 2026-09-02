@@ -382,16 +382,31 @@
 }
 
 /* ── 数字键盘（配对码）── */
+/*
+ * The four rows are structural. Key height/radius/font-size are injected from
+ * the measured panel height by BanxiaUiShell; USS only defines the layout
+ * contract and the visual state.
+ */
 .numpad {
+    flex-direction: column;
+    align-items: stretch;
+    margin: 20px 24px;
+}
+.numpad-row {
     flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: center;
-    margin: 20px 120px;
+    align-items: stretch;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+.numpad-row:last-child {
+    margin-bottom: 0;
 }
 .numpad-key {
-    width: 190px;
-    height: 150px;
-    border-radius: 75px;
+    width: auto;
+    min-width: 0;
+    height: auto;
+    min-height: 0;
+    border-radius: 0;
     background-color: var(--glass);
     border-top-width: 2px;    border-top-color: var(--glass-edge-top);
     border-bottom-width: 2px; border-bottom-color: var(--glass-edge-bottom);
@@ -399,18 +414,27 @@
     border-right-width: 2px;  border-right-color: var(--glass-edge-side);
     justify-content: center;
     align-items: center;
-    margin: 14px;
+    margin: 0 8px;
     transition-property: background-color, scale;
     transition-duration: 0.16s;
     transition-timing-function: ease-out;
+}
+.numpad-key:first-child {
+    margin-left: 0;
+}
+.numpad-key:last-child {
+    margin-right: 0;
 }
 .numpad-key:active {
     background-color: var(--glass-pressed);
     scale: 0.97;
 }
 .numpad-key-label {
+    width: 100%;
+    height: 100%;
     font-size: 60px;
     color: var(--label);
+    -unity-text-align: middle-center;
 }
 .code-dots {
     flex-direction: row;
@@ -794,10 +818,10 @@
 
 /* ═══ 同框三模式（虚拟场景 / 视频通话 / 同框现实 AR）═══ */
 
-/* 模式选择 / 环境 Sheet 遮罩 */
+/* 模式选择 / 环境 Sheet 遮罩（scrim：复用为弹层遮罩，0.4 与 QA 断言亮度阈值一致） */
 .cp-backdrop {
     position: absolute; inset: 0;
-    background-color: rgba(0, 0, 0, 0.32);
+    background-color: rgba(0, 0, 0, 0.4);
 }
 
 /* 模式选择 / 环境 Sheet 本体 */
@@ -811,7 +835,7 @@
     padding: 20px 42px 34px;
 }
 .cp-grabber {
-    height: 8px; width: 120px; border-radius: 999px;
+    height: 8px; width: 120px; border-radius: 4px;
     background-color: var(--glass);
     align-self: center; margin-bottom: 14px;
 }
@@ -832,7 +856,8 @@
     margin-bottom: 12px;
 }
 .cp-card.current {
-    border-color: rgba(0, 122, 255, 0.45);
+    border-width: 2px;
+    border-color: var(--tint);              /* iOS 蓝 2px 轻量描边（替代大块蓝底） */
 }
 .cp-card.disabled {
     opacity: 0.45;
@@ -862,7 +887,7 @@
 }
 .cp-chip {
     background-color: var(--glass);
-    border-radius: 999px;
+    border-radius: 40px;
     border-width: 2px;
     border-color: rgba(0, 0, 0, 0.06);
     color: var(--label-secondary);
@@ -916,7 +941,7 @@
     margin: 56px 54px 0;
 }
 .call-dot {
-    width: 24px; height: 24px; border-radius: 999px;
+    width: 24px; height: 24px; border-radius: 12px;
     background-color: var(--green);
     margin-right: 22px;
 }
@@ -953,7 +978,7 @@
 }
 .call-btn {
     background-color: var(--glass-chrome);
-    border-radius: 999px;
+    border-radius: 56px;
     border-width: 2px;
     border-top-color: var(--glass-edge-top-strong);
     border-bottom-color: var(--glass-edge-bottom);
