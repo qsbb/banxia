@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  BanxiaFlutterHost Android library manifest.
+
+  This .androidlib is a reflection-based host for the OPTIONAL Flutter 2D
+  overlay shell. It deliberately declares NO activities: UnityPlayerActivity
+  (from Assets/Plugins/Android/AndroidManifest.xml) remains the single
+  launcher. The Flutter surface is a FlutterView added to the Unity player at
+  runtime (BanxiaFlutterHost.attachToUnityPlayer) or, for a FragmentActivity
+  host, a FlutterFragment added via the fragment manager. No FlutterActivity is
+  used, so no second LAUNCHER intent-filter ever enters the merged manifest.
+
+  The Java host compiles and runs with or without the Flutter embedding AAR.
+  Actual Flutter rendering requires the generated AOT assets documented in the
+  README next to this file:
+
+    - flutter_embedding_release.aar  -> Assets/Plugins/Android/flutter_embedding_release.aar
+    - libflutter.so                  -> Assets/Plugins/Android/<abi>/libflutter.so
+    - libapp.so (Dart AOT snapshot)  -> Assets/Plugins/Android/<abi>/libapp.so
+    - flutter_assets/                -> Assets/StreamingAssets/flutter_assets/
+    - icudtl.dat                     -> Assets/StreamingAssets/icudtl.dat
+
+  Without those artifacts the engine is created but never runs a Dart isolate;
+  the host reports an "unavailable" state instead of crashing.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.lingxi.banxia.flutter">
+    <!-- Nothing to declare: no permissions, no activities, no services.
+         The Flutter engine runs inside the existing UnityPlayerActivity. -->
+    <application />
+</manifest>

@@ -49,3 +49,5 @@ quest_avatar_bridge.json
 /Assets/StreamingAssets/Motions/
 *.vmd
 diagnostics/
+__pycache__/
+*.pyc

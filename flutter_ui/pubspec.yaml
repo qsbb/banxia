@@ -1,0 +1,25 @@
+name: banxia_flutter_ui
+description: >-
+  Banxia shared Flutter UI shell. A 2D overlay + command surface over the Unity
+  engine core, porting the M1-M3 semantics (framing grid, modal sheet
+  ownership, derived 3x4 pairing keypad) to Flutter. No third-party deps.
+publish_to: 'none'
+version: 0.3.2+1
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  module:
+    androidX: true
+    androidPackage: com.lingxi.banxia.flutter_ui
+    iosBundleIdentifier: com.lingxi.banxiaFlutterUi

@@ -27,12 +27,18 @@ namespace QuestMmdPlayer
         public string DisplayName { get; }
         public string Path { get; }
         public string PackageRoot { get; }
+        public long ByteLength { get; }
 
-        public RuntimeMmdModelInfo(string displayName, string path, string packageRoot = null)
+        public RuntimeMmdModelInfo(
+            string displayName,
+            string path,
+            string packageRoot = null,
+            long byteLength = 0)
         {
             DisplayName = displayName ?? string.Empty;
             Path = path ?? string.Empty;
             PackageRoot = packageRoot ?? System.IO.Path.GetDirectoryName(Path) ?? string.Empty;
+            ByteLength = Math.Max(0L, byteLength);
         }
     }
 
@@ -338,7 +344,8 @@ namespace QuestMmdPlayer
                 results.Add(new RuntimeMmdModelInfo(
                     displayName,
                     candidate.Path,
-                    candidate.PackageRoot));
+                    candidate.PackageRoot,
+                    candidate.Length));
             }
             return results;
         }

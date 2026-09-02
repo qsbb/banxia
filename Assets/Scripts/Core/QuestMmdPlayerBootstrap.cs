@@ -14,6 +14,8 @@ namespace QuestMmdPlayer
         [SerializeField] private bool createLightIfMissing = true;
         [SerializeField] private bool createFallbackAvatar = true;
         [SerializeField] private bool createPrototypeHud = true;
+        [SerializeField] private bool enableFlutterUi = true;
+        [SerializeField] private bool allowLegacyUiFallback = true;
         [SerializeField] private bool createTouchInteraction = true;
         [SerializeField] private bool createHumanInteraction = true;
         [SerializeField] private bool createConversationPrototype = true;
@@ -48,9 +50,20 @@ namespace QuestMmdPlayer
         public RuntimeDebugLog DebugLog { get; private set; }
         public RuntimePerformanceMonitor Performance { get; private set; }
 
+        /// <summary>Shared Flutter UI transport used by both phone and Quest builds.</summary>
+        public BanxiaFlutterBridge FlutterBridge { get; private set; }
+        /// <summary>Shared command/event adapter for Flutter's platform-neutral shell.</summary>
+        public FlutterUiFacade FlutterUi { get; private set; }
+        /// <summary>Quest-only offscreen compositor seam; false until texture composition is wired.</summary>
+        public QuestFlutterTextureHost QuestFlutterTexture { get; private set; }
+        public bool FlutterUiActive { get; private set; }
+        public string FlutterUiStatus { get; private set; } = "未初始化";
+
         /// <summary>Phone-form orbit camera (BANXIA_PHONE builds only).</summary>
         public PhoneOrbitCamera OrbitCamera { get; private set; }
-        public PhoneCoPresenceDirector CoPresence { get; private set; }
+        public ICoPresenceDirector CoPresence { get; private set; }
+        public PhoneCoPresenceDirector PhoneCoPresence { get; private set; }
+        public ICoPresenceDirector SharedCoPresence => CoPresence;
         /// <summary>Phone-form on-screen diagnostics overlay (BANXIA_PHONE builds only).</summary>
         public PhoneDiagnosticsHud PhoneHud { get; private set; }
         /// <summary>Phone-form iOS-style UI Toolkit shell (BANXIA_PHONE builds only).</summary>
@@ -59,6 +72,8 @@ namespace QuestMmdPlayer
         private RuntimeMmdModelLoader runtimeMmdLoader;
         private AvatarController fallbackAvatar;
         private bool androidTaskLabelLogged;
+        private Coroutine flutterInitializationRoutine;
+        private bool flutterShutdownRequested;
 
         private void Awake()
         {
@@ -103,6 +118,7 @@ namespace QuestMmdPlayer
                 VoiceInput.Bind(Conversation);
             }
 #if !BANXIA_PHONE
+            EnsureQuestCoPresence();
             if (createVrLocomotion)
             {
                 Locomotion = gameObject.GetComponent<QuestVrLocomotion>() ?? gameObject.AddComponent<QuestVrLocomotion>();
@@ -149,29 +165,162 @@ namespace QuestMmdPlayer
             }
 
             BindInteractions();
+#if BANXIA_PHONE
+            // The scene may already contain an avatar before the loader emits its
+            // first event. Apply the same camera/co-presence wiring immediately.
+            AttachAvatarToPhonePresentation(Avatar);
+#endif
 
             if (createPrototypeHud)
             {
 #if BANXIA_PHONE
-                // Phone form: the high-quality iOS-style UI Toolkit shell replaces
-                // the old IMGUI home menu. Diagnostics HUD is kept as a scene overlay.
+                // The Flutter module is the primary phone shell. Keep only the
+                // diagnostics HUD here; the legacy UI Toolkit is created lazily
+                // when the native host explicitly reports that Flutter is absent.
                 PhoneHud = gameObject.GetComponent<PhoneDiagnosticsHud>() ?? gameObject.AddComponent<PhoneDiagnosticsHud>();
                 PhoneHud.Bind(Performance, DiagnosticsReporter);
-                UiShell = gameObject.GetComponent<BanxiaUiShell>() ?? gameObject.AddComponent<BanxiaUiShell>();
-                UiShell.Bind(this, runtimeMmdLoader, FileImport, DebugLog);
-                UiShell.BindHud(PhoneHud);
-#else
-                WorldUi = gameObject.GetComponent<BanxiaQuestWorldUiHost>() ?? gameObject.AddComponent<BanxiaQuestWorldUiHost>();
-                WorldUi.Initialize(this);
+                PhoneHud.BindFraming(CoPresence);
+#elif UNITY_EDITOR
+                // Editor has no Android Flutter engine. The legacy surface remains
+                // an editor preview only; device builds use the shared Flutter shell.
                 Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
                 Menu.Initialize(this);
-#if UNITY_EDITOR
                 var hud = gameObject.GetComponent<PrototypeHud>() ?? gameObject.AddComponent<PrototypeHud>();
                 hud.Initialize(this);
-#endif
+#else
+                // Quest's hardware-only menu remains available for device-exclusive
+                // entries. The shared common-workflow panel is created in
+                // InitializeFlutterUi so it also exists when this prototype HUD
+                // toggle is disabled.
+                Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
+                Menu.Initialize(this);
 #endif
                 BindInteractions();
             }
+
+            InitializeFlutterUi();
+        }
+
+        private void InitializeFlutterUi()
+        {
+            FlutterUiStatus = enableFlutterUi ? "初始化中" : "已禁用";
+            FlutterUiActive = false;
+            if (!enableFlutterUi)
+            {
+                CreateLegacyUiFallback("Flutter UI 已在 Bootstrap 中禁用");
+                return;
+            }
+
+#if !BANXIA_PHONE
+            // The common Quest panel is the explicit fallback until the Flutter
+            // offscreen compositor has a verified texture and input path.
+            WorldUi = gameObject.GetComponent<BanxiaQuestWorldUiHost>() ?? gameObject.AddComponent<BanxiaQuestWorldUiHost>();
+            WorldUi.Initialize(this);
+#endif
+
+            FlutterBridge = gameObject.GetComponent<BanxiaFlutterBridge>() ?? gameObject.AddComponent<BanxiaFlutterBridge>();
+            FlutterUi = gameObject.GetComponent<FlutterUiFacade>() ?? gameObject.AddComponent<FlutterUiFacade>();
+            FlutterBridge.Bind(FlutterUi);
+            FlutterUi.Bind(FlutterBridge, this);
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+            flutterInitializationRoutine = StartCoroutine(InitializeFlutterNativeHost());
+#elif UNITY_EDITOR
+            FlutterUiStatus = "编辑器预览（无 Android Flutter host）";
+            CreateLegacyUiFallback(FlutterUiStatus);
+#else
+            QuestFlutterTexture = gameObject.GetComponent<QuestFlutterTextureHost>() ?? gameObject.AddComponent<QuestFlutterTextureHost>();
+            FlutterUiStatus = QuestFlutterTexture.IsSupported
+                ? "Quest compositor 已连接"
+                : QuestFlutterTexture.Status;
+            if (!QuestFlutterTexture.IsSupported)
+            {
+                CreateLegacyUiFallback(FlutterUiStatus);
+            }
+#endif
+        }
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        private System.Collections.IEnumerator InitializeFlutterNativeHost()
+        {
+            // UnitySendMessage and Android view attachment are asynchronous from
+            // Unity's startup callback; wait one frame before asking JNI for the
+            // current UnityPlayerActivity.
+            yield return null;
+            if (flutterShutdownRequested || FlutterBridge == null)
+            {
+                yield break;
+            }
+
+#if BANXIA_PHONE
+            var ready = FlutterBridge.InitializeNativeHost(attachPhoneView: true);
+#else
+            // Quest has no phone window surface. Start only the shared engine;
+            // the actual world-space Flutter compositor owns a separate gate.
+            var ready = FlutterBridge.InitializeNativeHost(attachPhoneView: false);
+#endif
+            var state = FlutterBridge.NativeStateJson();
+            if (ready)
+            {
+#if BANXIA_PHONE
+                FlutterUiActive = true;
+                FlutterUiStatus = "FlutterView 已挂载";
+                Debug.Log("[BanxiaFlutter] Phone Flutter UI attached: " + state, this);
+#else
+                QuestFlutterTexture = gameObject.GetComponent<QuestFlutterTextureHost>() ?? gameObject.AddComponent<QuestFlutterTextureHost>();
+                FlutterUiStatus = QuestFlutterTexture.IsSupported
+                    ? "Quest compositor 已连接"
+                    : "Flutter host 已初始化；Quest 纹理合成待完成";
+                // Engine readiness alone is not UI readiness on Quest. Keep the
+                // proven world-space fallback visible until texture composition,
+                // frame synchronization, and XR pointer forwarding all pass QA.
+                if (!QuestFlutterTexture.IsSupported)
+                {
+                    CreateLegacyUiFallback(FlutterUiStatus);
+                }
+                else
+                {
+                    FlutterUiActive = true;
+                }
+                Debug.Log("[BanxiaFlutter] Quest Flutter host state: " + state, this);
+#endif
+                yield break;
+            }
+
+            FlutterUiStatus = "Flutter host 不可用：" + state;
+            CreateLegacyUiFallback(FlutterUiStatus);
+            Debug.LogWarning("[BanxiaFlutter] Shared Flutter UI unavailable; using explicit legacy fallback: " + state, this);
+        }
+#endif
+
+        private void CreateLegacyUiFallback(string reason)
+        {
+            if (!allowLegacyUiFallback)
+            {
+                FlutterUiStatus = reason;
+                Debug.LogWarning("[BanxiaFlutter] Legacy UI fallback disabled: " + reason, this);
+                return;
+            }
+
+            FlutterUiStatus = reason;
+#if BANXIA_PHONE
+            if (UiShell == null)
+            {
+                UiShell = gameObject.GetComponent<BanxiaUiShell>() ?? gameObject.AddComponent<BanxiaUiShell>();
+                UiShell.Bind(this, runtimeMmdLoader, FileImport, DebugLog);
+                if (PhoneHud != null)
+                {
+                    UiShell.BindHud(PhoneHud);
+                }
+            }
+#elif !UNITY_EDITOR
+            if (Menu == null)
+            {
+                Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
+                Menu.Initialize(this);
+            }
+#endif
+            BindInteractions();
         }
 
         private void OnApplicationFocus(bool hasFocus)
@@ -180,6 +329,18 @@ namespace QuestMmdPlayer
             {
                 ApplyAndroidTaskLabel();
             }
+        }
+
+        private void OnDestroy()
+        {
+            flutterShutdownRequested = true;
+            if (flutterInitializationRoutine != null)
+            {
+                StopCoroutine(flutterInitializationRoutine);
+                flutterInitializationRoutine = null;
+            }
+            FlutterUi?.Unbind();
+            FlutterBridge?.ShutdownNativeHost();
         }
 
         private void ApplyAndroidTaskLabel()
@@ -368,6 +529,7 @@ namespace QuestMmdPlayer
             {
                 Outline.Bind(Avatar);
             }
+            CoPresence?.SetAvatar(Avatar != null ? Avatar.transform : null);
         }
         private void EnsureCamera()
         {
@@ -381,12 +543,10 @@ namespace QuestMmdPlayer
                 OrbitCamera = existing.GetComponent<PhoneOrbitCamera>()
                     ?? existing.gameObject.AddComponent<PhoneOrbitCamera>();
                 OrbitCamera.SetOrbitTarget(avatarStartPosition);
-                CoPresence = existing.GetComponent<PhoneCoPresenceDirector>();
-                if (CoPresence == null)
-                {
-                    CoPresence = existing.gameObject.AddComponent<PhoneCoPresenceDirector>();
-                    CoPresence.Initialize(existing, OrbitCamera);
-                }
+                PhoneCoPresence = existing.GetComponent<PhoneCoPresenceDirector>() ??
+                    existing.gameObject.AddComponent<PhoneCoPresenceDirector>();
+                CoPresence = PhoneCoPresence;
+                PhoneCoPresence.Initialize(existing, OrbitCamera);
                 return;
             }
 #endif
@@ -406,24 +566,45 @@ namespace QuestMmdPlayer
 #if BANXIA_PHONE
             OrbitCamera = cameraObject.AddComponent<PhoneOrbitCamera>();
             OrbitCamera.SetOrbitTarget(avatarStartPosition);
-            CoPresence = cameraObject.AddComponent<PhoneCoPresenceDirector>();
-            CoPresence.Initialize(camera, OrbitCamera);
+            PhoneCoPresence = cameraObject.AddComponent<PhoneCoPresenceDirector>();
+            CoPresence = PhoneCoPresence;
+            PhoneCoPresence.Initialize(camera, OrbitCamera);
 #endif
         }
 
 #if BANXIA_PHONE
         private void HandlePhoneAvatarLoaded(AvatarController avatar)
         {
-            if (avatar == null || OrbitCamera == null)
+            AttachAvatarToPhonePresentation(avatar);
+        }
+
+        private void AttachAvatarToPhonePresentation(AvatarController avatar)
+        {
+            if (avatar == null)
             {
                 return;
             }
-            OrbitCamera.SetTrackedAvatar(avatar.transform);
-            OrbitCamera.FrameModel(avatar.gameObject);
-            if (CoPresence != null)
+            if (OrbitCamera != null)
             {
-                CoPresence.SetAvatar(avatar.transform);
+                OrbitCamera.SetTrackedAvatar(avatar.transform);
+                OrbitCamera.FrameModel(avatar.gameObject);
             }
+            CoPresence?.SetAvatar(avatar.transform);
+        }
+#endif
+
+#if !BANXIA_PHONE
+        private void EnsureQuestCoPresence()
+        {
+            var camera = Camera.main;
+            if (camera == null)
+            {
+                return;
+            }
+            var adapter = camera.GetComponent<QuestCoPresenceDirector>() ??
+                camera.gameObject.AddComponent<QuestCoPresenceDirector>();
+            adapter.Initialize(camera);
+            CoPresence = adapter;
         }
 #endif
 

@@ -1,0 +1,9 @@
+.dart_tool/
+.pub/
+build/
+.android/
+.ios/
+.ios/Flutter/Generated.xcconfig
+.ios/Flutter/flutter_export_environment.sh
+.flutter-plugins
+.flutter-plugins-dependencies
