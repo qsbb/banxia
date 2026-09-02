@@ -265,6 +265,55 @@ banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落
   `autoRestoreOnStart` 开关在平台无关层（RuntimeMmdModelLoader），
   双端语义一致，仅策略不同（Quest=true 直达，Phone=false 进主界面）。
 
+- [ ] **Quest 端三模式构图同步（复用 CallFramingSolver）**（M1，2026-09-01）：
+  通话/全身构图闭式解落为平台无关求解器 `Assets/Scripts/Core/CallFramingSolver.cs`
+  （纯投影几何，无 `#if BANXIA_PHONE`，`SolveBust`/`SolveFullBody` 静态函数 +
+  语义锚点链 + chrome insets 注入）。Quest 端三模式 UI（视频通话胸像 /
+  虚拟场景全身像）接入时复用同一求解器，不得另写一套构图逻辑。
+- [ ] **弹层层级规则（Quest 等价物，待统一）**（M2，2026-09-01）：
+  手机端弹层状态机（遮罩 + 控件让位 +「模态 = 所有权转移」）属手机壳层
+  （Quest 无触屏 sheet），不需同步实现；其 Quest 等价物 = 菜单面板层级规则
+  （CompanionWorldMenu / BanxiaQuestWorldUiHost），待统一为同一套层级所有权约定。
+- [x] **配对 numpad（Flutter 共享壳层，双端同用）**（M3，2026-09-02 更新）：
+  3×4 键盘随 Flutter 壳层迁为双端共享的 `flutter_ui/lib/scene/pairing_numpad.dart`
+  （`1..9 / ⌫ 0 ✓`），保留 6 位「清/0/退」语义：清 = ⌫ 长按(≥600ms)、0 = 0 键、
+  退 = ⌫ 短按（映射 `pairing.digit{op:clear|append|remove}`）；提交为**独立显式校验**
+  （✓ → AppState 校验满 6 位，不足走既有 toast「请输入完整的 6 位配对码」，再
+  `pairing.pair` → 引擎 `PairWithCode`）。原「Android UI Toolkit 软键盘替代」的手机
+  壳层不同步理由随 Flutter 统一壳层失效。
+
+### Flutter 共享壳层（双端同一 UI，迁移中 · 2026-09-02）
+
+本轮起「平台壳层」由 UI Toolkit 重构为 **双端共享的 Flutter 壳层**（`flutter_ui/`，
+设计 `docs/plans/flutter-ui-module-design.md`）：手机与 Quest 跑**同一套 Flutter UI**
+（RootShell + 底部 Tab + 场景 Overlay），3D 场景/物理/对话/动画仍留在引擎核心，二者
+经 JSON 桥（MethodChannel/EventChannel）通信。原 UI Toolkit `BanxiaUiShell`、IMGUI
+`CompanionWorldMenu`、世界面板 `BanxiaQuestWorldUiHost` 由 Flutter 统一取代；Quest
+独占硬件入口（重新放置/站立校准/彩色透视/扫描房间等）经平台门控 `WorldMenuExtension`
+注入，业务能力不重复实现。
+
+- **Quest 呈现 = 纹理/世界面板**：Quest 把 UI 渲染进一张纹理再贴到世界空间面板
+  （四边形 + 碰撞体，指针射线交互）。UI Toolkit 版 `BanxiaQuestWorldUiHost`
+  （`PanelSettings.targetTexture` → RenderTexture → 世界面板）已实现；Flutter 版
+  `Assets/Scripts/Flutter/QuestFlutterTextureHost.cs` 目前**仅是编译安全接缝**
+  （`IsSupported=false`、不分配纹理、`TryBegin` 恒返回 false）——离屏 Quest→Flutter
+  纹理渲染尚未实现，**这是 Quest 端当前纹理限制**。
+
+**迁移门（诚实清单，2026-09-02）**：
+- [x] 设计文档 `docs/plans/flutter-ui-module-design.md`
+- [x] Unity 桥传输 `BanxiaFlutterBridge.cs` + 线协议 `FlutterMessageProtocol.cs`（含测试）
+- [x] 引擎命令处理器 `FlutterUiFacade.cs`（命令 → 既有组件；自持 6 位配对缓冲）
+- [x] Dart 壳骨架 `flutter_ui/`（RootShell + companion/chat/actions/settings 屏 +
+      scene_overlay + app_state + bridge + M1 framing_grid + M3 pairing_numpad）
+- [x] Android 反射宿主 `Assets/Plugins/Android/banxia_flutter.androidlib/`
+      （无 Flutter Gradle 插件也能编译；缺 embedding 时报告 `available:false`）
+- [ ] **Quest 离屏 → Flutter 纹理渲染**（`QuestFlutterTextureHost` 真实实现，当前仅接缝）
+- [ ] **Flutter 构建集成**（生成并放置 embedding AAR + `libapp.so`/`libflutter.so`/
+      `flutter_assets/`/`icudtl.dat`；`mainTemplate.gradle` 模板已就位但未接线）——
+      未完成，Dart isolate 尚未运行、Flutter UI 尚未实际渲染
+- [ ] **旧壳下线**：UI Toolkit `BanxiaUiShell` / IMGUI `CompanionWorldMenu` /
+      世界面板 `BanxiaQuestWorldUiHost` 仍为在线 UI，尚未被 Flutter 替换
+
 ## 4. 风险与对策
 
 | 风险 | 评估 | 对策 |
@@ -305,7 +354,8 @@ banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落
 - **待同步（Quest）**：虚拟环境四预设（夜街/星空/卧室/海边）的环境定义（背景色/地板/灯光参数）应与
   Quest 世界面板共用一份描述（当前硬编码在 PhoneCoPresenceDirector.ApplyEnvironmentVisuals，
   Quest 侧接入时提为共享 ScriptableObject）；「视频通话半身」在 Quest 端语义 = 虚拟场景胸像构图
-  + 字幕条（Quest 世界 UI Host 已有面板），属非独占功能，须同步。
+  + 字幕条（Quest 世界 UI Host 已有面板），属非独占功能，须同步——其构图闭式解本轮 M1 已落为
+  平台无关 `CallFramingSolver`，Quest 接入时复用同一求解器（详见上方「待同步清单」）。
 - **独占判定**：同框现实（后置相机 AR 背景 + 点地放置）为手机独占呈现层；Quest 本身即 MR 真AR
   （Passthrough + 房间理解），无需移植。
 - 端点协议零分支：三种模式只是呈现层，对话/动作/表情全模式可用。
