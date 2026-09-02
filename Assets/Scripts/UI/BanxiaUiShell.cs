@@ -2170,12 +2170,12 @@ namespace QuestMmdPlayer
             pairingGroup.Add(pairingStatusLabel);
             pairingGroup.Add(MakeButton("连接后端", true, TryPair));
             pairingGroup.Add(MakeButtonRow(
-                MakeButton("重新连接", false, () =>
+                MakeSmallButton("重新连接", false, () =>
                 {
                     owner?.AstrBot?.ReloadConfiguration();
                     ShowToast("正在重新连接后端");
                 }),
-                MakeButton("解除绑定", false, ClearPairingConfiguration, danger: true)));
+                MakeSmallButton("解除绑定", true, ClearPairingConfiguration)));
             scroll.Add(pairingGroup);
             // 首次（无已存服务器地址）自动展开键盘，已绑定用户默认收起。
             SetPairingNumpadExpanded(string.IsNullOrEmpty(owner?.Pairing?.PairingServerEndpoint));
@@ -3122,7 +3122,14 @@ namespace QuestMmdPlayer
             row.AddToClassList("btn-row");
             foreach (var button in buttons)
             {
+                // M5：等分修复。旧写法只设 flexGrow，Yoga 的 basis 仍是内容宽，
+                // 两个按钮会按“内容+均分剩余”而不是“各半”分布；基础布局（ds-btn
+                // 大按钮）下第二枚被挤成 144px 桩、标签不可见且行右溢出。
+                // basis 归零后 grow 才是真正的等分。
                 button.style.flexGrow = 1f;
+                button.style.flexShrink = 1f;
+                button.style.flexBasis = 0f;
+                button.style.minWidth = 0f;
                 row.Add(button);
             }
             return row;
