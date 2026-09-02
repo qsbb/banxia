@@ -60,17 +60,24 @@ namespace QuestMmdPlayer
         private VisualElement coPresenceSheet;
         private VisualElement coPresenceBackdrop;
         private VisualElement videoCallChrome;
+        private VisualElement callTopChrome;
+        private VisualElement callControls;
         private Label videoCallTimerLabel;
+        private float lastChromeTopPx = -1f;
+        private float lastChromeBottomPx = -1f;
+        private float lastPairingKeyHeight = -1f;
+        private bool pairingNumpadLayoutLogged;
         private Label videoCallSubtitleLabel;
         private VisualElement arPlaceHint;
         private bool arPlacedOnce;
         private double nextCallUiRefreshAt;
         private VisualElement settingsRootList;
         private readonly List<VisualElement> settingsDetailPages = new List<VisualElement>();
-        private PhoneCoPresenceDirector.CoPresenceMode lastCoPresenceMode;
+        private CoPresenceMode lastCoPresenceMode;
         private Action closeRequested;
 
         private UIDocument document;
+        private VisualElement panelRoot;
         private VisualElement shellRoot;
         private VisualElement mainUi;
         private VisualElement content;
@@ -199,6 +206,8 @@ namespace QuestMmdPlayer
             hud = diagnosticsHud;
             if (hud != null)
             {
+                hud.BindFraming(owner?.CoPresence);
+                hud.SetFramingGridVisible(PlayerPrefs.GetInt(PrefsPrefix + "framing-grid", 0) == 1);
                 hud.SetVisible(false);
             }
         }
@@ -488,6 +497,7 @@ namespace QuestMmdPlayer
             if (mode == UiMode.Scene)
             {
                 HandleCoPresenceFrame();
+                PushChromeInsets();
             }
             if (Time.unscaledTime < nextPollAt)
             {
@@ -510,7 +520,7 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            var panelRoot = document.rootVisualElement;
+            panelRoot = document.rootVisualElement;
             if (panelRoot == null)
             {
                 return;
@@ -1061,15 +1071,86 @@ namespace QuestMmdPlayer
         {
             var pad = new VisualElement();
             pad.AddToClassList("numpad");
-            for (int i = 1; i <= 9; i++)
-            {
-                int digit = i;
-                pad.Add(MakeNumpadKey(digit.ToString(), () => AppendPairingDigit(digit.ToString())));
-            }
-            pad.Add(MakeNumpadKey("清", ClearPairingCode));
-            pad.Add(MakeNumpadKey("0", () => AppendPairingDigit("0")));
-            pad.Add(MakeNumpadKey("退", RemovePairingDigit));
+            AddPairingNumpadRow(pad, "123");
+            AddPairingNumpadRow(pad, "456");
+            AddPairingNumpadRow(pad, "789");
+            var utilityRow = new VisualElement();
+            utilityRow.AddToClassList("numpad-row");
+            utilityRow.Add(MakeNumpadKey("清", ClearPairingCode));
+            utilityRow.Add(MakeNumpadKey("0", () => AppendPairingDigit("0")));
+            utilityRow.Add(MakeNumpadKey("退", RemovePairingDigit));
+            pad.Add(utilityRow);
+            pad.RegisterCallback<GeometryChangedEvent>(_ => ApplyPairingNumpadLayout(pad));
             parent.Add(pad);
+            ApplyPairingNumpadLayout(pad);
+        }
+
+        private void AddPairingNumpadRow(VisualElement pad, string digits)
+        {
+            var row = new VisualElement();
+            row.AddToClassList("numpad-row");
+            for (int i = 0; i < digits.Length; i++)
+            {
+                var digit = digits[i].ToString();
+                row.Add(MakeNumpadKey(digit, () => AppendPairingDigit(digit)));
+            }
+            pad.Add(row);
+        }
+
+        private void ApplyPairingNumpadLayout(VisualElement pad)
+        {
+            if (pad == null)
+            {
+                return;
+            }
+            float panelHeight = panelRoot != null ? panelRoot.worldBound.height : 0f;
+            if (panelHeight <= 1f)
+            {
+                panelHeight = pad.panel != null ? pad.panel.visualTree.worldBound.height : 0f;
+            }
+            if (panelHeight <= 1f)
+            {
+                return;
+            }
+
+            // Use panel logical units, then derive the physical target from the
+            // actual panel-to-screen scale. This keeps the 1/16 screen-height rule
+            // stable on both the 1440x3200 device and the 1080x2340 emulator.
+            float physicalHeight = Screen.height;
+            float pixelsPerPanelUnit = physicalHeight / panelHeight;
+            if (pixelsPerPanelUnit <= 0f)
+            {
+                return;
+            }
+            float keyHeight = (physicalHeight / 16f) / pixelsPerPanelUnit;
+            if (keyHeight <= 1f || Mathf.Abs(keyHeight - lastPairingKeyHeight) < 0.5f)
+            {
+                return;
+            }
+            lastPairingKeyHeight = keyHeight;
+            pad.Query<VisualElement>(className: "numpad-key").ForEach(key =>
+            {
+                key.style.height = keyHeight;
+                key.style.flexGrow = 1f;
+                key.style.flexShrink = 1f;
+                key.style.flexBasis = 0f;
+                var radius = keyHeight * 0.5f;
+                key.style.borderTopLeftRadius = radius;
+                key.style.borderTopRightRadius = radius;
+                key.style.borderBottomLeftRadius = radius;
+                key.style.borderBottomRightRadius = radius;
+                var label = key.Q<Label>(className: "numpad-key-label");
+                if (label != null)
+                {
+                    label.style.fontSize = keyHeight * 0.42f;
+                    label.style.unityTextAlign = TextAnchor.MiddleCenter;
+                }
+            });
+            if (!pairingNumpadLayoutLogged)
+            {
+                pairingNumpadLayoutLogged = true;
+                Debug.Log($"[M3] screenH={Screen.height} panelH={panelHeight:F1} keyH={keyHeight:F1}", this);
+            }
         }
 
         private void AddQuickPhrases(VisualElement parent)
@@ -1936,6 +2017,13 @@ namespace QuestMmdPlayer
                     hud.SetVisible(value);
                 }
             }));
+            generalGroup.Add(MakeToggleRow("构图网格", PlayerPrefs.GetInt(PrefsPrefix + "framing-grid", 0) == 1, value =>
+            {
+                PlayerPrefs.SetInt(PrefsPrefix + "framing-grid", value ? 1 : 0);
+                PlayerPrefs.Save();
+                hud?.SetFramingGridVisible(value);
+                ShowToast(value ? "构图网格已开启" : "构图网格已关闭");
+            }));
             generalGroup.Add(MakeToggleRow("摄像头单帧（拍给 TA 看）", PlayerPrefs.GetInt(PrefsPrefix + "camera", 0) == 1, value =>
             {
                 PlayerPrefs.SetInt(PrefsPrefix + "camera", value ? 1 : 0);
@@ -2177,7 +2265,7 @@ namespace QuestMmdPlayer
 
         // ═══════════════════════ 同框三模式 ═══════════════════════
 
-        private PhoneCoPresenceDirector CoPresenceDirector => owner?.CoPresence;
+        private ICoPresenceDirector CoPresenceDirector => owner?.CoPresence;
 
         private void HandleCoPresenceFrame()
         {
@@ -2210,7 +2298,7 @@ namespace QuestMmdPlayer
                         string.IsNullOrWhiteSpace(reply) ? DisplayStyle.None : DisplayStyle.Flex;
                 }
             }
-            if (director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.ArReality && !arPlacedOnce)
+            if (director.CurrentMode == CoPresenceMode.ArReality && !arPlacedOnce)
             {
                 HandleArTapPlacement();
             }
@@ -2261,7 +2349,7 @@ namespace QuestMmdPlayer
                 ShowToast("同框导演不可用");
                 return;
             }
-            if (director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.VirtualScene)
+            if (director.CurrentMode == CoPresenceMode.VirtualScene)
             {
                 ToggleEnvironmentSheet();
             }
@@ -2282,12 +2370,12 @@ namespace QuestMmdPlayer
             var modeLabel = modePill?.Q<Label>(className: "pill-label");
             if (modeLabel != null)
             {
-                modeLabel.text = director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.VirtualScene
+                modeLabel.text = director.CurrentMode == CoPresenceMode.VirtualScene
                     ? "环境"
                     : "模式";
             }
             bool inScene = mode == UiMode.Scene;
-            bool videoCall = director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.VideoCall;
+            bool videoCall = director.CurrentMode == CoPresenceMode.VideoCall;
             // 通话/AR chrome 是惰性创建的：以记忆模式直接进场景时从未打开过
             // Sheet，overlays 不存在 → 必须在这里确保已建，否则 chrome 永不显示。
             if (inScene && videoCall)
@@ -2307,38 +2395,96 @@ namespace QuestMmdPlayer
             {
                 arPlaceHint.style.display =
                     inScene && !videoCall
-                    && director.CurrentMode == PhoneCoPresenceDirector.CoPresenceMode.ArReality && !arPlacedOnce
+                    && director.CurrentMode == CoPresenceMode.ArReality && !arPlacedOnce
                         ? DisplayStyle.Flex
                         : DisplayStyle.None;
             }
+            // 兜底（HOME 恢复 / 模式切换 / 选卡后）：弹层未打开时，任何 chrome 刷新
+            // 都不得残留遮罩或控件让位状态——模态所有权只在 sheet 打开期间成立。
+            bool sheetOpen = coPresenceSheet != null && coPresenceSheet.style.display == DisplayStyle.Flex;
+            if (!sheetOpen)
+            {
+                if (coPresenceBackdrop != null)
+                {
+                    coPresenceBackdrop.style.display = DisplayStyle.None;
+                }
+                if (callControls != null)
+                {
+                    callControls.style.display = DisplayStyle.Flex;
+                }
+            }
+            PushChromeInsets();
+        }
+
+        /// <summary>
+        /// 将 UI Toolkit 面板逻辑坐标映射到主相机像素坐标。
+        /// PanelSettings 使用参考分辨率，worldBound 不能直接与 Screen.height 混算。
+        /// </summary>
+        private void PushChromeInsets()
+        {
+            var director = CoPresenceDirector;
+            if (director == null || !director.VideoCallActive ||
+                panelRoot == null || callTopChrome == null || callControls == null ||
+                callTopChrome.resolvedStyle.display != DisplayStyle.Flex ||
+                callControls.resolvedStyle.display != DisplayStyle.Flex)
+            {
+                return;
+            }
+
+            var panelBounds = panelRoot.worldBound;
+            var topBounds = callTopChrome.worldBound;
+            var controlsBounds = callControls.worldBound;
+            if (panelBounds.height <= 1f || topBounds.height <= 1f || controlsBounds.height <= 1f)
+            {
+                return;
+            }
+
+            var camera = director.MainCamera;
+            var screenHeight = camera != null ? camera.pixelHeight : Screen.height;
+            if (screenHeight <= 1)
+            {
+                return;
+            }
+
+            // worldBound 使用面板逻辑单位；相机输入使用物理像素。
+            var panelToScreen = screenHeight / panelBounds.height;
+            var topPx = Mathf.Clamp(
+                (topBounds.yMax - panelBounds.yMin) * panelToScreen, 0f, screenHeight);
+            var bottomPx = Mathf.Clamp(
+                (controlsBounds.yMin - panelBounds.yMin) * panelToScreen, 0f, screenHeight);
+            if (bottomPx <= topPx)
+            {
+                return;
+            }
+            if (Mathf.Abs(topPx - lastChromeTopPx) <= 0.5f &&
+                Mathf.Abs(bottomPx - lastChromeBottomPx) <= 0.5f)
+            {
+                return;
+            }
+
+            lastChromeTopPx = topPx;
+            lastChromeBottomPx = bottomPx;
+            director.SetChromeInsets(topPx, bottomPx);
         }
 
         private void ToggleCoPresenceSheet()
         {
             EnsureCoPresenceOverlays();
             bool show = coPresenceSheet == null || coPresenceSheet.style.display != DisplayStyle.Flex;
-            HideCoPresenceSheets();
-            if (show && coPresenceSheet != null)
+            if (show)
             {
-                ShowModeCards();
+                ShowCoPresenceSheet(RebuildModeCards);
+            }
+            else
+            {
+                HideCoPresenceSheets();
             }
         }
 
         /// <summary>强制显示模式卡视图（pill 与「换种同框方式」共用）。</summary>
         private void ShowModeCards()
         {
-            EnsureCoPresenceOverlays();
-            HideCoPresenceSheets();
-            if (coPresenceSheet == null)
-            {
-                return;
-            }
-            RebuildModeCards();
-            coPresenceSheet.style.display = DisplayStyle.Flex;
-            if (coPresenceBackdrop != null)
-            {
-                coPresenceBackdrop.style.display = DisplayStyle.Flex;
-            }
+            ShowCoPresenceSheet(RebuildModeCards);
         }
 
         private void ToggleEnvironmentSheet()
@@ -2350,16 +2496,41 @@ namespace QuestMmdPlayer
                 return;
             }
             bool show = coPresenceSheet == null || coPresenceSheet.style.display != DisplayStyle.Flex;
-            HideCoPresenceSheets();
-            if (show && coPresenceSheet != null)
+            if (show)
             {
-                RebuildEnvironmentChips();
-                coPresenceSheet.style.display = DisplayStyle.Flex;
-                if (coPresenceBackdrop != null)
-                {
-                    coPresenceBackdrop.style.display = DisplayStyle.Flex;
-                }
+                ShowCoPresenceSheet(RebuildEnvironmentChips);
             }
+            else
+            {
+                HideCoPresenceSheets();
+            }
+        }
+
+        /// <summary>
+        /// 打开弹层并建立模态所有权状态：通话控件让位、遮罩显示并可点击、sheet 置顶。
+        /// 三个打开入口（模式 pill / 环境 pill / 「换种同框方式」）收敛于此。
+        /// </summary>
+        private void ShowCoPresenceSheet(Action rebuild)
+        {
+            EnsureCoPresenceOverlays();
+            if (coPresenceSheet == null)
+            {
+                return;
+            }
+            // 先清残留（还原控件 / 隐藏遮罩 / 隐藏 sheet），再按目标内容填充。
+            HideCoPresenceSheets();
+            rebuild?.Invoke();
+            // 模态所有权（INV-5）：控件不可见不可点，遮罩接管点击，sheet 在遮罩之上
+            // （Add 顺序已在 EnsureCoPresenceOverlays 中固定为 chrome < scrim < sheet）。
+            if (callControls != null)
+            {
+                callControls.style.display = DisplayStyle.None;
+            }
+            if (coPresenceBackdrop != null)
+            {
+                coPresenceBackdrop.style.display = DisplayStyle.Flex;
+            }
+            coPresenceSheet.style.display = DisplayStyle.Flex;
         }
 
         private void HideCoPresenceSheets()
@@ -2371,6 +2542,11 @@ namespace QuestMmdPlayer
             if (coPresenceBackdrop != null)
             {
                 coPresenceBackdrop.style.display = DisplayStyle.None;
+            }
+            // 关闭路径统一还原通话控件（回到 CallOnly 态）。
+            if (callControls != null)
+            {
+                callControls.style.display = DisplayStyle.Flex;
             }
         }
 
@@ -2410,7 +2586,8 @@ namespace QuestMmdPlayer
             videoCallChrome.AddToClassList("call-chrome");
             videoCallChrome.style.display = DisplayStyle.None;
 
-            var callTop = new VisualElement();
+            callTopChrome = new VisualElement();
+            var callTop = callTopChrome;
             callTop.AddToClassList("call-top");
             var callDot = new VisualElement();
             callDot.AddToClassList("call-dot");
@@ -2422,13 +2599,14 @@ namespace QuestMmdPlayer
             videoCallTimerLabel.AddToClassList("call-timer");
             callTop.Add(videoCallTimerLabel);
             videoCallChrome.Add(callTop);
+            callTopChrome.RegisterCallback<GeometryChangedEvent>(_ => PushChromeInsets());
 
             videoCallSubtitleLabel = new Label(string.Empty);
             videoCallSubtitleLabel.AddToClassList("call-subtitle");
             videoCallSubtitleLabel.style.display = DisplayStyle.None;
             videoCallChrome.Add(videoCallSubtitleLabel);
 
-            var callControls = new VisualElement();
+            callControls = new VisualElement();
             callControls.AddToClassList("call-controls");
             var hangup = new Label("挂断");
             hangup.AddToClassList("call-btn");
@@ -2444,8 +2622,19 @@ namespace QuestMmdPlayer
             backChat.RegisterCallback<ClickEvent>(_ => ReturnToMenu());
             callControls.Add(backChat);
             videoCallChrome.Add(callControls);
+            callControls.RegisterCallback<GeometryChangedEvent>(_ => PushChromeInsets());
 
             shellRoot.Add(videoCallChrome);
+
+            // 层级所有权（INV-5）：chrome(底) < arHint < 遮罩(scrim) < sheet(顶) < toast。
+            // 旧实现里 chrome 最晚 Add、层级最高，会在弹层打开时盖住卡片（红丸压卡）。
+            // 这里把 chrome 压到底，再把遮罩与 sheet 抬到其上；遮罩复用既有
+            // coPresenceBackdrop（不另建 call-scrim），保证弹层打开时通话 chrome 不盖卡。
+            videoCallChrome.SendToBack();
+            arPlaceHint.PlaceBehind(coPresenceBackdrop);
+            coPresenceBackdrop.PlaceBehind(coPresenceSheet);
+            // Toast 在 UXML 里早于运行时 overlay 加入，会被弹层盖住；抬到最顶。
+            toast?.BringToFront();
         }
 
         private void RebuildModeCards()
@@ -2458,21 +2647,22 @@ namespace QuestMmdPlayer
             coPresenceSheet.Clear();
             var grabber = new VisualElement();
             grabber.AddToClassList("cp-grabber");
+            grabber.RegisterCallback<ClickEvent>(_ => HideCoPresenceSheets());
             coPresenceSheet.Add(grabber);
             var title = new Label("和她同框");
             title.AddToClassList("cp-title");
             coPresenceSheet.Add(title);
 
-            var modes = new (string title, string tag, string desc, PhoneCoPresenceDirector.CoPresenceMode value)[]
+            var modes = new (string title, string tag, string desc, CoPresenceMode value)[]
             {
-                ("同框现实", "AR · 相机取景", "点按地面，把她放进你的房间", PhoneCoPresenceDirector.CoPresenceMode.ArReality),
-                ("虚拟场景", "伪 AR · 虚拟环境", "夜街 / 星空 / 卧室 / 海边", PhoneCoPresenceDirector.CoPresenceMode.VirtualScene),
-                ("视频通话", "半身 · 通话感", "胸像出镜 · 字幕 · 通话计时", PhoneCoPresenceDirector.CoPresenceMode.VideoCall),
+                ("同框现实", "AR · 相机取景", "点按地面，把她放进你的房间", CoPresenceMode.ArReality),
+                ("虚拟场景", "伪 AR · 虚拟环境", "夜街 / 星空 / 卧室 / 海边", CoPresenceMode.VirtualScene),
+                ("视频通话", "半身 · 通话感", "胸像出镜 · 字幕 · 通话计时", CoPresenceMode.VideoCall),
             };
             foreach (var entry in modes)
             {
                 bool current = director.CurrentMode == entry.value;
-                bool disabled = entry.value == PhoneCoPresenceDirector.CoPresenceMode.ArReality
+                bool disabled = entry.value == CoPresenceMode.ArReality
                     && !director.ArCameraAvailable;
                 var card = new VisualElement();
                 card.AddToClassList("cp-card");
@@ -2521,17 +2711,18 @@ namespace QuestMmdPlayer
             coPresenceSheet.Clear();
             var grabber = new VisualElement();
             grabber.AddToClassList("cp-grabber");
+            grabber.RegisterCallback<ClickEvent>(_ => HideCoPresenceSheets());
             coPresenceSheet.Add(grabber);
             var title = new Label("虚拟环境");
             title.AddToClassList("cp-title");
             coPresenceSheet.Add(title);
 
-            var envs = new (string name, PhoneCoPresenceDirector.VirtualEnvironment value)[]
+            var envs = new (string name, VirtualEnvironment value)[]
             {
-                ("夜街", PhoneCoPresenceDirector.VirtualEnvironment.NightStreet),
-                ("星空", PhoneCoPresenceDirector.VirtualEnvironment.StarrySky),
-                ("卧室", PhoneCoPresenceDirector.VirtualEnvironment.Bedroom),
-                ("海边", PhoneCoPresenceDirector.VirtualEnvironment.Seaside),
+                ("夜街", VirtualEnvironment.NightStreet),
+                ("星空", VirtualEnvironment.StarrySky),
+                ("卧室", VirtualEnvironment.Bedroom),
+                ("海边", VirtualEnvironment.Seaside),
             };
             var row = new VisualElement();
             row.AddToClassList("cp-chip-row");
