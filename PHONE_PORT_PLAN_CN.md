@@ -281,12 +281,12 @@ banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落
   （✓ → AppState 校验满 6 位，不足走既有 toast「请输入完整的 6 位配对码」，再
   `pairing.pair` → 引擎 `PairWithCode`）。原「Android UI Toolkit 软键盘替代」的手机
   壳层不同步理由随 Flutter 统一壳层失效。
-- [ ] **M5 建议回复协议（reply.suggestions，双端能力）**（M5，2026-09-03）：
+- [x] **M5 建议回复协议（reply.suggestions，双端能力）**（M5，2026-09-03）：
   服务端 `core/reply_suggestions.py` 对所有客户端一视同仁下发
   `reply.suggestions`（≤3 条、reply.end 之后异步、失败静默）。Unity 手机端
   `ConversationController.SuggestedReplies` + 对话页三条纵排建议卡已实现；
   **Quest 端 VR UI 建议入口待同步**（协议层零改动，纯 UI 接线）。
-- [ ] **M5 对话页微信化 + 输入防溢出（UI 同构，待同步）**（M5，2026-09-03）：
+- [x] **M5 对话页微信化 + 输入防溢出（UI 同构，待同步）**（M5，2026-09-03）：
   语音收纳为输入条「音/字」切换 + 按住说话条（上滑取消）；`.field`
   `min-width:0 + flex-shrink + overflow:hidden` 防长文本顶飞按钮；
   设置连接页字段去内嵌 label + 配对键盘折叠。Flutter 壳层
