@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Net;
 using System.Text;
 using UnityEngine;
@@ -183,6 +184,11 @@ namespace QuestMmdPlayer
         // event from monopolizing the Unity frame and allocating unbounded
         // temporary arrays.
         public const int MaxReplyAudioBytes = 16 * 1024;
+
+        // reply.suggestions bounds: at most 3 quick replies, each trimmed to
+        // 200 characters so a rogue backend cannot flood the chat UI.
+        public const int MaxSuggestionCount = 3;
+        public const int MaxSuggestionLength = 200;
 
         // Streaming STT upload batching. 16 kHz mono PCM16 is 32 bytes/ms, so
         // the default 3200 bytes is ~100 ms of audio. Smaller batches shorten
@@ -410,6 +416,10 @@ namespace QuestMmdPlayer
                     message.TextSent = payload.text_sent;
                     message.AudioSent = payload.audio_sent;
                     break;
+                case "reply.suggestions":
+                    message = Basic(payload, ConversationEventType.ReplySuggestions);
+                    message.Suggestions = SanitizeSuggestions(payload.suggestions);
+                    break;
                 case "error":
                     message = Basic(payload, ConversationEventType.Error);
                     message.ErrorCode = payload.code ?? "bridge_error";
@@ -616,6 +626,41 @@ namespace QuestMmdPlayer
             return value;
         }
 
+        /// <summary>
+        /// reply.suggestions 清洗：丢掉空/超长项，最多保留 3 条，逐条 Trim、截断到
+        /// 200 字符。返回空数组表示本次无可显示建议。
+        /// </summary>
+        private static string[] SanitizeSuggestions(string[] suggestions)
+        {
+            if (suggestions == null || suggestions.Length == 0)
+            {
+                return Array.Empty<string>();
+            }
+            var kept = new List<string>(capacity: 3);
+            foreach (var raw in suggestions)
+            {
+                if (raw == null)
+                {
+                    continue;
+                }
+                var trimmed = raw.Trim();
+                if (trimmed.Length == 0)
+                {
+                    continue;
+                }
+                if (trimmed.Length > MaxSuggestionLength)
+                {
+                    trimmed = trimmed.Substring(0, MaxSuggestionLength);
+                }
+                kept.Add(trimmed);
+                if (kept.Count == MaxSuggestionCount)
+                {
+                    break;
+                }
+            }
+            return kept.ToArray();
+        }
+
         private static int ClampServerDuration(int value)
         {
             return value <= 0 ? -1 : Mathf.Clamp(value, 1, 3600000);
@@ -799,6 +844,7 @@ namespace QuestMmdPlayer
             public bool audio_sent;
             public ServerTimingPayload server_timing;
             public VisemeCuePayload[] visemes;
+            public string[] suggestions;
         }
 
         [Serializable]

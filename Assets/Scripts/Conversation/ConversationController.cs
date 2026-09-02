@@ -68,6 +68,7 @@ namespace QuestMmdPlayer
         private readonly HashSet<string> wholeBodyActionTurns =
             new HashSet<string>(StringComparer.Ordinal);
         private readonly Queue<string> wholeBodyActionTurnOrder = new Queue<string>();
+        private readonly List<string> suggestedReplies = new List<string>(capacity: 3);
         private const int MaxTrackedActionReceipts = 64;
         [SerializeField] private bool allowAutomaticMockTransport;
         [SerializeField] private bool sendInteractionEvents = true;
@@ -81,6 +82,11 @@ namespace QuestMmdPlayer
         public string TurnId => stateMachine.TurnId;
         public string Transcript => stateMachine.Transcript;
         public string ReplyText => stateMachine.ReplyText;
+        /// <summary>
+        /// 伴夏最近一次回复后下发的快速回复建议（reply.suggestions）。回合开始时
+        /// 清空；迟到且 turn 不匹配的建议会被丢弃。最多 3 条。
+        /// </summary>
+        public IReadOnlyList<string> SuggestedReplies => suggestedReplies;
         public string TransportStatus => transport == null ? "No conversation transport" : transport.Status;
         public string PresenterStatus => presenter == null ? "No avatar presenter" : presenter.Status;
         public string LastErrorCode { get; private set; } = string.Empty;
@@ -267,6 +273,7 @@ namespace QuestMmdPlayer
             localActionStarted = false;
             backendActionReceived = false;
             backendActionDecisionReceived = false;
+            suggestedReplies.Clear();
             var turnId = stateMachine.Begin(string.Empty);
             ResetTurnTiming();
             NotifyStateChanged();
@@ -405,6 +412,7 @@ namespace QuestMmdPlayer
             localActionStarted = false;
             backendActionReceived = false;
             backendActionDecisionReceived = false;
+            suggestedReplies.Clear();
             TryQueueLocalAction(text);
             var turnId = stateMachine.Begin(text);
             ResetTurnTiming();
@@ -447,6 +455,36 @@ namespace QuestMmdPlayer
             RefreshLocalReactionMode();
         }
 
+        /// <summary>
+        /// reply.suggestions 与回合生命周期解耦：允许在 reply.end 之后、回合收尾
+        /// （acceptingEvents=false）之后到达；turn 必须与当前（或刚结束未翻篇）的
+        /// 回合一致，否则视为迟到旧建议丢弃。新回合开始即清空（见 Begin 调用点）。
+        /// </summary>
+        private void ApplySuggestions(ConversationEvent message)
+        {
+            if (!string.Equals(stateMachine.TurnId, message.TurnId, StringComparison.Ordinal))
+            {
+                Debug.Log("[Conversation] Dropping stale reply.suggestions for turn " + message.TurnId, this);
+                return;
+            }
+            suggestedReplies.Clear();
+            var added = 0;
+            if (message.Suggestions != null)
+            {
+                foreach (var suggestion in message.Suggestions)
+                {
+                    if (added >= 3 || string.IsNullOrWhiteSpace(suggestion))
+                    {
+                        continue;
+                    }
+                    suggestedReplies.Add(suggestion.Trim());
+                    added++;
+                }
+            }
+            Debug.Log($"[Conversation] Reply suggestions updated: {suggestedReplies.Count} item(s).", this);
+            NotifyStateChanged();
+        }
+
         private void HandleTransportEvent(ConversationEvent message)
         {
             if (message == null)
@@ -466,6 +504,11 @@ namespace QuestMmdPlayer
             {
                 var applied = ApplyAvatarIntent(message);
                 backendActionReceived |= applied && IsExecutableAvatarAction(message.Gesture);
+                return;
+            }
+            if (message.Type == ConversationEventType.ReplySuggestions)
+            {
+                ApplySuggestions(message);
                 return;
             }
             if (IsInteractionTurn(message))

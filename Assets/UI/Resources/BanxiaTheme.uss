@@ -580,6 +580,10 @@
     border-color: rgba(0, 0, 0, 0);
     border-radius: 28px;
     min-height: var(--touch);
+    /* M5：min-width:0 打断“内容不换行 → min-width 随文本增长 → 行溢出”
+       的因果链（flex-shrink 只能收缩到 min-width 为止）。 */
+    min-width: 0;
+    flex-shrink: 1;
     padding: 22px 38px;
     margin: 16px 54px;
     font-size: var(--fs-body);
@@ -764,6 +768,7 @@
     border-bottom-width: 2px; border-bottom-color: var(--glass-edge-bottom);
     border-left-width: 2px;   border-left-color: var(--glass-edge-side);
     border-right-width: 2px;  border-right-color: var(--glass-edge-side);
+    overflow: hidden;                         /* M5：长文本在字段内截断，不再顶飞按钮 */
 }
 .chat-input-bar .field:focus {
     border-color: var(--tint);
@@ -814,6 +819,81 @@
     font-size: var(--fs-body);
     color: rgb(255, 255, 255);
     -unity-font-style: bold;
+}
+/* ── M5：语音/键盘切换钮（微信式语音收纳）── */
+.chat-voice-toggle {
+    transition-property: background-color, scale;
+}
+/* ── M5：语音态「按住 说话」条 ── */
+.chat-hold-bar {
+    flex-grow: 1;
+    min-height: var(--touch);
+    border-radius: 60px;
+    background-color: var(--glass);
+    border-top-width: 2px;    border-top-color: var(--glass-edge-top);
+    border-bottom-width: 2px; border-bottom-color: var(--glass-edge-bottom);
+    border-left-width: 2px;   border-left-color: var(--glass-edge-side);
+    border-right-width: 2px;  border-right-color: var(--glass-edge-side);
+    justify-content: center;
+    align-items: center;
+    transition-property: background-color;
+    transition-duration: 0.12s;
+    transition-timing-function: ease-out;
+}
+.chat-hold-bar--active {
+    background-color: var(--tint-fill);
+}
+.chat-hold-bar--active .chat-hold-label {
+    color: rgb(255, 255, 255);
+    -unity-font-style: bold;
+}
+.chat-hold-label {
+    font-size: var(--fs-body);
+    color: var(--label);
+}
+/* ── M5：快速回复建议（后端 reply.suggestions，纵排一二三）── */
+.chat-suggestions {
+    flex-shrink: 0;
+    margin: 0 54px 8px 54px;
+}
+.chat-suggestion-item {
+    flex-direction: row;
+    align-items: center;
+    min-height: 96px;
+    background-color: var(--bg-card);
+    border-radius: 48px;
+    border-top-width: 2px;    border-top-color: var(--glass-edge-top);
+    border-bottom-width: 2px; border-bottom-color: var(--glass-edge-bottom);
+    border-left-width: 2px;   border-left-color: var(--glass-edge-side);
+    border-right-width: 2px;  border-right-color: var(--glass-edge-side);
+    padding: 16px 30px;
+    margin-bottom: 12px;
+    transition-property: background-color, scale;
+    transition-duration: 0.12s;
+    transition-timing-function: ease-out;
+}
+.chat-suggestion-item:active {
+    background-color: var(--glass-pressed);
+    scale: 0.98;
+}
+.chat-suggestion-index {
+    width: 52px;
+    height: 52px;
+    border-radius: 26px;
+    background-color: var(--tint-fill);
+    color: rgb(255, 255, 255);
+    font-size: var(--fs-footnote);
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
+    margin-right: 24px;
+    flex-shrink: 0;
+}
+.chat-suggestion-text {
+    font-size: var(--fs-subhead);
+    color: var(--label);
+    white-space: normal;
+    flex-grow: 1;
+    flex-shrink: 1;
 }
 
 /* ═══ 同框三模式（虚拟场景 / 视频通话 / 同框现实 AR）═══ */

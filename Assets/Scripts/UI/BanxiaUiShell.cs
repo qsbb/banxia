@@ -109,13 +109,18 @@ namespace QuestMmdPlayer
         private VisualElement chatPairingCard;
         private ScrollView chatPairingScroll;
         private VisualElement chatConversationCard;
-        private VisualElement chatQuickPhrasesRow;
+        private VisualElement chatSuggestionsRoot;
         private VisualElement chatInputBarRoot;
+        private VisualElement chatVoiceToggle;
+        private VisualElement chatHoldBar;
+        private Label chatHoldLabel;
         private Label connectionBadge;
         private Label pairingStatusLabel;
         private TextField pairingServerField;
         private Label pairingCodeLabel;
         private VisualElement pairingDots;
+        private VisualElement pairingNumpadSection;
+        private Label pairingDisclosureChevron;
         private Label chatStateLabel;
         private ScrollView chatTranscript;
         private TextField chatInputField;
@@ -136,7 +141,12 @@ namespace QuestMmdPlayer
         private string lastImportStatus = string.Empty;
         private string lastReplyText = string.Empty;
         private string lastTranscriptText = string.Empty;
+        private string lastSuggestionsKey = string.Empty;
         private string lastPlayingActionId = string.Empty;
+        private bool voiceInputMode;
+        private float voiceHoldStartY;
+        private bool voiceHoldCancelArmed;
+        private bool pairingNumpadExpanded;
 
         public void ConfigureWorldSpace(Action onCloseRequested)
         {
@@ -1032,11 +1042,11 @@ namespace QuestMmdPlayer
             chatPairingScroll.Add(chatPairingCard);
             page.Add(chatPairingScroll);
 
-            // ── 已连接：状态卡 + 纯消息流 + 输入条（iOS Messages 式）──
+            // ── 已连接：状态卡 + 纯消息流 + 建议 + 输入条（微信/QQ 式对话窗）──
             chatConversationCard = new VisualElement();
             chatConversationCard.style.flexGrow = 1f;
 
-            // 伴夏状态卡（对应效果图：名字 + 实时连接状态）
+            // 伴夏状态卡（对应效果图：名字 + 实时连接状态 + 麦克风摘要）
             var statusCard = new VisualElement();
             statusCard.AddToClassList("chat-status-card");
             var statusAvatar = new VisualElement();
@@ -1050,6 +1060,9 @@ namespace QuestMmdPlayer
             chatStateLabel = new Label("会话待命");
             chatStateLabel.AddToClassList("chat-status-sub");
             statusTexts.Add(chatStateLabel);
+            voiceStatusLabel = new Label("麦克风待命");
+            voiceStatusLabel.AddToClassList("chat-status-sub");
+            statusTexts.Add(voiceStatusLabel);
             statusCard.Add(statusTexts);
             chatConversationCard.Add(statusCard);
 
@@ -1057,10 +1070,9 @@ namespace QuestMmdPlayer
             chatTranscript.AddToClassList("chat-scroll");
             EnableTouchDragScroll(chatTranscript);
             chatConversationCard.Add(chatTranscript);
-            AddVoiceControls(chatConversationCard);
             page.Add(chatConversationCard);
 
-            AddQuickPhrases(page);
+            BuildChatSuggestions(page);
             AddChatInputBar(page);
 
             tabPages[Tab.Chat] = page;
@@ -1153,23 +1165,54 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void AddQuickPhrases(VisualElement parent)
+        /// <summary>
+        /// 快速回复建议区：伴夏每次回复后由后端 LLM 生成（reply.suggestions），
+        /// 最多 3 条，从上到下一、二、三排列；点击直接发送。无建议时整块隐藏，
+        /// 不占用对话窗空间。
+        /// </summary>
+        private void BuildChatSuggestions(VisualElement parent)
         {
-            var row = new VisualElement();
-            row.AddToClassList("chips-row");
-            foreach (var phrase in new[] { "你好", "你是谁", "现在几点", "还记得我吗", "跳个舞", "链路测试" })
+            chatSuggestionsRoot = new VisualElement();
+            chatSuggestionsRoot.AddToClassList("chat-suggestions");
+            chatSuggestionsRoot.style.display = DisplayStyle.None;
+            parent.Add(chatSuggestionsRoot);
+        }
+
+        private void RenderChatSuggestions(IReadOnlyList<string> suggestions)
+        {
+            if (chatSuggestionsRoot == null)
             {
-                string captured = phrase;
-                row.Add(MakeChip(captured, () =>
-                {
-                    if (chatInputField != null)
-                    {
-                        chatInputField.value = captured;
-                    }
-                }));
+                return;
             }
-            chatQuickPhrasesRow = row;
-            parent.Add(row);
+            var key = suggestions == null || suggestions.Count == 0
+                ? string.Empty
+                : string.Join("\x1F", suggestions);
+            if (key == lastSuggestionsKey)
+            {
+                return;
+            }
+            lastSuggestionsKey = key;
+            chatSuggestionsRoot.Clear();
+            if (string.IsNullOrEmpty(key))
+            {
+                chatSuggestionsRoot.style.display = DisplayStyle.None;
+                return;
+            }
+            chatSuggestionsRoot.style.display = DisplayStyle.Flex;
+            for (var index = 0; index < suggestions.Count && index < 3; index++)
+            {
+                var captured = suggestions[index];
+                var item = new VisualElement();
+                item.AddToClassList("chat-suggestion-item");
+                var badge = new Label((index + 1).ToString());
+                badge.AddToClassList("chat-suggestion-index");
+                item.Add(badge);
+                var text = new Label(captured);
+                text.AddToClassList("chat-suggestion-text");
+                item.Add(text);
+                item.RegisterCallback<ClickEvent>(_ => SendChatMessage(captured));
+                chatSuggestionsRoot.Add(item);
+            }
         }
 
         /// <summary>
@@ -1203,11 +1246,38 @@ namespace QuestMmdPlayer
         {
             var bar = new VisualElement();
             bar.AddToClassList("chat-input-bar");
+            bar.style.flexDirection = FlexDirection.Row;
+
+            // 左：语音/键盘切换（微信式收纳语音入口，替代常驻“语音（可选）”面板）
+            chatVoiceToggle = new VisualElement();
+            chatVoiceToggle.AddToClassList("chat-camera");
+            chatVoiceToggle.AddToClassList("chat-voice-toggle");
+            var voiceToggleLabel = new Label("音");
+            voiceToggleLabel.AddToClassList("chat-camera-label");
+            chatVoiceToggle.Add(voiceToggleLabel);
+            chatVoiceToggle.RegisterCallback<ClickEvent>(_ => SetVoiceInputMode(!voiceInputMode));
+            bar.Add(chatVoiceToggle);
+
+            // 键盘态：文本输入（min-width:0 + flexShrink 对抗长文本 min-width 溢出）
             chatInputField = new TextField { multiline = false };
             chatInputField.AddToClassList("ds-input");
             chatInputField.AddToClassList("field");
+            chatInputField.style.minWidth = 0f;
+            chatInputField.style.flexShrink = 1f;
+            chatInputField.style.overflow = Overflow.Hidden;
             AttachTouchKeyboardFallback(chatInputField);
             bar.Add(chatInputField);
+
+            // 语音态：按住说话条（按下录音，松开发送，上滑取消）
+            chatHoldBar = new VisualElement();
+            chatHoldBar.AddToClassList("chat-hold-bar");
+            chatHoldBar.style.display = DisplayStyle.None;
+            chatHoldLabel = new Label("按住 说话");
+            chatHoldLabel.AddToClassList("chat-hold-label");
+            chatHoldBar.Add(chatHoldLabel);
+            BindHoldToTalkBar(chatHoldBar);
+            bar.Add(chatHoldBar);
+
             var camera = new VisualElement();
             camera.AddToClassList("chat-camera");
             var cameraLabel = new Label("拍");
@@ -1274,32 +1344,131 @@ namespace QuestMmdPlayer
             RefreshChatUi();
         }
 
-        private void AddVoiceControls(VisualElement parent)
+        /// <summary>
+        /// 语音输入模式（微信式）：输入条左侧切换钮在「键盘/语音」间切换。
+        /// 语音态显示「按住 说话」条：按下开始录音，松开发送，上滑取消。
+        /// 常开监听等配置项收进设置 → 通用；打断回复由新一轮输入自动 barge-in。
+        /// </summary>
+        private void SetVoiceInputMode(bool enabled)
         {
-            parent.Add(MakeGroupHeader("语音（可选）"));
-            var group = new VisualElement();
-            group.AddToClassList("group");
-            group.AddToClassList("ds-card");
-            group.Add(MakeToggleRow("常开监听", owner?.VoiceInput?.AlwaysListening ?? false, value =>
+            voiceInputMode = enabled;
+            if (chatVoiceToggle == null || chatHoldBar == null)
             {
-                owner?.VoiceInput?.ToggleAlwaysListening();
-                RefreshVoiceUi();
-            }));
-            group.Add(MakeButtonRow(
-                MakeSmallButton("开始/发送语音", false, () =>
+                return;
+            }
+            var voiceLabel = chatVoiceToggle.Q<Label>(className: "chat-camera-label");
+            if (voiceLabel != null)
+            {
+                voiceLabel.text = enabled ? "字" : "音";
+            }
+            chatHoldBar.style.display = enabled ? DisplayStyle.Flex : DisplayStyle.None;
+            if (chatInputField != null)
+            {
+                chatInputField.style.display = enabled ? DisplayStyle.None : DisplayStyle.Flex;
+            }
+            SetChatInputButtonsVisible(!enabled);
+        }
+
+        private void SetChatInputButtonsVisible(bool visible)
+        {
+            if (chatInputBarRoot == null)
+            {
+                return;
+            }
+            var display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+            // 注意：chat-voice-toggle 也挂了 chat-camera 类，须排除，只控制「拍/发」。
+            chatInputBarRoot.Query<VisualElement>(className: "chat-camera").ForEach(element =>
+            {
+                if (!element.ClassListContains("chat-voice-toggle"))
                 {
-                    owner?.VoiceInput?.ToggleRecording();
-                    RefreshVoiceUi();
-                }),
-                MakeSmallButton("取消本轮", false, CancelCurrentTurn),
-                MakeSmallButton("重启麦克风", false, () => owner?.VoiceInput?.RestartMonitoring())));
-            group.Add(MakeButtonRow(
-                MakeSmallButton("打断回复", false, () => owner?.Conversation?.Interrupt()),
-                MakeSmallButton("暂停动作", false, () => owner?.SendCommand(new AvatarCommand { name = "toggle_pause" }))));
-            voiceStatusLabel = new Label("麦克风待命");
-            voiceStatusLabel.AddToClassList("status-line");
-            group.Add(voiceStatusLabel);
-            parent.Add(group);
+                    element.style.display = display;
+                }
+            });
+            chatInputBarRoot.Query<VisualElement>(className: "chat-send").ForEach(element =>
+            {
+                element.style.display = display;
+            });
+        }
+
+        private void BindHoldToTalkBar(VisualElement holdBar)
+        {
+            holdBar.RegisterCallback<PointerDownEvent>(evt =>
+            {
+                if (!voiceInputMode)
+                {
+                    return;
+                }
+                voiceHoldStartY = evt.position.y;
+                voiceHoldCancelArmed = false;
+                holdBar.CapturePointer(evt.pointerId);
+                holdBar.AddToClassList("chat-hold-bar--active");
+                UpdateHoldBarLabel();
+                if (owner?.VoiceInput != null && !owner.VoiceInput.IsRecording)
+                {
+                    owner.VoiceInput.ToggleRecording();
+                }
+                evt.StopPropagation();
+            });
+            holdBar.RegisterCallback<PointerMoveEvent>(evt =>
+            {
+                if (!voiceInputMode || owner?.VoiceInput == null || !owner.VoiceInput.IsRecording)
+                {
+                    return;
+                }
+                var slideUp = voiceHoldStartY - evt.position.y;
+                var shouldCancel = slideUp > 120f;
+                if (shouldCancel != voiceHoldCancelArmed)
+                {
+                    voiceHoldCancelArmed = shouldCancel;
+                    UpdateHoldBarLabel();
+                }
+            });
+            holdBar.RegisterCallback<PointerUpEvent>(evt =>
+            {
+                if (!voiceInputMode || owner?.VoiceInput == null || !owner.VoiceInput.IsRecording)
+                {
+                    ResetHoldBarVisual();
+                    return;
+                }
+                holdBar.ReleasePointer(evt.pointerId);
+                if (voiceHoldCancelArmed)
+                {
+                    owner.VoiceInput.CancelRecording();
+                    ShowToast("已取消本条语音");
+                }
+                else
+                {
+                    owner.VoiceInput.ToggleRecording(); // IsRecording → StopAndSend
+                }
+                ResetHoldBarVisual();
+                RefreshVoiceUi();
+                evt.StopPropagation();
+            });
+            holdBar.RegisterCallback<PointerLeaveEvent>(_ => ResetHoldBarVisual());
+        }
+
+        private void UpdateHoldBarLabel()
+        {
+            if (chatHoldLabel == null)
+            {
+                return;
+            }
+            var recording = owner?.VoiceInput != null && owner.VoiceInput.IsRecording;
+            if (!recording)
+            {
+                chatHoldLabel.text = "按住 说话";
+                return;
+            }
+            chatHoldLabel.text = voiceHoldCancelArmed
+                ? "松开手指，取消发送"
+                : "松开发送 · 上滑取消";
+        }
+
+        private void ResetHoldBarVisual()
+        {
+            voiceHoldCancelArmed = false;
+            chatHoldBar?.RemoveFromClassList("chat-hold-bar--active");
+            UpdateHoldBarLabel();
         }
 
         private void AppendPairingDigit(string digit)
@@ -1314,6 +1483,11 @@ namespace QuestMmdPlayer
             }
             pairingCode += digit;
             RefreshPairingCodeDisplay();
+            if (pairingCode.Length == 6 && pairingNumpadExpanded)
+            {
+                // 输满即收起键盘：后续动作（点「连接后端」）不再需要 585px 的键盘。
+                SetPairingNumpadExpanded(false);
+            }
         }
 
         private void RemovePairingDigit()
@@ -1427,9 +1601,23 @@ namespace QuestMmdPlayer
             {
                 chatConversationCard.style.display = connected ? DisplayStyle.Flex : DisplayStyle.None;
             }
-            if (chatQuickPhrasesRow != null)
+            if (chatSuggestionsRoot != null)
             {
-                chatQuickPhrasesRow.style.display = connected ? DisplayStyle.Flex : DisplayStyle.None;
+                if (connected)
+                {
+                    // 显隐主要由 RenderChatSuggestions 依据建议内容控制。
+                    if (!string.IsNullOrEmpty(lastSuggestionsKey))
+                    {
+                        chatSuggestionsRoot.style.display = DisplayStyle.Flex;
+                    }
+                }
+                else
+                {
+                    // 断连即丢弃旧建议，避免重连后展示过期内容。
+                    lastSuggestionsKey = string.Empty;
+                    chatSuggestionsRoot.Clear();
+                    chatSuggestionsRoot.style.display = DisplayStyle.None;
+                }
             }
             if (chatInputBarRoot != null)
             {
@@ -1479,11 +1667,22 @@ namespace QuestMmdPlayer
                     AddOrReplaceLatestReplyBubble(reply);
                 }
             }
+
+            RenderChatSuggestions(conversation.SuggestedReplies);
         }
 
         private void SendChatText()
         {
-            var text = chatInputField?.value?.Trim() ?? string.Empty;
+            SendChatMessage(chatInputField?.value?.Trim() ?? string.Empty);
+        }
+
+        /// <summary>
+        /// 统一发送入口：输入条「发」与建议条直发共用。发送即开启新回合，
+        /// 控制器会清空旧建议（见 ConversationController.ApplySuggestions 注释）。
+        /// </summary>
+        private void SendChatMessage(string text)
+        {
+            text = text?.Trim() ?? string.Empty;
             if (string.IsNullOrEmpty(text))
             {
                 ShowToast("请先输入内容");
@@ -1495,7 +1694,10 @@ namespace QuestMmdPlayer
                 return;
             }
             AddChatBubble(true, text);
-            chatInputField.SetValueWithoutNotify(string.Empty);
+            if (chatInputField != null)
+            {
+                chatInputField.SetValueWithoutNotify(string.Empty);
+            }
             lastReplyText = string.Empty;
             lastTranscriptText = text;
             owner.Conversation.StartConversation(text);
@@ -1564,19 +1766,6 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void CancelCurrentTurn()
-        {
-            if (owner?.VoiceInput != null && owner.VoiceInput.IsRecording)
-            {
-                owner.VoiceInput.CancelRecording();
-            }
-            else
-            {
-                owner?.Conversation?.Interrupt();
-            }
-            RefreshVoiceUi();
-        }
-
         private void RefreshVoiceUi()
         {
             if (voiceStatusLabel == null || owner?.VoiceInput == null)
@@ -1584,11 +1773,11 @@ namespace QuestMmdPlayer
                 return;
             }
             var voice = owner.VoiceInput;
-            voiceStatusLabel.text = "麦克风：" + voice.Status + "\n" +
-                                    "监听 " + (voice.IsMonitoring ? "开" : "关") +
+            // 单行摘要（状态卡副标题位）：对话页不再保留整块语音面板。
+            voiceStatusLabel.text = "麦克风 " + (voice.IsRecording ? "录音中" : "待命") +
                                     " · 常开 " + (voice.AlwaysListening ? "开" : "关") +
-                                    " · 录音 " + (voice.IsRecording ? "中" : "否") +
-                                    " · 电平 " + voice.InputLevel.ToString("F3");
+                                    " · 电平 " + voice.InputLevel.ToString("F2");
+            UpdateHoldBarLabel();
         }
 
         // ═══════════════════════ Actions page ═══════════════════════
@@ -1942,34 +2131,83 @@ namespace QuestMmdPlayer
             var pairingGroup = new VisualElement();
             pairingGroup.AddToClassList("group");
             pairingGroup.AddToClassList("ds-card");
-            pairingServerField = new TextField("服务器域名 / IP:端口");
+            // 字段不再带内部 label：行标签「服务器」已表达语义，旧 label
+            // （“服务器域名 / IP:端口”实测 573px）会把输入区顶出卡片右缘。
+            pairingServerField = new TextField { multiline = false };
             pairingServerField.AddToClassList("ds-input");
             pairingServerField.AddToClassList("field");
+            pairingServerField.style.minWidth = 0f;
+            pairingServerField.style.flexShrink = 1f;
+            pairingServerField.style.overflow = Overflow.Hidden;
             AttachTouchKeyboardFallback(pairingServerField);
             pairingGroup.Add(MakeElementRow("服务器", pairingServerField));
+            var serverHint = new Label("域名或 IP:端口，如 192.168.5.55:25520");
+            serverHint.AddToClassList("status-line");
+            pairingGroup.Add(serverHint);
             pairingGroup.Add(MakeToggleRow("允许明文 HTTP（私网/远程）", owner?.Pairing?.PrivateHttpAllowed ?? false, value =>
             {
                 owner?.Pairing?.SetPrivateHttpAllowed(value);
                 RefreshConnectionUi();
             }));
+
+            // 配对码 + 键盘收进折叠段：配对码录入是低频事件（首次/换绑），
+            // 常驻 585px 键盘曾把「解除绑定」推出首屏。首次绑定自动展开。
+            var disclosure = MakeDisclosureRow("配对码输入", () =>
+                SetPairingNumpadExpanded(!pairingNumpadExpanded));
+            pairingDisclosureChevron = disclosure.Q<Label>(className: "row-chevron");
+            pairingGroup.Add(disclosure);
+            pairingNumpadSection = new VisualElement();
             pairingCodeLabel = new Label("_ _ _   _ _ _");
             pairingCodeLabel.AddToClassList("status-line");
-            pairingGroup.Add(pairingCodeLabel);
+            pairingNumpadSection.Add(pairingCodeLabel);
             pairingDots = new VisualElement();
             pairingDots.AddToClassList("code-dots");
-            pairingGroup.Add(pairingDots);
-            BuildPairingNumpad(pairingGroup);
+            pairingNumpadSection.Add(pairingDots);
+            BuildPairingNumpad(pairingNumpadSection);
+            pairingGroup.Add(pairingNumpadSection);
             pairingStatusLabel = new Label(string.Empty);
             pairingStatusLabel.AddToClassList("status-line");
             pairingGroup.Add(pairingStatusLabel);
             pairingGroup.Add(MakeButton("连接后端", true, TryPair));
-            pairingGroup.Add(MakeButton("重新连接", false, () =>
-            {
-                owner?.AstrBot?.ReloadConfiguration();
-                ShowToast("正在重新连接后端");
-            }));
-            pairingGroup.Add(MakeButton("解除绑定", false, ClearPairingConfiguration, danger: true));
+            pairingGroup.Add(MakeButtonRow(
+                MakeButton("重新连接", false, () =>
+                {
+                    owner?.AstrBot?.ReloadConfiguration();
+                    ShowToast("正在重新连接后端");
+                }),
+                MakeButton("解除绑定", false, ClearPairingConfiguration, danger: true)));
             scroll.Add(pairingGroup);
+            // 首次（无已存服务器地址）自动展开键盘，已绑定用户默认收起。
+            SetPairingNumpadExpanded(string.IsNullOrEmpty(owner?.Pairing?.PairingServerEndpoint));
+        }
+
+        /// <summary>折叠/展开配对码键盘段，并同步指示箭头。</summary>
+        private void SetPairingNumpadExpanded(bool expanded)
+        {
+            pairingNumpadExpanded = expanded;
+            if (pairingNumpadSection != null)
+            {
+                pairingNumpadSection.style.display = expanded ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+            if (pairingDisclosureChevron != null)
+            {
+                pairingDisclosureChevron.text = expanded ? "▾" : "▸";
+            }
+        }
+
+        /// <summary>折叠段标题行（与设置根列表行同款外观，点击回调）。</summary>
+        private static VisualElement MakeDisclosureRow(string title, Action toggle)
+        {
+            var row = new VisualElement();
+            row.AddToClassList("row");
+            var label = new Label(title);
+            label.AddToClassList("row-label");
+            row.Add(label);
+            var chevron = new Label("▸");
+            chevron.AddToClassList("row-chevron");
+            row.Add(chevron);
+            row.RegisterCallback<ClickEvent>(_ => toggle?.Invoke());
+            return row;
         }
 
         private void FillQualitySection(VisualElement scroll)
@@ -2033,6 +2271,21 @@ namespace QuestMmdPlayer
                 ShowToast(value ? "摄像头单帧已开启：对话页「拍」按钮可用" : "摄像头单帧已关闭");
             }));
             generalGroup.Add(MakeInfoRow("摄像头单帧说明", "每次只拍一帧，不保存不录像"));
+            // 语音配置收纳：对话页已微信化（输入条切换 + 按住说话），原
+            // “语音（可选）”面板的配置项迁到此处。
+            generalGroup.Add(MakeToggleRow("语音常开监听", owner?.VoiceInput?.AlwaysListening ?? false, value =>
+            {
+                owner?.VoiceInput?.ToggleAlwaysListening();
+                RefreshVoiceUi();
+                ShowToast(value ? "常开监听已开启" : "常开监听已关闭");
+            }));
+            generalGroup.Add(MakeButtonRow(
+                MakeSmallButton("重启麦克风", false, () =>
+                {
+                    owner?.VoiceInput?.RestartMonitoring();
+                    RefreshVoiceUi();
+                    ShowToast("麦克风监控已重启");
+                })));
             generalGroup.Add(MakeSegmentedRow("目标帧率",
                 new SegmentChoice("30", () => Application.targetFrameRate == 30, () => SetTargetFps(30)),
                 new SegmentChoice("60", () => Application.targetFrameRate == 60 || Application.targetFrameRate <= 0, () => SetTargetFps(60)),
@@ -2886,13 +3139,6 @@ namespace QuestMmdPlayer
             return action;
         }
 
-        private static VisualElement MakeChip(string text, Action click)
-        {
-            var chip = new Button(() => click?.Invoke()) { text = text };
-            chip.AddToClassList("ds-chip");
-            return chip;
-        }
-
         private static VisualElement MakeNumpadKey(string text, Action click)
         {
             var key = new VisualElement();
@@ -2925,6 +3171,11 @@ namespace QuestMmdPlayer
             labelElement.AddToClassList("row-label");
             row.Add(labelElement);
             element.style.flexGrow = 1f;
+            // 对抗内容最小宽度：TextField 内部长文本会把自身 min-width 撑到
+            // 全文本宽（Yoga min-width:auto），flex-shrink 无法收缩，行溢出。
+            element.style.flexShrink = 1f;
+            element.style.minWidth = 0f;
+            element.style.overflow = Overflow.Hidden;
             row.Add(element);
             return row;
         }

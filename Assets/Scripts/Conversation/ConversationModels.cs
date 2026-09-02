@@ -24,6 +24,8 @@ namespace QuestMmdPlayer
         SpeechTimeline,
         AvatarIntent,
         ReplyEnd,
+        /// <summary>伴夏回复后异步下发的快速回复建议（reply.suggestions），与回合生命周期解耦。</summary>
+        ReplySuggestions,
         Error
     }
 
@@ -57,6 +59,8 @@ namespace QuestMmdPlayer
         public int AudioSequenceEnd = -1;
         public bool TextSent;
         public bool AudioSent;
+        /// <summary>reply.suggestions 事件携带的快速回复建议（≤3 条，已清洗）。</summary>
+        public string[] Suggestions;
         /// <summary>True for a local transport acknowledgement, not a backend SSE event.</summary>
         public bool IsSyntheticTransportEvent;
         /// <summary>Monotonic timestamp captured by the transport when an SSE frame arrived.</summary>
