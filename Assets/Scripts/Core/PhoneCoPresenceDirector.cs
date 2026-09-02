@@ -11,23 +11,8 @@ namespace QuestMmdPlayer
     /// - 同框现实：后置相机 WebCamTexture 全屏背景 Quad（跟随相机）+ 点地放置（射线交固定地面）。
     /// 端点协议零分支：三种模式只是呈现层，对话/动作/表情系统全模式可用。
     /// </summary>
-    public sealed class PhoneCoPresenceDirector : MonoBehaviour
+    public class PhoneCoPresenceDirector : MonoBehaviour, ICoPresenceDirector
     {
-        public enum CoPresenceMode
-        {
-            VirtualScene = 0,
-            VideoCall = 1,
-            ArReality = 2,
-        }
-
-        public enum VirtualEnvironment
-        {
-            NightStreet = 0,  // 夜街（默认）
-            StarrySky = 1,    // 星空
-            Bedroom = 2,      // 卧室
-            Seaside = 3,      // 海边
-        }
-
         private const string PrefsKey = "banxia.phone.copresence.";
         private const float GroundHeight = 0f;
         private const float ArBackgroundDepth = 8f;
@@ -57,6 +42,18 @@ namespace QuestMmdPlayer
 
         private float callStartedAt = -1f;
         private bool arRoutineRunning;
+        private float chromeTopPx = -1f;
+        private float chromeBottomPx = -1f;
+        private bool chromeInsetsWarned;
+        private bool headAnchorWarned;
+        private bool arPlaced;
+        private bool hasLoggedFraming;
+        private float lastLoggedDistance;
+        private float lastLoggedCameraY;
+        private float lastLoggedEyeY;
+        private bool lastLoggedHeadAnchor;
+        private bool lastLoggedDegraded;
+        private CoPresenceFraming framingSnapshot;
 
         /// <summary>模式切换（成功）后触发；参数 = 新模式。</summary>
         public event Action<CoPresenceMode> ModeChanged;
@@ -64,14 +61,17 @@ namespace QuestMmdPlayer
         /// <summary>环境切换后触发；参数 = 新环境。</summary>
         public event Action<VirtualEnvironment> EnvironmentChanged;
 
-        public CoPresenceMode CurrentMode => mode;
-        public VirtualEnvironment CurrentEnvironment => environment;
-        public bool ArCameraAvailable { get; private set; }
-        public bool ArActive => mode == CoPresenceMode.ArReality && arBackgroundRoot != null
+        public virtual CoPresenceMode CurrentMode => mode;
+        public virtual VirtualEnvironment CurrentEnvironment => environment;
+        public virtual Camera MainCamera => mainCamera;
+        public virtual CoPresenceFraming CurrentFraming => framingSnapshot;
+        public virtual bool ArCameraAvailable { get; protected set; }
+        public virtual bool ArPlaced => arPlaced;
+        public virtual bool ArActive => mode == CoPresenceMode.ArReality && arBackgroundRoot != null
             && arBackgroundRoot.activeSelf && arWebCam != null && arWebCam.isPlaying;
-        public bool VideoCallActive => mode == CoPresenceMode.VideoCall && callStartedAt >= 0f;
+        public virtual bool VideoCallActive => mode == CoPresenceMode.VideoCall && callStartedAt >= 0f;
 
-        public string CallDurationText => !VideoCallActive
+        public virtual string CallDurationText => !VideoCallActive
             ? "00:00"
             : FormatDuration(Time.unscaledTime - callStartedAt);
 
@@ -83,7 +83,12 @@ namespace QuestMmdPlayer
                 : $"{span.Minutes:00}:{span.Seconds:00}";
         }
 
-        public void Initialize(Camera camera, PhoneOrbitCamera orbit)
+        public virtual void Initialize(Camera camera)
+        {
+            Initialize(camera, camera == null ? null : camera.GetComponent<PhoneOrbitCamera>());
+        }
+
+        public virtual void Initialize(Camera camera, PhoneOrbitCamera orbit)
         {
             mainCamera = camera;
             orbitCamera = orbit;
@@ -92,20 +97,60 @@ namespace QuestMmdPlayer
             environment = (VirtualEnvironment)Mathf.Clamp(
                 PlayerPrefs.GetInt(PrefsKey + "env", (int)VirtualEnvironment.NightStreet), 0, 3);
             ArCameraAvailable = DetectRearCamera();
+            framingSnapshot = default(CoPresenceFraming);
+            arPlaced = false;
+            hasLoggedFraming = false;
             if (!ArCameraAvailable && mode == CoPresenceMode.ArReality)
             {
                 mode = CoPresenceMode.VirtualScene;
+                PlayerPrefs.SetInt(PrefsKey + "mode", (int)mode);
+                PlayerPrefs.Save();
             }
         }
 
-        public void SetAvatar(Transform avatar)
+        public virtual void SetAvatar(Transform avatar)
         {
             avatarRoot = avatar;
+            if (VideoCallActive)
+            {
+                UpdateFramingSnapshot(applyCamera: true);
+            }
+        }
+
+        /// <summary>
+        /// Receives the measured Flutter/UI chrome in physical camera pixels.
+        /// Values outside the current viewport are ignored so a stale or hostile
+        /// bridge payload cannot produce an invalid framing solve.
+        /// </summary>
+        public virtual void SetChromeInsets(float top, float bottom)
+        {
+            var screenHeight = mainCamera != null && mainCamera.pixelHeight > 0
+                ? mainCamera.pixelHeight
+                : Screen.height;
+            if (!IsFinite(top) || !IsFinite(bottom) || screenHeight <= 1 ||
+                top < 0f || bottom <= top || bottom > screenHeight)
+            {
+                if (!chromeInsetsWarned)
+                {
+                    chromeInsetsWarned = true;
+                    Debug.LogWarning("[CallFraming] ignored invalid chrome insets.", this);
+                }
+                return;
+            }
+
+            chromeTopPx = top;
+            chromeBottomPx = bottom;
+            chromeInsetsWarned = false;
+            if (VideoCallActive)
+            {
+                UpdateFramingSnapshot(applyCamera: true);
+            }
         }
 
         /// <summary>进入场景时应用记忆的模式（UI 层在 EnterScene 成功后调用）。</summary>
-        public void ApplyOnEnterScene()
+        public virtual void ApplyOnEnterScene()
         {
+            arPlaced = false;
             if (mode == CoPresenceMode.VideoCall)
             {
                 EnterVideoCall();
@@ -122,9 +167,10 @@ namespace QuestMmdPlayer
         }
 
         /// <summary>退出场景回菜单：停相机流省电、还原视角（模式记忆保留）。</summary>
-        public void Suspend()
+        public virtual void Suspend()
         {
             TeardownArBackground();
+            arPlaced = false;
             ExitVideoCall();
             RestoreOrbitState();
             if (environmentRoot != null)
@@ -133,15 +179,19 @@ namespace QuestMmdPlayer
             }
         }
 
-        public void SwitchMode(CoPresenceMode next)
+        public virtual bool SwitchMode(CoPresenceMode next)
         {
-            if (next == mode || arRoutineRunning)
+            if (!Enum.IsDefined(typeof(CoPresenceMode), next))
             {
-                return;
+                return false;
             }
-            if (next == CoPresenceMode.ArReality && !ArCameraAvailable)
+            if (next == mode)
             {
-                return;
+                return true;
+            }
+            if (arRoutineRunning || (next == CoPresenceMode.ArReality && !ArCameraAvailable))
+            {
+                return false;
             }
             if (mode == CoPresenceMode.VideoCall)
             {
@@ -153,6 +203,7 @@ namespace QuestMmdPlayer
                 TeardownArBackground();
             }
             mode = next;
+            arPlaced = false;
             PlayerPrefs.SetInt(PrefsKey + "mode", (int)mode);
             PlayerPrefs.Save();
             if (mode == CoPresenceMode.VideoCall)
@@ -168,10 +219,15 @@ namespace QuestMmdPlayer
                 EnterVirtualScene();
             }
             ModeChanged?.Invoke(mode);
+            return true;
         }
 
-        public void SwitchEnvironment(VirtualEnvironment next)
+        public virtual void SwitchEnvironment(VirtualEnvironment next)
         {
+            if (!Enum.IsDefined(typeof(VirtualEnvironment), next))
+            {
+                return;
+            }
             if (next == environment)
             {
                 return;
@@ -313,55 +369,148 @@ namespace QuestMmdPlayer
                 mainCamera.backgroundColor = new Color(0.894f, 0.925f, 0.969f); // #E4ECF7
             }
             SaveOrbitState();
-            if (orbitCamera != null)
-            {
-                // 胸像构图按模型实际渲染包围盒自适应：胸口取身高 72% 处，
-                // 距离 = 身高 × 0.85（夹到可用范围）。旧的固定值（1.15m / 1.35m）
-                // 假设模型恰好 1.6m 高——偏高模型构图只剩下半身、偏矮模型只剩头。
-                var bustHeight = VideoCallBustHeight;
-                var bustDistance = VideoCallBustDistance;
-                if (avatarRoot != null)
-                {
-                    var bounds = PhoneOrbitCamera.ComputeRenderBounds(avatarRoot.gameObject);
-                    if (bounds.size.sqrMagnitude > 1e-8f)
-                    {
-                        bustHeight = bounds.min.y + bounds.size.y * 0.72f;
-                        bustDistance = Mathf.Clamp(bounds.size.y * 0.85f, 0.9f, 2.2f);
-                    }
-                }
-                var focus = avatarRoot != null
-                    ? new Vector3(avatarRoot.position.x, bustHeight, avatarRoot.position.z)
-                    : new Vector3(0f, bustHeight, 0f);
-                orbitCamera.SetOrbitTarget(focus);
-                orbitCamera.OrbitPitchAngle = 0f;
-                // 归零环绕角并让角色面对镜头：通话开始必须正脸出镜。
-                // 旧实现保留进入前的 yaw（用户在虚拟场景转到角色侧面/背面后
-                // 切通话，竖屏窄 FOV 下角色直接出画 = 全屏只剩底色）。
-                if (avatarRoot != null)
-                {
-                    var forward = avatarRoot.forward;
-                    forward.y = 0f;
-                    if (forward.sqrMagnitude < 1e-4f)
-                    {
-                        forward = Vector3.forward;
-                    }
-                    // 相机在 focus 后方（-forward），角色要看向相机方向：
-                    var toCamera = (focus - Vector3.forward * bustDistance) - avatarRoot.position;
-                    toCamera.y = 0f;
-                    if (toCamera.sqrMagnitude > 1e-4f)
-                    {
-                        avatarRoot.rotation = Quaternion.LookRotation(toCamera.normalized, Vector3.up);
-                    }
-                }
-                orbitCamera.OrbitYawAngle = 0f;
-                orbitCamera.OrbitDistance = bustDistance;
-            }
             callStartedAt = Time.unscaledTime;
+            UpdateFramingSnapshot(applyCamera: true);
+        }
+
+        /// <summary>
+        /// Recomputes the semantic framing anchors. The camera is only moved when
+        /// entering the call or when the measured Flutter chrome changes; regular
+        /// updates refresh marker positions without fighting user animation.
+        /// </summary>
+        private void UpdateFramingSnapshot(bool applyCamera)
+        {
+            framingSnapshot = default(CoPresenceFraming);
+            if (mainCamera == null || avatarRoot == null)
+            {
+                return;
+            }
+
+            var bounds = PhoneOrbitCamera.ComputeRenderBounds(avatarRoot.gameObject);
+            if (bounds.size.sqrMagnitude <= 1e-8f)
+            {
+                return;
+            }
+
+            var screenHeight = mainCamera.pixelHeight > 1 ? mainCamera.pixelHeight : Screen.height;
+            if (screenHeight <= 1)
+            {
+                return;
+            }
+
+            var top = chromeTopPx;
+            var bottom = chromeBottomPx;
+            if (!IsFinite(top) || !IsFinite(bottom) || top < 0f || bottom <= top || bottom > screenHeight)
+            {
+                top = screenHeight * 0.03f;
+                bottom = screenHeight * 0.88f;
+                if (!chromeInsetsWarned)
+                {
+                    chromeInsetsWarned = true;
+                    Debug.LogWarning("[CallFraming] using fallback chrome insets until Flutter measures the call chrome.", this);
+                }
+            }
+
+            var avatar = avatarRoot.GetComponent<AvatarController>();
+            var head = avatar == null ? null : avatar.HeadBone;
+            var headAnchor = head != null;
+            var eyeY = headAnchor
+                ? head.position.y + CallFramingSolver.EyeOffset
+                : bounds.min.y + bounds.size.y * 0.83f;
+            var headTopY = eyeY + CallFramingSolver.HeadTopAboveEye;
+            var lowCutY = eyeY - CallFramingSolver.EyeToWaist;
+            var footY = bounds.min.y;
+            var solve = CallFramingSolver.SolveBust(new CallFramingSolver.Inputs
+            {
+                S = screenHeight,
+                ThetaDeg = mainCamera.fieldOfView,
+                TopPx = top,
+                BottomPx = bottom,
+                EyeY = eyeY,
+                HeadTopY = headTopY,
+                FootY = footY,
+                LowCutY = lowCutY,
+            }, headAnchor ? CallFramingSolver.DistanceMax : 1.6f);
+
+            var horizontal = headAnchor
+                ? new Vector3(head.position.x, 0f, head.position.z)
+                : new Vector3(bounds.center.x, 0f, bounds.center.z);
+            var cameraTarget = new Vector3(horizontal.x, solve.CameraY, horizontal.z);
+            if (applyCamera && orbitCamera != null)
+            {
+                orbitCamera.SetOrbitTarget(cameraTarget);
+                orbitCamera.OrbitPitchAngle = 0f;
+                orbitCamera.OrbitYawAngle = 0f;
+                orbitCamera.OrbitDistance = solve.Distance;
+
+                // The closed-form camera looks along +Z at yaw=0. Face the avatar
+                // toward that actual camera position so entering a call is stable.
+                var cameraPosition = cameraTarget + Vector3.back * solve.Distance;
+                var toCamera = cameraPosition - avatarRoot.position;
+                toCamera.y = 0f;
+                if (toCamera.sqrMagnitude > 1e-4f)
+                {
+                    avatarRoot.rotation = Quaternion.LookRotation(toCamera.normalized, Vector3.up);
+                }
+            }
+
+            var eyeWorld = headAnchor
+                ? new Vector3(head.position.x, eyeY, head.position.z)
+                : new Vector3(bounds.center.x, eyeY, bounds.center.z);
+            var headTopWorld = new Vector3(eyeWorld.x, headTopY, eyeWorld.z);
+            var lowCutWorld = new Vector3(eyeWorld.x, lowCutY, eyeWorld.z);
+            var footWorld = new Vector3(bounds.center.x, footY, bounds.center.z);
+            framingSnapshot = new CoPresenceFraming
+            {
+                Valid = true,
+                HeadAnchor = headAnchor,
+                Degraded = solve.Degraded || !headAnchor,
+                ScreenHeight = screenHeight,
+                TopPx = top,
+                BottomPx = bottom,
+                Distance = solve.Distance,
+                CameraY = solve.CameraY,
+                EyeY = eyeY,
+                HeadTopY = headTopY,
+                LowCutY = lowCutY,
+                FootY = footY,
+                EyeWorld = eyeWorld,
+                HeadTopWorld = headTopWorld,
+                LowCutWorld = lowCutWorld,
+                FootWorld = footWorld,
+            };
+
+            var eyeLine = top + (bottom - top) * CallFramingSolver.EyeLineRatio;
+            var framingChanged = !hasLoggedFraming ||
+                Mathf.Abs(lastLoggedDistance - solve.Distance) > 0.001f ||
+                Mathf.Abs(lastLoggedCameraY - solve.CameraY) > 0.001f ||
+                Mathf.Abs(lastLoggedEyeY - eyeY) > 0.001f ||
+                lastLoggedHeadAnchor != headAnchor ||
+                lastLoggedDegraded != framingSnapshot.Degraded;
+            if (framingChanged)
+            {
+                hasLoggedFraming = true;
+                lastLoggedDistance = solve.Distance;
+                lastLoggedCameraY = solve.CameraY;
+                lastLoggedEyeY = eyeY;
+                lastLoggedHeadAnchor = headAnchor;
+                lastLoggedDegraded = framingSnapshot.Degraded;
+                Debug.Log(
+                    $"[CallFraming] solve d={solve.Distance:F3} h={solve.CameraY:F3} " +
+                    $"E={eyeY:F3} sE={eyeLine:F1} anchor={(headAnchor ? "head" : "bounds")} " +
+                    $"degraded={framingSnapshot.Degraded}.", this);
+            }
+            if (!headAnchor && !headAnchorWarned)
+            {
+                headAnchorWarned = true;
+                Debug.LogWarning("[CallFraming] avatar head anchor is unavailable; bounds fallback requires QA overlay review.", this);
+            }
         }
 
         private void ExitVideoCall()
         {
             callStartedAt = -1f;
+            framingSnapshot = default(CoPresenceFraming);
         }
 
         // ───────────────────────── 同框现实（真 AR L1）─────────────────────────
@@ -604,6 +753,7 @@ namespace QuestMmdPlayer
         private void TeardownArCompletely()
         {
             TeardownArBackground();
+            arPlaced = false;
             arWebCam = null;
             if (arBackgroundRoot != null)
             {
@@ -620,7 +770,7 @@ namespace QuestMmdPlayer
         // ───────────────────────── AR 点地放置 ─────────────────────────
 
         /// <summary>点按屏幕放置/移动角色（真 AR L1 手动放置）。返回是否命中地面。</summary>
-        public bool PlaceAvatarAtScreenPoint(Vector2 screenPos)
+        public virtual bool PlaceAvatarAtScreenPoint(Vector2 screenPos)
         {
             if (mode != CoPresenceMode.ArReality || mainCamera == null || avatarRoot == null)
             {
@@ -634,6 +784,7 @@ namespace QuestMmdPlayer
             }
             var hit = ray.GetPoint(enter);
             avatarRoot.position = new Vector3(hit.x, GroundHeight, hit.z);
+            arPlaced = true;
             return true;
         }
 
@@ -687,6 +838,15 @@ namespace QuestMmdPlayer
             {
                 SyncArBackgroundTransform();
             }
+            if (VideoCallActive)
+            {
+                UpdateFramingSnapshot(applyCamera: false);
+            }
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private void OnDestroy()

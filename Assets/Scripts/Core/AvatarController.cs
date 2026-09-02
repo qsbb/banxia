@@ -159,6 +159,9 @@ namespace QuestMmdPlayer
 
         public Transform VisualRoot => visualRoot;
 
+        /// <summary>头骨骼（构图语义锚点）；模型未加载或无头骨时为 null。</summary>
+        public Transform HeadBone => head;
+
         public string CurrentAction => currentAction;
         public AvatarActionSource CurrentActionSource => currentActionSource;
         public string CurrentEmotion => currentEmotion;

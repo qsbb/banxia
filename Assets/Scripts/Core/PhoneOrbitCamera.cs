@@ -11,7 +11,9 @@ namespace QuestMmdPlayer
     public sealed class PhoneOrbitCamera : MonoBehaviour
     {
         private const float DefaultDistance = 2.6f;
-        private const float MinDistance = 0.9f;
+        // 下限与 CallFramingSolver.DistanceMin（0.55m）对齐：否则胸像闭式解
+        // （竖屏通话 d≈0.6–0.8m）会被轨道相机静默夹到 0.9m，构图失准。
+        private const float MinDistance = 0.55f;
         private const float MaxDistance = 5.5f;
         private const float OrbitDegreesPerPixel = 0.22f;
         private const float ZoomDistancePerPixel = 0.012f;
@@ -42,6 +44,11 @@ namespace QuestMmdPlayer
         private Transform trackedAvatar;
         /// <summary>场景工具条「移动模式」：单指拖动直接移动角色而非环绕。</summary>
         public bool SingleFingerMovesAvatar { get; set; }
+
+        /// <summary>
+        /// 视频通话构图由闭式求解器接管时关闭，避免双击取景恢复俯仰角后破坏投影前提。
+        /// </summary>
+        public bool GestureReframeEnabled { get; set; } = true;
 
         public float Distance => distance;
 
@@ -113,8 +120,45 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            orbitTarget = bounds.center;
-            distance = Mathf.Clamp(bounds.size.y * 1.35f + 0.35f, MinDistance, MaxDistance);
+            // 头顶/脚锚点齐全 → 全身像闭式解（头 8%、脚 92% 安全带）；否则保留包围盒逻辑。
+            var avatar = root.GetComponent<AvatarController>();
+            var head = avatar != null ? avatar.HeadBone : null;
+            if (head != null)
+            {
+                var cam = cachedCamera != null ? cachedCamera : Camera.main;
+                float s = cam != null ? cam.pixelHeight : Screen.height;
+                float theta = cam != null ? cam.fieldOfView : 60f;
+                float eyeY = head.position.y + CallFramingSolver.EyeOffset;
+                var solve = CallFramingSolver.SolveFullBody(new CallFramingSolver.Inputs
+                {
+                    S = s,
+                    ThetaDeg = theta,
+                    TopPx = 0f,
+                    BottomPx = s,
+                    EyeY = eyeY,
+                    HeadTopY = eyeY + CallFramingSolver.HeadTopAboveEye,
+                    FootY = bounds.min.y,
+                    LowCutY = eyeY - CallFramingSolver.EyeToWaist,
+                });
+                orbitTarget = new Vector3(bounds.center.x, solve.CameraY, bounds.center.z);
+                // SolveFullBody owns the [DistanceMin, DistanceMax] contract and
+                // marks any clamp as degraded; keep this assignment unmodified so
+                // the diagnostic state cannot disagree with the camera state.
+                distance = solve.Distance;
+                if (solve.Degraded)
+                {
+                    Debug.LogWarning("[CallFraming] full-body framing degraded by distance clamp.", this);
+                }
+                // SolveFullBody uses the pitch=0 projection. Keep the runtime camera
+                // on that contract instead of applying the previous orbit tilt.
+                yaw = 0f;
+                pitch = 0f;
+            }
+            else
+            {
+                orbitTarget = bounds.center;
+                distance = Mathf.Clamp(bounds.size.y * 1.35f + 0.35f, MinDistance, MaxDistance);
+            }
             ApplyTransform();
         }
 
@@ -122,12 +166,12 @@ namespace QuestMmdPlayer
         public void Reframe()
         {
             yaw = 0f;
-            pitch = DefaultPitch;
             if (trackedAvatar != null)
             {
                 FrameModel(trackedAvatar.gameObject);
                 return;
             }
+            pitch = DefaultPitch;
             distance = DefaultDistance;
             ApplyTransform();
         }
@@ -135,27 +179,7 @@ namespace QuestMmdPlayer
         /// <summary>合并根下全部 Renderer（跳过粒子）的世界包围盒，供取景与构图共享。</summary>
         public static Bounds ComputeRenderBounds(GameObject root)
         {
-            var bounds = default(Bounds);
-            bool any = false;
-            var renderers = root.GetComponentsInChildren<Renderer>();
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                var renderer = renderers[i];
-                if (renderer is ParticleSystemRenderer)
-                {
-                    continue;
-                }
-                if (!any)
-                {
-                    bounds = renderer.bounds;
-                    any = true;
-                }
-                else
-                {
-                    bounds.Encapsulate(renderer.bounds);
-                }
-            }
-            return bounds;
+            return RenderBoundsUtility.Compute(root);
         }
 
         /// <summary>
@@ -279,6 +303,10 @@ namespace QuestMmdPlayer
 
         private void HandleTapReset(Vector2 position)
         {
+            if (!GestureReframeEnabled)
+            {
+                return;
+            }
             var now = Time.unscaledTime;
             if (now - lastTapTime <= DoubleTapMaxInterval &&
                 Vector2.Distance(position, lastTapPosition) <= DoubleTapMaxMove)
