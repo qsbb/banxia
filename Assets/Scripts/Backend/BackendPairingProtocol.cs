@@ -48,12 +48,18 @@ namespace QuestMmdPlayer
         public const string ExchangePath = PluginApiPath + "/pairing/exchange";
         public const string LegacyPluginApiPath = "/api/v1/plugins/extensions/" + LegacyPluginId;
         public const string LegacyExchangePath = LegacyPluginApiPath + "/pairing/exchange";
+        public const int MaxServerInputLength = 512;
 
         public static bool TryBuildExchangeEndpoint(string serverOrEndpoint, out string endpoint, out string reason, bool allowPrivateHttp = false)
         {
             endpoint = string.Empty;
             reason = string.Empty;
             var value = (serverOrEndpoint ?? string.Empty).Trim();
+            if (value.Length > MaxServerInputLength)
+            {
+                reason = "Pairing server input exceeds the length limit";
+                return false;
+            }
             if (string.IsNullOrEmpty(value))
             {
                 reason = "Pairing server is required";

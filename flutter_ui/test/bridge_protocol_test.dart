@@ -1,6 +1,31 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:banxia_flutter_ui/core/bridge/bridge_client.dart';
 import 'package:banxia_flutter_ui/core/bridge/bridge_protocol.dart';
+import 'package:banxia_flutter_ui/state/app_state.dart';
+
+class _RejectingBridgeClient implements BridgeClient {
+  final StreamController<BridgeEvent> _events =
+      StreamController<BridgeEvent>.broadcast();
+
+  @override
+  Stream<BridgeEvent> get events => _events.stream;
+
+  @override
+  Future<BridgeReply> call(String name, [Map<String, dynamic>? payload]) async {
+    if (name == Cmd.pairingSetServer || name == Cmd.pairingClearBinding) {
+      return BridgeReply.fail(1, '配对操作失败');
+    }
+    return BridgeReply.ok(1);
+  }
+
+  @override
+  void dispose() {
+    _events.close();
+  }
+}
 
 void main() {
   group('BridgeEnvelope', () {
@@ -152,10 +177,136 @@ void main() {
     });
   });
 
+  test('local camera send preserves typed text and emits suggestions', () async {
+    final bridge = LocalBridgeClient();
+    final app = AppState(bridge);
+    await bridge.call(Cmd.conversationSendWithCamera,
+        <String, dynamic>{'text': '请描述这张照片'});
+    await Future<void>.delayed(Duration.zero);
+    expect(app.conversation.bubbles.first.text, '请描述这张照片');
+    expect(app.conversation.suggestedReplies, hasLength(3));
+    expect(app.conversation.suggestedReplies.first, '继续说说');
+    app.dispose();
+    bridge.dispose();
+  });
+
+  test('local pairing buffer mirrors append, removal, clear and server', () async {
+    final bridge = LocalBridgeClient();
+    final app = AppState(bridge);
+    await bridge.call(Cmd.pairingSetServer,
+        <String, dynamic>{'server': 'http://127.0.0.1:8080'});
+    for (final digit in <String>['1', '2', '3', '4', '5', '6']) {
+      app.appendPairingDigit(digit);
+    }
+    await Future<void>.delayed(Duration.zero);
+    expect(app.connection.server, 'http://127.0.0.1:8080');
+    expect(app.connection.serverDraft, 'http://127.0.0.1:8080');
+    expect(app.connection.serverDraftDirty, isFalse);
+    expect(app.connection.pairingCode, '123456');
+    app.removePairingDigit();
+    await Future<void>.delayed(Duration.zero);
+    expect(app.connection.pairingCode, '12345');
+    app.clearPairingCode();
+    await Future<void>.delayed(Duration.zero);
+    expect(app.connection.pairingCode, isEmpty);
+    app.dispose();
+    bridge.dispose();
+  });
+
+  test('pairing server draft rolls back when bridge rejects it', () async {
+    final bridge = _RejectingBridgeClient();
+    final app = AppState(bridge);
+    app.connection.committedServer = 'https://old.example';
+    app.connection.server = 'https://old.example';
+    app.updatePairingServerDraft('https://new.example');
+
+    final bool ok = await app.commitPairingServer(app.connection.serverDraft);
+
+    expect(ok, isFalse);
+    expect(app.connection.serverDraft, 'https://old.example');
+    expect(app.connection.committedServer, 'https://old.example');
+    app.dispose();
+    bridge.dispose();
+  });
+
+  test('clear binding clears the committed server after bridge success', () async {
+    final bridge = LocalBridgeClient();
+    final app = AppState(bridge);
+    await app.commitPairingServer('https://old.example');
+
+    final bool ok = await app.dispatch(Cmd.pairingClearBinding);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(ok, isTrue);
+    expect(app.connection.server, isEmpty);
+    expect(app.connection.serverDraft, isEmpty);
+    expect(app.connection.committedServer, isEmpty);
+    expect(app.connection.serverDraftDirty, isFalse);
+    expect(app.connection.connected, isFalse);
+    app.dispose();
+    bridge.dispose();
+  });
+
+  test('clear binding restores server when bridge rejects it', () async {
+    final bridge = _RejectingBridgeClient();
+    final app = AppState(bridge);
+    app.connection.server = 'https://old.example';
+    app.connection.serverDraft = 'https://draft.example';
+    app.connection.committedServer = 'https://old.example';
+    app.connection.serverDraftDirty = true;
+
+    final bool ok = await app.dispatch(Cmd.pairingClearBinding);
+
+    expect(ok, isFalse);
+    expect(app.connection.server, 'https://old.example');
+    expect(app.connection.serverDraft, 'https://draft.example');
+    expect(app.connection.committedServer, 'https://old.example');
+    expect(app.connection.serverDraftDirty, isTrue);
+    app.dispose();
+    bridge.dispose();
+  });
+
+  test('pairing server commit trims and stores a successful address', () async {
+    final bridge = LocalBridgeClient();
+    final app = AppState(bridge);
+
+    final bool ok = await app.commitPairingServer('  https://new.example  ');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(ok, isTrue);
+    expect(app.connection.server, 'https://new.example');
+    expect(app.connection.serverDraft, 'https://new.example');
+    expect(app.connection.committedServer, 'https://new.example');
+    expect(app.connection.serverDraftDirty, isFalse);
+    app.dispose();
+    bridge.dispose();
+  });
+
+  test('pairing status events do not overwrite an active server draft', () async {
+    final bridge = LocalBridgeClient();
+    final app = AppState(bridge);
+    await bridge.call(Cmd.pairingSetServer,
+        <String, dynamic>{'server': 'https://old.example'});
+    await Future<void>.delayed(Duration.zero);
+
+    app.updatePairingServerDraft('https://draft.example');
+    await bridge.call(Cmd.pairingSetServer,
+        <String, dynamic>{'server': 'https://old.example'});
+    await Future<void>.delayed(Duration.zero);
+
+    expect(app.connection.server, 'https://old.example');
+    expect(app.connection.committedServer, 'https://old.example');
+    expect(app.connection.serverDraft, 'https://draft.example');
+    expect(app.connection.serverDraftDirty, isTrue);
+    app.dispose();
+    bridge.dispose();
+  });
+
   test('cmd/event names are stable and non-empty', () {
     expect(Cmd.modelDiscover, 'model.discover');
     expect(Cmd.copresenceSwitchMode, 'copresence.switchMode');
     expect(Evt.framingAnchors, 'framing.anchors');
+    expect(Evt.conversationSuggestions, 'conversation.suggestions');
     expect(Evt.copresencePlacementChanged, 'copresence.placementChanged');
     expect(Evt.toast, 'toast');
   });

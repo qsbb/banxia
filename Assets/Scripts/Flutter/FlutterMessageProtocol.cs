@@ -96,6 +96,7 @@ namespace QuestMmdPlayer
         public const string ConversationState = "conversation.state";
         public const string ConversationTranscript = "conversation.transcript";
         public const string ConversationReply = "conversation.reply";
+        public const string ConversationSuggestions = "conversation.suggestions";
         public const string ModelUpdated = "model.updated";
         public const string ModelImportStatus = "model.importStatus";
         public const string ActionUpdated = "action.updated";
@@ -417,6 +418,7 @@ namespace QuestMmdPlayer
                 FlutterEvents.ConversationState,
                 FlutterEvents.ConversationTranscript,
                 FlutterEvents.ConversationReply,
+                FlutterEvents.ConversationSuggestions,
                 FlutterEvents.ModelUpdated,
                 FlutterEvents.ModelImportStatus,
                 FlutterEvents.ActionUpdated,
@@ -443,11 +445,22 @@ namespace QuestMmdPlayer
 
     [Serializable] public sealed class FlutterConnectionChangedPayload { public bool connected; public string bridgeStatus = string.Empty; }
 
-    [Serializable] public sealed class FlutterPairingStatusPayload { public string status = string.Empty; public bool privateHttp; public int codeLen; }
+    [Serializable] public sealed class FlutterPairingStatusPayload
+    {
+        public string status = string.Empty;
+        public string server = string.Empty;
+        public bool privateHttp;
+        public int codeLen;
+    }
 
     [Serializable] public sealed class FlutterConversationStatePayload { public string state = string.Empty; public string transportStatus = string.Empty; public string lastError = string.Empty; }
 
     [Serializable] public sealed class FlutterTextPayload { public string text = string.Empty; }
+
+    [Serializable] public sealed class FlutterConversationSuggestionsPayload
+    {
+        public string[] suggestions = new string[0];
+    }
 
     [Serializable] public sealed class FlutterModelInfoDto
     {

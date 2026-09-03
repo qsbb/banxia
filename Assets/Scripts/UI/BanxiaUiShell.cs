@@ -126,6 +126,8 @@ namespace QuestMmdPlayer
         private TextField chatInputField;
         private TouchScreenKeyboard activeTouchKeyboard;
         private TextField activeTouchField;
+        private float lastKeyboardInsetPx = -1f;
+        private bool keyboardInsetLogged;
         private Label voiceStatusLabel;
         private Label actionsStatusLabel;
         private VisualElement actionsListContainer;
@@ -490,15 +492,16 @@ namespace QuestMmdPlayer
             {
                 if (activeTouchField != null && activeTouchField.value != activeTouchKeyboard.text)
                 {
-                    activeTouchField.value = activeTouchKeyboard.text;
+                    activeTouchField.SetValueWithoutNotify(activeTouchKeyboard.text);
                 }
                 if (activeTouchKeyboard.status == TouchScreenKeyboard.Status.Done ||
-                    activeTouchKeyboard.status == TouchScreenKeyboard.Status.Canceled)
+                    activeTouchKeyboard.status == TouchScreenKeyboard.Status.Canceled ||
+                    activeTouchKeyboard.status == TouchScreenKeyboard.Status.LostFocus)
                 {
-                    activeTouchKeyboard = null;
-                    activeTouchField = null;
+                    CloseTouchKeyboard();
                 }
             }
+            PushKeyboardInset();
             if (mode == UiMode.Scene && Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
             {
                 ReturnToMenu();
@@ -722,6 +725,7 @@ namespace QuestMmdPlayer
 
         private void SelectTab(Tab tab)
         {
+            CloseTouchKeyboard();
             currentTab = tab;
             foreach (var pair in tabPages)
             {
@@ -1115,11 +1119,7 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            float panelHeight = panelRoot != null ? panelRoot.worldBound.height : 0f;
-            if (panelHeight <= 1f)
-            {
-                panelHeight = pad.panel != null ? pad.panel.visualTree.worldBound.height : 0f;
-            }
+            float panelHeight = ResolvePanelHeight(pad);
             if (panelHeight <= 1f)
             {
                 return;
@@ -1242,6 +1242,157 @@ namespace QuestMmdPlayer
             field.RegisterCallback<ClickEvent>(_ => Open());
         }
 
+        private void CloseTouchKeyboard()
+        {
+            if (activeTouchKeyboard != null)
+            {
+                activeTouchKeyboard.active = false;
+            }
+            activeTouchKeyboard = null;
+            activeTouchField = null;
+            lastKeyboardInsetPx = -1f;
+            keyboardInsetLogged = false;
+            ApplyKeyboardInset(0f);
+            if (tabBar != null && mode == UiMode.Menu)
+            {
+                tabBar.style.display = DisplayStyle.Flex;
+            }
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            if (!hasFocus)
+            {
+                CloseTouchKeyboard();
+            }
+        }
+
+        /// <summary>
+        /// UI Toolkit does not resize the Unity surface for TouchScreenKeyboard on
+        /// Android. Use the native keyboard rectangle as a bottom inset so the
+        /// chat composer follows the IME like a native chat window.
+        /// </summary>
+        private void PushKeyboardInset()
+        {
+            // CloseTouchKeyboard already applies the zero inset. Skip the idle
+            // path so non-phone frames do not allocate or query UI geometry.
+            if (activeTouchKeyboard == null && lastKeyboardInsetPx <= 0f)
+            {
+                return;
+            }
+            var keyboardVisible = activeTouchKeyboard != null &&
+                activeTouchKeyboard.active &&
+                activeTouchKeyboard.status == TouchScreenKeyboard.Status.Visible &&
+                !worldSpaceHost &&
+                document != null && document.panelSettings != null &&
+                document.panelSettings.targetTexture == null;
+            var area = keyboardVisible ? TouchScreenKeyboard.area : new Rect(0f, 0f, 0f, 0f);
+            var insetPx = ComputeKeyboardInsetPixels(area, Screen.height);
+            if (Mathf.Abs(insetPx - lastKeyboardInsetPx) <= 0.5f)
+            {
+                return;
+            }
+            var panelHeight = ResolvePanelHeight(activeTouchField);
+            if (panelHeight <= 1f || Screen.height <= 1)
+            {
+                return;
+            }
+            lastKeyboardInsetPx = insetPx;
+            var insetPanelUnits = insetPx <= 0f
+                ? 0f
+                : insetPx * panelHeight / Screen.height + 24f;
+            ApplyKeyboardInset(insetPanelUnits);
+            if (insetPx > 0f && currentTab == Tab.Chat && chatTranscript != null)
+            {
+                chatTranscript.schedule.Execute(() =>
+                {
+                    if (chatTranscript.verticalScroller != null)
+                    {
+                        chatTranscript.verticalScroller.value = chatTranscript.verticalScroller.highValue;
+                    }
+                });
+            }
+            if (insetPx > 0f && !keyboardInsetLogged)
+            {
+                keyboardInsetLogged = true;
+                Debug.Log($"[KbInset] screenH={Screen.height} panelH={panelHeight:F1} " +
+                          $"insetPx={insetPx:F0} panelUnits={insetPanelUnits:F0}", this);
+            }
+            if (insetPx <= 0f)
+            {
+                keyboardInsetLogged = false;
+            }
+            if (tabBar != null && mode == UiMode.Menu)
+            {
+                tabBar.style.display = insetPx > 0f ? DisplayStyle.None : DisplayStyle.Flex;
+            }
+        }
+
+        private float ResolvePanelHeight(VisualElement preferredElement)
+        {
+            var candidate = panelRoot == null ? 0f : panelRoot.worldBound.height;
+            if (IsUsablePanelHeight(candidate))
+            {
+                return candidate;
+            }
+
+            candidate = preferredElement == null || preferredElement.panel == null
+                ? 0f
+                : preferredElement.panel.visualTree.worldBound.height;
+            if (IsUsablePanelHeight(candidate))
+            {
+                return candidate;
+            }
+
+            candidate = panelRoot == null || panelRoot.panel == null
+                ? 0f
+                : panelRoot.panel.visualTree.worldBound.height;
+            if (IsUsablePanelHeight(candidate))
+            {
+                return candidate;
+            }
+
+            // During the first GeometryChangedEvent UI Toolkit can expose NaN
+            // bounds. A screen-sized fallback keeps the scale ratio finite until
+            // the next layout pass supplies the real panel height.
+            return Screen.height > 1 ? Screen.height : 0f;
+        }
+
+        private static bool IsUsablePanelHeight(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value) && value > 1f;
+        }
+
+        internal static float ComputeKeyboardInsetPixels(Rect area, float screenHeight)
+        {
+            if (screenHeight <= 1f || area.width <= 0f || area.height <= 0f)
+            {
+                return 0f;
+            }
+            // area.height is the covered screen height and is independent of
+            // whether the platform reports the Rect origin from the top or bottom.
+            return Mathf.Clamp(area.height, 0f, screenHeight);
+        }
+
+        internal static float ComputeKeyboardInsetPanelUnits(Rect area, float screenHeight, float panelHeight)
+        {
+            if (panelHeight <= 1f || screenHeight <= 1f)
+            {
+                return 0f;
+            }
+            var insetPx = ComputeKeyboardInsetPixels(area, screenHeight);
+            return insetPx <= 0f ? 0f : insetPx * panelHeight / screenHeight + 24f;
+        }
+
+        internal void ApplyKeyboardInset(float insetPanelUnits)
+        {
+            if (content == null)
+            {
+                return;
+            }
+            content.style.paddingBottom = Mathf.Max(0f, insetPanelUnits);
+        }
+
         private void AddChatInputBar(VisualElement parent)
         {
             var bar = new VisualElement();
@@ -1351,6 +1502,10 @@ namespace QuestMmdPlayer
         /// </summary>
         private void SetVoiceInputMode(bool enabled)
         {
+            if (enabled)
+            {
+                CloseTouchKeyboard();
+            }
             voiceInputMode = enabled;
             if (chatVoiceToggle == null || chatHoldBar == null)
             {

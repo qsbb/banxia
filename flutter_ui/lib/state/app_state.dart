@@ -33,6 +33,9 @@ class ConnectionState {
   String pairingStatus = '未连接';
   String pairingCode = '';
   String server = '';
+  String serverDraft = '';
+  String committedServer = '';
+  bool serverDraftDirty = false;
   bool privateHttp = false;
   bool connected = false;
 }
@@ -46,6 +49,7 @@ class ConversationState {
   bool alwaysListening = false;
   bool recording = false;
   double voiceLevel = 0;
+  final List<String> suggestedReplies = <String>[];
   final List<ChatBubble> bubbles = <ChatBubble>[];
 }
 
@@ -136,6 +140,7 @@ class AppState extends ChangeNotifier {
   FramingSnapshot framing = FramingSnapshot.unavailable();
 
   Timer? _toastTimer;
+  int _suggestionGeneration = 0;
   bool _disposed = false;
 
   bool get inScene => uiMode.value == UiMode.scene;
@@ -201,6 +206,46 @@ class AppState extends ChangeNotifier {
         // The sheet is Flutter-owned UI; a rejected return keeps its cleared
         // state and only the mode is restored.
         return () => uiMode.value = previousMode;
+      case Cmd.conversationSend:
+      case Cmd.conversationSendWithCamera:
+        final List<String> previousSuggestions =
+            List<String>.from(conversation.suggestedReplies);
+        final int generation = ++_suggestionGeneration;
+        conversation.suggestedReplies.clear();
+        _notify();
+        return () {
+          if (_suggestionGeneration != generation ||
+              conversation.suggestedReplies.isNotEmpty) {
+            return;
+          }
+          conversation.suggestedReplies
+            ..clear()
+            ..addAll(previousSuggestions);
+          _notify();
+        };
+      case Cmd.pairingClearBinding:
+        final String previousServer = connection.server;
+        final String previousDraft = connection.serverDraft;
+        final String previousCommitted = connection.committedServer;
+        final bool previousDraftDirty = connection.serverDraftDirty;
+        final bool previousConnected = connection.connected;
+        final String previousPairingStatus = connection.pairingStatus;
+        connection.server = '';
+        connection.serverDraft = '';
+        connection.committedServer = '';
+        connection.serverDraftDirty = false;
+        connection.connected = false;
+        connection.pairingStatus = '未连接';
+        _notify();
+        return () {
+          connection.server = previousServer;
+          connection.serverDraft = previousDraft;
+          connection.committedServer = previousCommitted;
+          connection.serverDraftDirty = previousDraftDirty;
+          connection.connected = previousConnected;
+          connection.pairingStatus = previousPairingStatus;
+          _notify();
+        };
       default:
         return null;
     }
@@ -216,12 +261,16 @@ class AppState extends ChangeNotifier {
     switch (cmd) {
       case Cmd.modelDiscover:
         _applyModels(data?['models']);
+        break;
       case Cmd.actionRefresh:
         _applyActions(data?['actions']);
+        break;
       case Cmd.logRefresh:
         _applyLogLines(data?['lines']);
+        break;
       case Cmd.updateCheck:
         _applyUpdateStatus(data?['status']);
+        break;
       default:
         return;
     }
@@ -236,13 +285,30 @@ class AppState extends ChangeNotifier {
         if (p?['bridgeStatus'] is String) {
           connection.bridgeStatus = p!['bridgeStatus'] as String;
         }
+        break;
       case Evt.pairingStatus:
         if (p?['status'] is String) {
           connection.pairingStatus = p!['status'] as String;
         }
+        if (p?['server'] is String) {
+          final String server = p!['server'] as String;
+          connection.server = server;
+          // A late status frame must not change the rollback baseline or the
+          // input field while the user is editing an uncommitted address.
+          if (!connection.serverDraftDirty) {
+            connection.committedServer = server;
+            connection.serverDraft = server;
+            connection.serverDraftDirty = false;
+          }
+        }
+        if (p?['codeLen'] is num) {
+          final int codeLen = (p!['codeLen'] as num).toInt().clamp(0, 6).toInt();
+          if (codeLen == 0) connection.pairingCode = '';
+        }
         if (p?['privateHttp'] is bool) {
           connection.privateHttp = p!['privateHttp'] as bool;
         }
+        break;
       case Evt.conversationState:
         if (p?['state'] is String) conversation.state = p!['state'] as String;
         if (p?['transportStatus'] is String) {
@@ -251,23 +317,39 @@ class AppState extends ChangeNotifier {
         if (p?['lastError'] is String) {
           conversation.lastError = p!['lastError'] as String;
         }
+        break;
       case Evt.conversationTranscript:
         _pushBubble(true, p?['text']);
+        break;
       case Evt.conversationReply:
         conversation.replyText = _str(p?['text']);
         _pushBubble(false, p?['text']);
+        break;
+      case Evt.conversationSuggestions:
+        ++_suggestionGeneration;
+        conversation.suggestedReplies
+          ..clear()
+          ..addAll((p?['suggestions'] is List ? p!['suggestions'] as List : const <dynamic>[])
+              .map(_str)
+              .where((String value) => value.trim().isNotEmpty)
+              .take(3));
+        break;
       case Evt.modelUpdated:
         _applyModels(p?['models']);
         if (p?['currentPath'] is String) {
           models.currentPath = p!['currentPath'] as String;
         }
+        break;
       case Evt.modelImportStatus:
         models.importStatus = _str(p?['status']);
         if (models.importStatus.isNotEmpty) showToast(models.importStatus);
+        break;
       case Evt.actionUpdated:
         _applyActions(p?['actions']);
+        break;
       case Evt.actionPlaybackChanged:
         actions.playingId = p?['playingId'] as String?;
+        break;
       case Evt.qualityChanged:
         if (p?['renderPreset'] is String) {
           quality.renderPreset = p!['renderPreset'] as String;
@@ -276,6 +358,7 @@ class AppState extends ChangeNotifier {
           quality.physicsPreset = p!['physicsPreset'] as String;
         }
         quality.status = _str(p?['status']);
+        break;
       case Evt.copresenceMode:
         copresence.mode =
             CoPresenceMode.fromValue(p?['mode'] as String?) ?? copresence.mode;
@@ -291,29 +374,39 @@ class AppState extends ChangeNotifier {
         if (p?['arPlaced'] is bool) {
           copresence.arPlaced = p!['arPlaced'] as bool;
         }
+        break;
       case Evt.copresenceCallTimer:
         copresence.callDuration = _str(p?['durationText']);
+        break;
       case Evt.copresenceChromeInsetsNeeded:
         copresence.chromeMeasureNonce++;
+        break;
       case Evt.copresencePlacementChanged:
         if (p?['arPlaced'] is bool) {
           copresence.arPlaced = p!['arPlaced'] as bool;
         }
+        break;
       case Evt.framingAnchors:
         framing = FramingSnapshot.fromEvent(p);
+        break;
       case Evt.voiceStatus:
         conversation.monitoring = p?['monitoring'] == true;
         conversation.alwaysListening = p?['alwaysListening'] == true;
         conversation.recording = p?['recording'] == true;
         conversation.voiceLevel = _num(p?['level']);
+        break;
       case Evt.updateStatus:
         _applyUpdateStatus(p);
+        break;
       case Evt.logUpdated:
         _applyLogLines(p?['lines']);
+        break;
       case Evt.performanceSnapshot:
         diagnostics.perf = p == null ? null : PerfSnapshot.fromJson(p);
+        break;
       case Evt.toast:
         showToast(_str(p?['message']));
+        break;
       default:
         break;
     }
@@ -510,6 +603,17 @@ class AppState extends ChangeNotifier {
       showToast('请输入完整的 6 位配对码');
       return;
     }
+    final String server = connection.serverDraft.trim();
+    if (server.isEmpty) {
+      connection.serverDraft = connection.committedServer;
+      connection.serverDraftDirty = false;
+      _notify();
+      showToast('请输入服务器地址');
+      return;
+    }
+    if (!await commitPairingServer(connection.serverDraft)) {
+      return;
+    }
     // Progress toast first; the engine's own status/toast events and the
     // bridge error toast on failure replace it, so a failed pair never ends
     // with an optimistic "正在配对…" success signal.
@@ -517,15 +621,64 @@ class AppState extends ChangeNotifier {
     await dispatch(Cmd.pairingPair);
   }
 
+  Future<bool> commitPairingServer(String value) async {
+    final String previousServer = connection.committedServer;
+    final String previousEngineServer = connection.server;
+    final String server = value.trim();
+    if (server.isEmpty) {
+      connection.server = previousEngineServer;
+      connection.serverDraft = previousServer;
+      connection.serverDraftDirty = false;
+      _notify();
+      return false;
+    }
+    if (server == previousServer) {
+      connection.server = server;
+      connection.serverDraft = server;
+      connection.serverDraftDirty = false;
+      _notify();
+      return true;
+    }
+    // Guard the rollback baseline from pairing.status frames emitted while the
+    // bridge is applying the new endpoint.
+    connection.serverDraft = server;
+    connection.serverDraftDirty = true;
+    _notify();
+    if (!await dispatch(Cmd.pairingSetServer, <String, dynamic>{
+      'server': server,
+    })) {
+      connection.server = previousEngineServer;
+      connection.serverDraft = previousServer;
+      connection.serverDraftDirty = false;
+      _notify();
+      return false;
+    }
+    connection.server = server;
+    connection.serverDraft = server;
+    connection.committedServer = server;
+    connection.serverDraftDirty = false;
+    _notify();
+    return true;
+  }
+
+  void updatePairingServerDraft(String value) {
+    connection.serverDraft = value;
+    connection.serverDraftDirty = value != connection.committedServer;
+    _notify();
+  }
+
   // ── Settings helpers ──────────────────────────────────────────────────────
   Future<void> toggleSetting(String key, bool value) async {
     switch (key) {
       case 'hud':
         settings.hud = value;
+        break;
       case 'framingGrid':
         settings.framingGrid = value;
+        break;
       case 'camera':
         settings.camera = value;
+        break;
       default:
         break;
     }

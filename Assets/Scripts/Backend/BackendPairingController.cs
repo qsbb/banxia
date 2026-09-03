@@ -105,6 +105,20 @@ namespace QuestMmdPlayer
             return true;
         }
 
+        /// <summary>
+        /// Clears the pairing server from memory and both current/legacy PlayerPrefs
+        /// keys so a successful unbind cannot resurrect the old endpoint on restart.
+        /// </summary>
+        public void ClearPairingServer()
+        {
+            CancelPairingRequest();
+            PairingServerEndpoint = string.Empty;
+            PlayerPrefs.DeleteKey(PairingServerPreference);
+            PlayerPrefs.DeleteKey(LegacyPairingServerPreference);
+            PlayerPrefs.Save();
+            SetStatus("Pairing server cleared");
+        }
+
         public void PairWithCode(string code)
         {
             var normalized = BackendPairingProtocol.NormalizeShortCode(code);
@@ -291,7 +305,7 @@ namespace QuestMmdPlayer
             StatusChanged?.Invoke();
         }
 
-        private void OnDisable()
+        private void CancelPairingRequest()
         {
             if (pairingRoutine != null)
             {
@@ -304,6 +318,11 @@ namespace QuestMmdPlayer
                 activeRequest.Dispose();
                 activeRequest = null;
             }
+        }
+
+        private void OnDisable()
+        {
+            CancelPairingRequest();
         }
     }
 }

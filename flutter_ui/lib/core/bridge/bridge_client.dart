@@ -111,6 +111,8 @@ class LocalBridgeClient implements BridgeClient {
   VirtualEnvironment _environment = VirtualEnvironment.nightStreet;
   bool _videoCallActive = false;
   bool _arPlaced = false;
+  String _server = '';
+  String _pairingCode = '';
 
   final List<String> _log = <String>[
     '[Banxia] shell ready',
@@ -180,9 +182,16 @@ class LocalBridgeClient implements BridgeClient {
             <String, dynamic>{'message': 'avatar.command: ${p['name']}'});
         return _ok(id);
       case Cmd.conversationSend:
-        _emit(Evt.conversationTranscript, <String, dynamic>{'text': p['text']});
+      case Cmd.conversationSendWithCamera:
+        final String text = (p['text'] as String? ?? '').trim();
+        _emit(Evt.conversationTranscript, <String, dynamic>{'text': text});
         _emit(Evt.conversationReply, <String, dynamic>{
-          'text': '（演示回复）收到：${p['text']}',
+          'text': name == Cmd.conversationSendWithCamera
+              ? '（演示回复）已收到一帧${text.isEmpty ? '' : '：$text'}'
+              : '（演示回复）收到：$text',
+        });
+        _emit(Evt.conversationSuggestions, <String, dynamic>{
+          'suggestions': <String>['继续说说', '换个话题', '我知道了'],
         });
         _emit(Evt.conversationState,
             <String, dynamic>{'state': 'replying', 'transportStatus': 'http'});
@@ -203,27 +212,75 @@ class LocalBridgeClient implements BridgeClient {
         });
         return _ok(id);
       case Cmd.pairingSetServer:
+        _server = (p['server'] as String? ?? '').trim();
+        _emit(Evt.pairingStatus, <String, dynamic>{
+          'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
+          'server': _server,
+          'privateHttp': false,
+          'codeLen': _pairingCode.length,
+        });
+        return _ok(id);
       case Cmd.pairingSetPrivateHttp:
+        return _ok(id);
       case Cmd.pairingDigit:
+        final String op = p['op'] as String? ?? '';
+        final String digit = p['digit'] as String? ?? '';
+        if (op == 'append') {
+          if (digit.length != 1 ||
+              digit.codeUnitAt(0) < 48 ||
+              digit.codeUnitAt(0) > 57 ||
+              _pairingCode.length >= 6) {
+            return BridgeReply.fail(id, '配对数字无效');
+          }
+          _pairingCode += digit;
+        } else if (op == 'remove') {
+          if (_pairingCode.isNotEmpty) {
+            _pairingCode =
+                _pairingCode.substring(0, _pairingCode.length - 1);
+          }
+        } else if (op == 'clear') {
+          _pairingCode = '';
+        } else {
+          return BridgeReply.fail(id, '未知配对键盘操作');
+        }
+        _emit(Evt.pairingStatus, <String, dynamic>{
+          'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
+          'server': _server,
+          'privateHttp': false,
+          'codeLen': _pairingCode.length,
+        });
         return _ok(id);
       case Cmd.pairingPair:
         _emit(Evt.connectionChanged,
             <String, dynamic>{'connected': true, 'bridgeStatus': '已连接'});
         _emit(Evt.pairingStatus, <String, dynamic>{
           'status': '已连接',
+          'server': _server,
           'privateHttp': p['privateHttp'] ?? false,
-          'codeLen': 6,
+          'codeLen': 0,
         });
+        _pairingCode = '';
         _emit(Evt.toast, <String, dynamic>{'message': '配对成功'});
         return _ok(id);
       case Cmd.pairingReconnect:
-        _emit(Evt.pairingStatus, <String, dynamic>{'status': '重连中…'});
+        _emit(Evt.pairingStatus, <String, dynamic>{
+          'status': '重连中…',
+          'server': _server,
+          'privateHttp': false,
+          'codeLen': 0,
+        });
         _emit(Evt.toast, <String, dynamic>{'message': '重新连接后端'});
         return _ok(id);
       case Cmd.pairingClearBinding:
         _emit(Evt.connectionChanged,
             <String, dynamic>{'connected': false, 'bridgeStatus': '未连接'});
-        _emit(Evt.pairingStatus, <String, dynamic>{'status': '未连接'});
+        _server = '';
+        _emit(Evt.pairingStatus, <String, dynamic>{
+          'status': '未连接',
+          'server': '',
+          'privateHttp': false,
+          'codeLen': 0,
+        });
         _emit(Evt.toast, <String, dynamic>{'message': '已解除后端绑定'});
         return _ok(id);
       case Cmd.qualityApplyPreset:

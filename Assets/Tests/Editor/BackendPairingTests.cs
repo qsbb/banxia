@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using NUnit.Framework;
 using UnityEngine;
@@ -34,6 +34,16 @@ namespace QuestMmdPlayer.Tests
             Assert.That(
                 BackendPairingProtocol.TryBuildExchangeEndpoint(input, out _, out _),
                 Is.False);
+        }
+
+        [Test]
+        public void PairingEndpointRejectsOversizedServerInput()
+        {
+            var oversized = new string('a', BackendPairingProtocol.MaxServerInputLength + 1);
+            Assert.That(
+                BackendPairingProtocol.TryBuildExchangeEndpoint(oversized, out _, out var reason),
+                Is.False);
+            Assert.That(reason, Does.Contain("length limit"));
         }
 
         [Test]
@@ -111,6 +121,54 @@ namespace QuestMmdPlayer.Tests
                 Is.True);
             Assert.That(upgradedBaseUrl, Is.EqualTo(
                 "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge"));
+        }
+
+        [Test]
+        public void ClearPairingServerRemovesCurrentAndLegacyPreferences()
+        {
+            const string currentKey = "embodiment_bridge_pairing_server_v1";
+            const string legacyKey = "quest_avatar_pairing_server_v1";
+            var hadCurrent = PlayerPrefs.HasKey(currentKey);
+            var hadLegacy = PlayerPrefs.HasKey(legacyKey);
+            var previousCurrent = PlayerPrefs.GetString(currentKey, string.Empty);
+            var previousLegacy = PlayerPrefs.GetString(legacyKey, string.Empty);
+            var owner = new GameObject("Pairing server preference cleanup");
+            try
+            {
+                PlayerPrefs.SetString(legacyKey, "https://legacy.example");
+                var controller = owner.AddComponent<BackendPairingController>();
+                Assert.That(
+                    controller.TrySetPairingServer("https://new.example", out var reason),
+                    Is.True,
+                    reason);
+
+                controller.ClearPairingServer();
+
+                Assert.That(controller.PairingServerEndpoint, Is.Empty);
+                Assert.That(PlayerPrefs.HasKey(currentKey), Is.False);
+                Assert.That(PlayerPrefs.HasKey(legacyKey), Is.False);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+                if (hadCurrent)
+                {
+                    PlayerPrefs.SetString(currentKey, previousCurrent);
+                }
+                else
+                {
+                    PlayerPrefs.DeleteKey(currentKey);
+                }
+                if (hadLegacy)
+                {
+                    PlayerPrefs.SetString(legacyKey, previousLegacy);
+                }
+                else
+                {
+                    PlayerPrefs.DeleteKey(legacyKey);
+                }
+                PlayerPrefs.Save();
+            }
         }
 
         [Test]

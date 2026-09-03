@@ -71,9 +71,9 @@
 |------|-----|
 | 构建机 | `ssh -i /data/dsh/home/.ssh/id_ed25519 -o UserKnownHostsFile=/data/dsh/home/.ssh/known_hosts -o BatchMode=yes lx@192.168.5.55` |
 | 构建流 | tar 传输 → PowerShell touch 源文件 → `cmd /c del D:\banxia_build\Builds\Banxia-Phone.apk` → `powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/lx/banxia_build_phone_wait.ps1` → dir 验证新时间戳（约 10 分钟，sleep 570 轮询） |
-| 模拟器 | 192.168.5.21（SSH_ASKPASS 密码 Zyb@0805，`~/banxia-tools/platform-tools/adb -s emulator-5554`），包名 `com.lingxi.banxia.phone`，base64 -w0 传截图 |
+| 模拟器 | `lingxi@192.168.5.21`（本机 ED25519 公钥免密，`~/banxia-tools/platform-tools/adb -s emulator-5554`），包名 `com.lingxi.banxia.phone`，base64 -w0 传截图 |
 | 截图分析 | `/data/dsh/home/dsh/bridge-venv/bin/python` + PIL（本机无图输入，全像素断言） |
-| NAS | `\\192.168.5.88\download-WD40EZRZ\文件传输`（smbclient，lingxi/Zyb@0805） |
+| NAS | `\\192.168.5.88\download-WD40EZRZ\文件传输`（smbclient；SSH 使用外部 `~/.ssh/askpass.sh`） |
 
 ### 5.2 模拟器点击协议（防第 3 击失效）
 

@@ -286,12 +286,10 @@ banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落
   `reply.suggestions`（≤3 条、reply.end 之后异步、失败静默）。Unity 手机端
   `ConversationController.SuggestedReplies` + 对话页三条纵排建议卡已实现；
   **Quest 端 VR UI 建议入口待同步**（协议层零改动，纯 UI 接线）。
-- [x] **M5 对话页微信化 + 输入防溢出（UI 同构，待同步）**（M5，2026-09-03）：
-  语音收纳为输入条「音/字」切换 + 按住说话条（上滑取消）；`.field`
-  `min-width:0 + flex-shrink + overflow:hidden` 防长文本顶飞按钮；
-  设置连接页字段去内嵌 label + 配对键盘折叠。Flutter 壳层
-  （`flutter_ui/lib/scene/chat_*.dart`）同构改动待同步；Quest 端面板
-  无键盘输入（语音为主），仅验收不回归。
+- [x] **M5 对话页微信化 + 输入防溢出（双端壳层同步）**（M5，2026-09-03）：
+  Unity fallback 与 Flutter 生产壳层均采用消息流 + 输入条；Flutter 侧移除常驻语音面板和静态预设词，接入 `conversation.suggestions` 三条纵向后端建议，语音动作收纳进输入条菜单；长文本输入受多行上限与 flex 约束保护。设置连接页字段去内嵌 label + 配对键盘折叠。
+- [x] **M5 Android 键盘 inset + MMD 最终取景复位**（2026-09-04）：
+  Unity fallback 消费 `TouchScreenKeyboard.area.height`，键盘显示时按 panel 比例抬升 content、隐藏底部 tab，LostFocus/切 tab/失焦复位；Flutter 生产路径使用 Scaffold resize/insets。模型加载和虚拟场景最终阶段按 renderer bounds 重取景，并将无头骨 fallback 置为 pitch=0。Quest 世界空间面板由 targetTexture/worldSpace 门控排除。
 
 
 ### Flutter 共享壳层（双端同一 UI，迁移中 · 2026-09-02）

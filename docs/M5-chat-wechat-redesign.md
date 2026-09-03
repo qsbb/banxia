@@ -124,7 +124,15 @@
 `asr.final → reply.text.delta → reply.end → reply.suggestions(3条)`。
 用途仅盲测建议链路与消息流渲染；真实 LLM 链路由用户真机验收（用户已选模拟器盲测，真机为后续）。
 
-## 5. 风险与回滚
+## 5. 键盘与生产 Flutter 路径补充
+
+- 生产 Flutter 聊天页已与 fallback 壳层保持同构：移除常驻语音面板，语音动作收纳进输入条菜单；后端事件 `conversation.suggestions` 最多渲染 3 条纵向建议。
+- Flutter 输入条使用多行上限、`viewInsets`/Scaffold resize 组合和键盘时隐藏底部导航；相机发送携带当前文本，standalone LocalBridge 同样覆盖该命令。
+- Unity UI Toolkit fallback 消费 `TouchScreenKeyboard.area.height`，按 panel/screen 比例换算 inset，键盘显示时隐藏底部 tab 并将消息流滚到底；`Done`、`Canceled`、`LostFocus`、失焦和切 tab 都复位。
+- 手机模型加载完成与虚拟场景进入阶段都会重新基于 renderer bounds 取景；无头骨模型强制水平 pitch，避免旧 orbit 状态把角色留在半屏上方。日志标签：`[PhoneFrame]`、`[CallFraming]`、`[KbInset]`。
+- 编辑器侧新增键盘 inset 数学测试；真实 Unity 编译与 5.21 设备像素验收仍以本轮 APK 为准。
+
+## 6. 风险与回滚
 - 语音 hold 手势在模拟器上 `input swipe` 按压时长可控（`input swipe x y x y 1500`）→ 可盲测。
 - `reply.suggestions` 为新增事件：旧客户端未知事件已有 default 分支报错（`AstrBotProtocol` L420-422 "Unsupported SSE event type"）→ **必须先发 Unity 新包**，插件后发；插件开关默认开但生成失败静默，双端任意单端升级都安全。
 - 折叠默认收起可能影响已绑定用户的重配对习惯 → “配对码”折叠行放在“服务器”组内同卡，一步可见；解绑/重连仍一键可达。

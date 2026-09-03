@@ -295,19 +295,36 @@ class _SettingsPageScaffold extends StatelessWidget {
 }
 
 // ── Connection page (M3 pairing) ────────────────────────────────────────────
-class _ConnectionPage extends StatelessWidget {
+class _ConnectionPage extends StatefulWidget {
   const _ConnectionPage({required this.appState});
 
   final AppState appState;
 
   @override
+  State<_ConnectionPage> createState() => _ConnectionPageState();
+}
+
+class _ConnectionPageState extends State<_ConnectionPage> {
+  late bool _numpadExpanded;
+  bool _numpadTouched = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _numpadExpanded = widget.appState.connection.serverDraft.trim().isEmpty;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final AppState app = appState;
+    final AppState app = widget.appState;
     return ListenableBuilder(
       listenable: app,
       builder: (BuildContext context, Widget? _) {
         final double screenW = MediaQuery.sizeOf(context).width;
         final double screenH = MediaQuery.sizeOf(context).height;
+        final bool numpadExpanded = _numpadTouched
+            ? _numpadExpanded
+            : app.connection.serverDraft.trim().isEmpty;
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
           children: <Widget>[
@@ -320,20 +337,54 @@ class _ConnectionPage extends StatelessWidget {
               onChanged: (bool v) => app.dispatch(
                   Cmd.pairingSetPrivateHttp, <String, dynamic>{'enabled': v}),
             ),
-            const SizedBox(height: 16),
-            _CodeDots(codeLength: app.connection.pairingCode.length),
-            const SizedBox(height: 4),
-            Center(
-              child: PairingNumpad(
-                availableHeight: screenH,
-                availableWidth: screenW - 40,
-                onDigit: app.appendPairingDigit,
-                onBackspace: app.removePairingDigit,
-                onClear: app.clearPairingCode,
-                onSubmit: app.submitPairing,
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () => setState(() {
+                _numpadTouched = true;
+                _numpadExpanded = !numpadExpanded;
+              }),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                child: Row(
+                  children: <Widget>[
+                    const Expanded(
+                      child: Text('配对码',
+                          style: TextStyle(
+                              fontSize: 16, color: BanxiaTokens.label)),
+                    ),
+                    Text(
+                      app.connection.pairingCode.isEmpty
+                          ? '输入 6 位'
+                          : '${app.connection.pairingCode.length}/6',
+                      style: const TextStyle(
+                          fontSize: 14, color: BanxiaTokens.labelSecondary),
+                    ),
+                    const SizedBox(width: 6),
+                    Icon(
+                      numpadExpanded
+                          ? Icons.expand_less
+                          : Icons.expand_more,
+                      color: BanxiaTokens.labelTertiary,
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 16),
+            if (numpadExpanded) ...<Widget>[
+              _CodeDots(codeLength: app.connection.pairingCode.length),
+              const SizedBox(height: 4),
+              Center(
+                child: PairingNumpad(
+                  availableHeight: screenH,
+                  availableWidth: screenW - 40,
+                  onDigit: app.appendPairingDigit,
+                  onBackspace: app.removePairingDigit,
+                  onClear: app.clearPairingCode,
+                  onSubmit: app.submitPairing,
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
             _PrimaryButton(label: '连接后端', onTap: app.submitPairing),
             const SizedBox(height: 8),
             Row(
@@ -378,10 +429,22 @@ class _ServerField extends StatefulWidget {
 
 class _ServerFieldState extends State<_ServerField> {
   late final TextEditingController _controller =
-      TextEditingController(text: widget.appState.connection.server);
+      TextEditingController(text: widget.appState.connection.serverDraft);
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (!_focusNode.hasFocus &&
+        _controller.text != widget.appState.connection.serverDraft) {
+      _controller.text = widget.appState.connection.serverDraft;
+    }
     return Container(
       height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -391,15 +454,26 @@ class _ServerFieldState extends State<_ServerField> {
       ),
       child: TextField(
         controller: _controller,
+        focusNode: _focusNode,
+        maxLength: 512,
+        maxLengthEnforcement: MaxLengthEnforcement.enforced,
         style: const TextStyle(fontSize: 16, color: BanxiaTokens.label),
         decoration: const InputDecoration(
           border: InputBorder.none,
           hintText: '服务器域名 / IP:端口',
           hintStyle:
               TextStyle(fontSize: 16, color: BanxiaTokens.labelSecondary),
+          counterText: '',
         ),
-        onSubmitted: (String v) => widget.appState
-            .dispatch(Cmd.pairingSetServer, <String, dynamic>{'server': v}),
+        onChanged: (String v) {
+          widget.appState.updatePairingServerDraft(v);
+        },
+        onSubmitted: (String v) async {
+          await widget.appState.commitPairingServer(v);
+          if (mounted) {
+            _controller.text = widget.appState.connection.serverDraft;
+          }
+        },
       ),
     );
   }

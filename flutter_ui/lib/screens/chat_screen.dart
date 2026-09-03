@@ -19,6 +19,8 @@ class ChatScreen extends StatelessWidget {
       listenable: appState,
       builder: (BuildContext context, Widget? _) {
         return SafeArea(
+          top: true,
+          bottom: false,
           child: Column(
             children: <Widget>[
               _NavBar(appState: appState),
@@ -27,8 +29,11 @@ class ChatScreen extends StatelessWidget {
               else ...<Widget>[
                 _StatusCard(appState: appState),
                 Expanded(child: _BubbleList(appState: appState)),
-                _VoiceControls(appState: appState),
-                _QuickPhrases(appState: appState),
+                if (appState.conversation.suggestedReplies.isNotEmpty)
+                  Flexible(
+                    fit: FlexFit.loose,
+                    child: _QuickPhrases(appState: appState),
+                  ),
                 _ChatInputBar(appState: appState),
               ],
             ],
@@ -165,17 +170,33 @@ class _StatusCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                const Text('伴夏',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 17,
-                        color: BanxiaTokens.label)),
+                const Text(
+                  '伴夏',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 17,
+                    color: BanxiaTokens.label,
+                  ),
+                ),
                 Text(
                   appState.conversation.transportStatus.isEmpty
                       ? appState.conversation.state
                       : '${appState.conversation.state} · ${appState.conversation.transportStatus}',
                   style: const TextStyle(
-                      fontSize: 13, color: BanxiaTokens.labelSecondary),
+                    fontSize: 13,
+                    color: BanxiaTokens.labelSecondary,
+                  ),
+                ),
+                Text(
+                  appState.conversation.recording
+                      ? '正在录音'
+                      : appState.conversation.monitoring
+                          ? '正在监听'
+                          : '麦克风待命',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: BanxiaTokens.labelTertiary,
+                  ),
                 ),
               ],
             ),
@@ -186,15 +207,43 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-class _BubbleList extends StatelessWidget {
+class _BubbleList extends StatefulWidget {
   const _BubbleList({required this.appState});
 
   final AppState appState;
 
   @override
+  State<_BubbleList> createState() => _BubbleListState();
+}
+
+class _BubbleListState extends State<_BubbleList> {
+  final ScrollController _scrollController = ScrollController();
+  int _lastBubbleCount = 0;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final bubbles = appState.conversation.bubbles;
+    final bubbles = widget.appState.conversation.bubbles;
+    if (bubbles.length != _lastBubbleCount) {
+      _lastBubbleCount = bubbles.length;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    }
     return ListView.builder(
+      controller: _scrollController,
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       itemCount: bubbles.length,
       itemBuilder: (BuildContext context, int index) {
@@ -230,88 +279,61 @@ class _QuickPhrases extends StatelessWidget {
 
   final AppState appState;
 
-  static const List<String> _phrases = <String>[
-    '你好',
-    '你是谁',
-    '现在几点',
-    '还记得我吗',
-    '跳个舞',
-    '链路测试',
-  ];
-
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 40,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        children: <Widget>[
-          for (final String phrase in _phrases)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: GestureDetector(
-                onTap: () => appState.dispatch(
-                    Cmd.conversationSend, <String, dynamic>{'text': phrase}),
-                child: Container(
-                  alignment: Alignment.center,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    color: BanxiaTokens.glass,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(phrase,
-                      style: const TextStyle(
-                          fontSize: 14, color: BanxiaTokens.label)),
+    final List<String> suggestions =
+        appState.conversation.suggestedReplies.take(3).toList();
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 174),
+      child: ListView.builder(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+        itemCount: suggestions.length,
+        itemBuilder: (BuildContext context, int index) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: GestureDetector(
+              onTap: () => appState.dispatch(Cmd.conversationSend,
+                  <String, dynamic>{'text': suggestions[index]}),
+              child: Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(minHeight: 38),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: BanxiaTokens.bgCard,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0x14000000)),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Container(
+                      width: 24,
+                      height: 24,
+                      alignment: Alignment.center,
+                      decoration: const BoxDecoration(
+                        color: BanxiaTokens.tintFill,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text('${index + 1}',
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.white)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        suggestions[index],
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 14, color: BanxiaTokens.label),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-        ],
-      ),
-    );
-  }
-}
-
-class _VoiceControls extends StatelessWidget {
-  const _VoiceControls({required this.appState});
-
-  final AppState appState;
-
-  @override
-  Widget build(BuildContext context) {
-    final voice = appState.conversation;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Text(
-              voice.recording
-                  ? '正在录音'
-                  : voice.monitoring
-                      ? '正在聆听'
-                      : '语音已关闭',
-              style: const TextStyle(
-                  fontSize: 13, color: BanxiaTokens.labelSecondary),
-            ),
-          ),
-          IconButton(
-            tooltip: '录音',
-            onPressed: () => appState.dispatch(Cmd.voiceToggleRecord),
-            icon: Icon(voice.recording ? Icons.stop : Icons.fiber_manual_record,
-                color: voice.recording ? BanxiaTokens.red : BanxiaTokens.tint),
-          ),
-          IconButton(
-            tooltip: '重启语音',
-            onPressed: () => appState.dispatch(Cmd.voiceRestart),
-            icon: const Icon(Icons.refresh, color: BanxiaTokens.tint),
-          ),
-          IconButton(
-            tooltip: '取消语音',
-            onPressed: () => appState.dispatch(Cmd.voiceCancel),
-            icon: const Icon(Icons.close, color: BanxiaTokens.labelSecondary),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -343,15 +365,26 @@ class _ChatInputBarState extends State<_ChatInputBar> {
         .dispatch(Cmd.conversationSend, <String, dynamic>{'text': text});
   }
 
+  void _sendWithCamera() {
+    final String text = _controller.text.trim();
+    _controller.clear();
+    widget.appState.dispatch(
+      Cmd.conversationSendWithCamera,
+      <String, dynamic>{'text': text},
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bool cameraEnabled = widget.appState.settings.camera;
+    final bool recording = widget.appState.conversation.recording;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
       child: Row(
         children: <Widget>[
           Expanded(
             child: Container(
-              height: 46,
+              constraints: const BoxConstraints(minHeight: 46, maxHeight: 112),
               padding: const EdgeInsets.symmetric(horizontal: 16),
               decoration: BoxDecoration(
                 color: BanxiaTokens.glass,
@@ -359,6 +392,9 @@ class _ChatInputBarState extends State<_ChatInputBar> {
               ),
               child: TextField(
                 controller: _controller,
+                minLines: 1,
+                maxLines: 4,
+                textInputAction: TextInputAction.newline,
                 style: const TextStyle(fontSize: 16, color: BanxiaTokens.label),
                 decoration: const InputDecoration(
                   border: InputBorder.none,
@@ -370,60 +406,91 @@ class _ChatInputBarState extends State<_ChatInputBar> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () => widget.appState.dispatch(Cmd.voiceToggleListen),
-            child: Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: BanxiaTokens.glass,
-                borderRadius: BorderRadius.circular(23),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 42,
+            height: 46,
+            child: PopupMenuButton<String>(
+              tooltip: '语音控制',
+              padding: EdgeInsets.zero,
+              icon: Icon(
+                recording ? Icons.mic : Icons.mic_none,
+                color: recording
+                    ? BanxiaTokens.red
+                    : widget.appState.conversation.monitoring
+                        ? BanxiaTokens.tint
+                        : BanxiaTokens.labelSecondary,
+                size: 23,
               ),
-              child: Icon(
-                widget.appState.conversation.monitoring
-                    ? Icons.mic
-                    : Icons.mic_none,
-                color: BanxiaTokens.tint,
-                size: 22,
-              ),
+              onSelected: (String action) {
+                switch (action) {
+                  case 'listen':
+                    widget.appState.dispatch(Cmd.voiceToggleListen);
+                    return;
+                  case 'record':
+                    widget.appState.dispatch(Cmd.voiceToggleRecord);
+                    return;
+                  case 'restart':
+                    widget.appState.dispatch(Cmd.voiceRestart);
+                    return;
+                  case 'cancel':
+                    widget.appState.dispatch(Cmd.voiceCancel);
+                    return;
+                }
+              },
+              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                PopupMenuItem<String>(
+                  value: 'listen',
+                  child: Text(widget.appState.conversation.monitoring
+                      ? '关闭常开监听'
+                      : '开启常开监听'),
+                ),
+                PopupMenuItem<String>(
+                  value: 'record',
+                  child: Text(recording ? '停止录音' : '开始录音'),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'restart',
+                  child: Text('重启麦克风'),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'cancel',
+                  child: Text('取消当前语音'),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: widget.appState.settings.camera
-                ? () => widget.appState.dispatch(Cmd.conversationSendWithCamera)
-                : () => widget.appState.showToast('请先在设置中开启摄像头单帧'),
-            child: Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: widget.appState.settings.camera
-                    ? BanxiaTokens.glass
-                    : BanxiaTokens.glass.withOpacity(0.5),
-                borderRadius: BorderRadius.circular(23),
-              ),
-              child: Icon(
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 42,
+            height: 46,
+            child: IconButton(
+              tooltip: '拍摄并发送',
+              padding: EdgeInsets.zero,
+              onPressed: cameraEnabled ? _sendWithCamera : null,
+              icon: Icon(
                 Icons.camera_alt_outlined,
-                color: widget.appState.settings.camera
+                color: cameraEnabled
                     ? BanxiaTokens.tint
                     : BanxiaTokens.labelTertiary,
                 size: 22,
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: _send,
-            child: Container(
-              width: 46,
-              height: 46,
-              decoration: const BoxDecoration(
-                color: BanxiaTokens.tintFill,
-                shape: BoxShape.circle,
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 46,
+            height: 46,
+            child: IconButton(
+              tooltip: '发送',
+              padding: EdgeInsets.zero,
+              onPressed: _send,
+              style: IconButton.styleFrom(
+                backgroundColor: BanxiaTokens.tintFill,
+                foregroundColor: Colors.white,
+                shape: const CircleBorder(),
               ),
-              child:
-                  const Icon(Icons.arrow_upward, color: Colors.white, size: 24),
+              icon: const Icon(Icons.arrow_upward, size: 24),
             ),
           ),
         ],

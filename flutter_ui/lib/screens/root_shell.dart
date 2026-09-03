@@ -27,6 +27,7 @@ class RootShell extends StatelessWidget {
       ]),
       builder: (BuildContext context, Widget? _) {
         return Scaffold(
+          resizeToAvoidBottomInset: true,
           backgroundColor: Colors.transparent,
           body: Stack(
             fit: StackFit.expand,
@@ -65,7 +66,8 @@ class _MenuShell extends StatelessWidget {
               ],
             ),
           ),
-          _BottomNav(appState: appState),
+          if (MediaQuery.of(context).viewInsets.bottom <= 0)
+            _BottomNav(appState: appState),
         ],
       ),
     );

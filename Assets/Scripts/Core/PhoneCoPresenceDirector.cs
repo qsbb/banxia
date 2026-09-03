@@ -22,6 +22,7 @@ namespace QuestMmdPlayer
         private Camera mainCamera;
         private PhoneOrbitCamera orbitCamera;
         private Transform avatarRoot;
+        private bool needsAvatarReframe;
 
         private CoPresenceMode mode = CoPresenceMode.VirtualScene;
         private VirtualEnvironment environment = VirtualEnvironment.NightStreet;
@@ -110,10 +111,19 @@ namespace QuestMmdPlayer
 
         public virtual void SetAvatar(Transform avatar)
         {
+            // Keep a pending reframe when the same avatar is bound twice during
+            // model-load -> scene-entry. The second bind must not erase the flag
+            // before EnterVirtualScene restores any saved orbit state.
+            if (avatarRoot != avatar)
+            {
+                needsAvatarReframe = avatar != null;
+            }
             avatarRoot = avatar;
             if (VideoCallActive)
             {
                 UpdateFramingSnapshot(applyCamera: true);
+                // Keep the pending flag for the later virtual-scene return:
+                // this avatar may have replaced the one whose orbit was saved.
             }
         }
 
@@ -248,6 +258,13 @@ namespace QuestMmdPlayer
         {
             TeardownArBackground();
             RestoreOrbitState();
+            // A newly loaded model must be framed after any stale saved orbit is
+            // restored. Returning from video call keeps the user's existing orbit.
+            if (needsAvatarReframe)
+            {
+                ReframeLiveAvatar("virtual-scene-enter");
+                needsAvatarReframe = false;
+            }
             if (mainCamera != null)
             {
                 mainCamera.clearFlags = CameraClearFlags.SolidColor;
@@ -378,6 +395,18 @@ namespace QuestMmdPlayer
         /// entering the call or when the measured Flutter chrome changes; regular
         /// updates refresh marker positions without fighting user animation.
         /// </summary>
+        private void ReframeLiveAvatar(string reason)
+        {
+            if (orbitCamera == null || avatarRoot == null)
+            {
+                return;
+            }
+            orbitCamera.SetTrackedAvatar(avatarRoot);
+            orbitCamera.FrameModel(avatarRoot.gameObject);
+            Debug.Log($"[CallFraming] reframe reason={reason} target={orbitCamera.OrbitTargetPoint} " +
+                      $"distance={orbitCamera.OrbitDistance:F3} pitch={orbitCamera.OrbitPitchAngle:F1}", this);
+        }
+
         private void UpdateFramingSnapshot(bool applyCamera)
         {
             framingSnapshot = default(CoPresenceFraming);

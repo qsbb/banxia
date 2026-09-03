@@ -66,6 +66,7 @@ abstract final class Evt {
   static const String conversationState = 'conversation.state';
   static const String conversationTranscript = 'conversation.transcript';
   static const String conversationReply = 'conversation.reply';
+  static const String conversationSuggestions = 'conversation.suggestions';
   static const String modelUpdated = 'model.updated';
   static const String modelImportStatus = 'model.importStatus';
   static const String actionUpdated = 'action.updated';

@@ -46,7 +46,7 @@
 
 APK 输出到 `Builds/Banxia.apk`，Android 包名为 `com.lingxi.banxia`，构建目标为 ARM64、IL2CPP、Vulkan，最低 Android API 29。
 
-项目根目录的 `test_frontend.ps1` 提供无需头显的静态工程检查。完整测试方式见 [TESTING.md](TESTING.md)。
+项目根目录的 `test_frontend.ps1` 提供无需头显的静态工程检查。完整测试方式见 [TESTING.md](TESTING.md)。多机 SSH、5.21 ADB、5.55 构建和 5.88 服务检查统一入口见 [docs/REMOTE_MACHINES_CN.md](docs/REMOTE_MACHINES_CN.md)。
 
 ## 后端绑定
 

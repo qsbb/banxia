@@ -66,6 +66,7 @@ namespace QuestMmdPlayer
         private string lastBridgeStatus = string.Empty;
         private string lastTranscript = string.Empty;
         private string lastReplyText = string.Empty;
+        private string lastSuggestionsKey = string.Empty;
         private bool lastMonitoring;
         private bool lastAlwaysListening;
         private bool lastRecording;
@@ -697,9 +698,13 @@ namespace QuestMmdPlayer
                 {
                     File.Delete(path);
                 }
-                else
+                var legacyPath = Path.Combine(
+                    Application.persistentDataPath,
+                    AstrBotBridge.LegacyConfigurationFileName);
+                if (!string.Equals(path, legacyPath, StringComparison.Ordinal) &&
+                    File.Exists(legacyPath))
                 {
-                    return FlutterCommandResult.Failure("未找到后端绑定配置");
+                    File.Delete(legacyPath);
                 }
             }
             catch (Exception exception)
@@ -707,10 +712,10 @@ namespace QuestMmdPlayer
                 PublishToast("解除绑定失败：" + exception.Message);
                 return FlutterCommandResult.Failure("解除绑定失败");
             }
-            if (!AstrBot.ReloadConfiguration())
-            {
-                return FlutterCommandResult.Failure("解除绑定后重新加载配置失败");
-            }
+            AstrBot.ReloadConfiguration();
+            Pairing?.ClearPairingServer();
+            pairingCodeBuffer = string.Empty;
+            PublishPairingStatus();
             PublishToast("已解除后端绑定");
             return FlutterCommandResult.Success();
         }
@@ -1320,6 +1325,15 @@ namespace QuestMmdPlayer
 
         private void HandleAvatarLoaded(AvatarController avatar)
         {
+            // Flutter model.load can enter the scene after the loader callback;
+            // make the final presentation own the loaded model rather than a
+            // camera target left over from the previous avatar.
+            if (avatar != null && OrbitCamera != null)
+            {
+                OrbitCamera.SetTrackedAvatar(avatar.transform);
+                OrbitCamera.FrameModel(avatar.gameObject);
+                CoPresence?.SetAvatar(avatar.transform);
+            }
             PublishModelUpdated();
             PublishToast("模型已加载");
         }
@@ -1397,6 +1411,8 @@ namespace QuestMmdPlayer
             PublishEvent(FlutterEvents.PairingStatus, new FlutterPairingStatusPayload
             {
                 status = Pairing == null ? string.Empty : Pairing.Status,
+                server = Pairing == null ? string.Empty :
+                    BackendPairingProtocol.GetServerEntry(Pairing.PairingServerEndpoint),
                 privateHttp = Pairing != null && Pairing.PrivateHttpAllowed,
                 codeLen = pairingCodeBuffer.Length
             });
@@ -1522,6 +1538,21 @@ namespace QuestMmdPlayer
             {
                 lastReplyText = reply;
                 PublishEvent(FlutterEvents.ConversationReply, new FlutterTextPayload { text = reply });
+            }
+
+            var suggestions = Conversation == null
+                ? Array.Empty<string>()
+                : Conversation.SuggestedReplies;
+            var suggestionsKey = string.Join("\u001f", suggestions);
+            if (!string.Equals(suggestionsKey, lastSuggestionsKey, StringComparison.Ordinal))
+            {
+                lastSuggestionsKey = suggestionsKey;
+                PublishEvent(FlutterEvents.ConversationSuggestions,
+                    new FlutterConversationSuggestionsPayload
+                    {
+                        suggestions = suggestions == null ? new string[0] :
+                            new List<string>(suggestions).ToArray()
+                    });
             }
         }
 
@@ -1837,6 +1868,7 @@ namespace QuestMmdPlayer
             lastBridgeStatus = string.Empty;
             lastTranscript = string.Empty;
             lastReplyText = string.Empty;
+            lastSuggestionsKey = string.Empty;
             lastMonitoring = false;
             lastAlwaysListening = false;
             lastRecording = false;

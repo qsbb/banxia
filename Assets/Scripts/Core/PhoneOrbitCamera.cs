@@ -136,7 +136,9 @@ namespace QuestMmdPlayer
                     TopPx = 0f,
                     BottomPx = s,
                     EyeY = eyeY,
-                    HeadTopY = eyeY + CallFramingSolver.HeadTopAboveEye,
+                    // Use the visible bounds for the top anchor. Hair, bows and
+                    // other PMX accessories are often not centered on HeadBone.
+                    HeadTopY = bounds.max.y,
                     FootY = bounds.min.y,
                     LowCutY = eyeY - CallFramingSolver.EyeToWaist,
                 });
@@ -158,7 +160,14 @@ namespace QuestMmdPlayer
             {
                 orbitTarget = bounds.center;
                 distance = Mathf.Clamp(bounds.size.y * 1.35f + 0.35f, MinDistance, MaxDistance);
+                // Bounds-only models still use the same neutral projection as the
+                // anchored path. Keeping the previous pitch here leaves a freshly
+                // loaded avatar above the visual center when the camera was reused.
+                yaw = 0f;
+                pitch = 0f;
             }
+            Debug.Log($"[PhoneFrame] root={root.name} boundsY={bounds.min.y:F3}-{bounds.max.y:F3} " +
+                      $"targetY={orbitTarget.y:F3} distance={distance:F3} pitch={pitch:F1}", this);
             ApplyTransform();
         }
 
