@@ -413,8 +413,7 @@ public final class BanxiaFlutterHost {
         if (!(view instanceof View)) {
             return false;
         }
-        View flutterView = (View) view;
-        flutterView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        View flutterView = preparePhoneFlutterView((View) view);
         boolean added = addViewToUnityPlayer(activity, flutterView);
         if (added) {
             phoneFlutterView = view;
@@ -787,7 +786,8 @@ public final class BanxiaFlutterHost {
     /**
      * Phone path. Creates a real FlutterView attached to the shared engine and
      * adds it to the Unity player via {@code UnityPlayer.addViewToPlayer(view,
-     * false)}. All view operations are marshalled to Android's main looper.
+     * true)} so the Flutter surface is above Unity's GL view. All view
+     * operations are marshalled to Android's main looper.
      */
     public boolean attachToUnityPlayer(final Activity activity) {
         if (activity == null) {
@@ -831,8 +831,7 @@ public final class BanxiaFlutterHost {
         if (!(view instanceof View)) {
             return false;
         }
-        View flutterView = (View) view;
-        flutterView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        View flutterView = preparePhoneFlutterView((View) view);
         boolean added = addViewToUnityPlayer(activity, flutterView);
         if (added) {
             phoneFlutterView = view;
@@ -918,17 +917,80 @@ public final class BanxiaFlutterHost {
         return false;
     }
 
+    private View preparePhoneFlutterView(View flutterView) {
+        flutterView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        flutterView.setVisibility(View.VISIBLE);
+        flutterView.setFocusable(true);
+        flutterView.setFocusableInTouchMode(true);
+        flutterView.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        return flutterView;
+    }
+
     private boolean addViewToUnityPlayer(Activity activity, View view) {
         try {
-            Object unityPlayer = activity.getClass().getMethod("getUnityPlayer").invoke(activity);
-            Method addView = unityPlayer.getClass()
-                    .getMethod("addViewToPlayer", View.class, boolean.class);
-            addView.invoke(unityPlayer, view, false);
+            Object unityPlayer = findUnityPlayer(activity);
+            if (unityPlayer == null) {
+                throw new IllegalStateException("UnityPlayerActivity has no mUnityPlayer field");
+            }
+            Method addView = findMethod(unityPlayer.getClass(), "addViewToPlayer",
+                    View.class, boolean.class);
+            if (addView == null) {
+                throw new NoSuchMethodException(unityPlayer.getClass().getName()
+                        + ".addViewToPlayer(View, boolean)");
+            }
+            addView.invoke(unityPlayer, view, true);
+            Log.i(TAG, "FlutterView added above Unity GL view: class="
+                    + view.getClass().getName() + ", size=" + view.getWidth() + "x" + view.getHeight()
+                    + ", visibility=" + view.getVisibility());
             return true;
         } catch (Throwable t) {
-            Log.e(TAG, "addViewToUnityPlayer failed (host is not UnityPlayerActivity?)", t);
+            Log.e(TAG, "addViewToUnityPlayer failed", t);
             return false;
         }
+    }
+
+    /**
+     * Unity 2022.3's UnityPlayerActivity does not expose getUnityPlayer().
+     * Older/newer Unity activity variants may expose that accessor, so keep it
+     * as the first path and fall back to the protected mUnityPlayer field.
+     */
+    private Object findUnityPlayer(Activity activity) throws Exception {
+        try {
+            Method accessor = findMethod(activity.getClass(), "getUnityPlayer");
+            if (accessor != null) {
+                return accessor.invoke(activity);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "UnityPlayer accessor unavailable; trying activity field", t);
+        }
+
+        Class<?> type = activity.getClass();
+        while (type != null) {
+            try {
+                Field field = type.getDeclaredField("mUnityPlayer");
+                field.setAccessible(true);
+                return field.get(activity);
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    private static Method findMethod(Class<?> type, String name, Class<?>... parameterTypes) {
+        Class<?> current = type;
+        while (current != null) {
+            try {
+                Method method = current.getDeclaredMethod(name, parameterTypes);
+                method.setAccessible(true);
+                return method;
+            } catch (NoSuchMethodException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------

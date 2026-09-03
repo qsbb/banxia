@@ -17,14 +17,34 @@ apply plugin: 'com.android.library'
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
 
-    // --- BanxiaFlutterHost: optional prebuilt Flutter embedding AAR. ---
-    // Copy the generated flutter_embedding_release.aar to
-    // Assets/Plugins/Android/flutter_embedding_release.aar to make the
-    // io.flutter.* classes available at runtime. Conditional, so a build
-    // without the AAR is untouched and still compiles the reflection host.
+    // --- Banxia Flutter runtime AARs. ---
+    // These are prebuilt by flutter_ui/.android on the build machine. The
+    // embedding and engine AARs provide the reflected Flutter classes and the
+    // ARM64 engine; the module AAR provides libapp.so and flutter_assets.
+    // Keep every dependency conditional so the reflection-only fallback still
+    // builds when the optional Flutter runtime has not been installed.
     if (file('libs/flutter_embedding_release.aar').exists()) {
         implementation(name: 'flutter_embedding_release', ext: 'aar')
     }
+    if (file('libs/flutter_engine_arm64_release.aar').exists()) {
+        implementation(name: 'flutter_engine_arm64_release', ext: 'aar')
+    }
+    if (file('libs/flutter_ui_release.aar').exists()) {
+        implementation(name: 'flutter_ui_release', ext: 'aar')
+    }
+
+    // The prebuilt embedding AAR is resolved through flatDir, so its POM is
+    // not consulted for transitive AndroidX dependencies. Keep this list in
+    // lockstep with the Flutter 3.24 embedding release POM.
+    implementation 'androidx.lifecycle:lifecycle-common:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-common-java8:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-process:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime:2.7.0'
+    implementation 'androidx.fragment:fragment:1.7.1'
+    implementation 'androidx.annotation:annotation:1.8.0'
+    implementation 'androidx.tracing:tracing:1.2.0'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.window:window-java:1.2.0'
 **DEPS**}
 
 android {

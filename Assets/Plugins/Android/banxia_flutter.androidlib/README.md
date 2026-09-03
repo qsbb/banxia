@@ -48,10 +48,11 @@ The host exposes **two** concrete attach/transport paths plus a preflight:
 
 `attachToUnityPlayer(Activity)` creates a real `io.flutter.embedding.android.
 FlutterView`, calls `attachToFlutterEngine(engine)`, and adds it to the player
-via `UnityPlayer.addViewToPlayer(view, false)`. Only after the view is actually
-added is `phoneViewAttached` set true (reported in `getStateJson()`). If the
-view is created but `addViewToPlayer` fails, the reason is recorded and the
-flag stays false — no silent "attached" claim.
+via `UnityPlayer.addViewToPlayer(view, true)`, which places the Flutter
+surface above Unity's GL view. Only after the view is actually added is
+`phoneViewAttached` set true (reported in `getStateJson()`). If the view is
+created but `addViewToPlayer` fails, the reason is recorded and the flag stays
+false — no silent "attached" claim.
 
 ### Quest — offscreen SurfaceTexture seam (transport only, not completion)
 
@@ -83,10 +84,12 @@ runtime. Real Flutter rendering needs all of them, placed as Unity expects:
 | Generated artifact | What it is | Where it goes in the Unity project |
 |--------------------|------------|-----------------------------------|
 | `flutter_embedding_release.aar` (or `_debug`/`_profile`) | `io.flutter.*` embedding Java classes | `Assets/Plugins/Android/flutter_embedding_release.aar` |
-| `libflutter.so` | Flutter engine native library (per ABI) | `Assets/Plugins/Android/<abi>/libflutter.so` (e.g. `arm64-v8a/`) |
-| `libapp.so` | Compiled Dart AOT snapshot (per ABI) | `Assets/Plugins/Android/<abi>/libapp.so` |
+| `flutter_engine_arm64_release.aar` | ARM64 Flutter engine (`libflutter.so`) | `Assets/Plugins/Android/flutter_engine_arm64_release.aar` |
+| `flutter_ui_release.aar` | Compiled Dart AOT (`libapp.so`) and `flutter_assets/` | `Assets/Plugins/Android/flutter_ui_release.aar` |
+| `libflutter.so` | Flutter engine native library (per ABI), when unpacked manually | `Assets/Plugins/Android/<abi>/libflutter.so` (e.g. `arm64-v8a/`) |
+| `libapp.so` | Compiled Dart AOT snapshot (per ABI), when unpacked manually | `Assets/Plugins/Android/<abi>/libapp.so` |
 | `flutter_assets/` | Asset bundle: `kernel_blob.bin`, `AssetManifest.json`, `FontManifest.json`, fonts, `vm_snapshot_data`, etc. | `Assets/StreamingAssets/flutter_assets/` |
-| `icudtl.dat` | ICU data | `Assets/StreamingAssets/icudtl.dat` |
+| `icudtl.dat` | ICU data (the Android engine artifact normally supplies this in the APK asset pipeline) | `Assets/StreamingAssets/icudtl.dat` |
 
 ### How to generate them (Flutter SDK)
 
