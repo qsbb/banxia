@@ -18,7 +18,6 @@ namespace QuestMmdPlayer
         private const float ArBackgroundDepth = 8f;
         private const float VideoCallBustHeight = 1.15f;
         private const float VideoCallBustDistance = 1.35f;
-
         private Camera mainCamera;
         private PhoneOrbitCamera orbitCamera;
         private Transform avatarRoot;
@@ -459,7 +458,7 @@ namespace QuestMmdPlayer
                 HeadTopY = headTopY,
                 FootY = footY,
                 LowCutY = lowCutY,
-            }, headAnchor ? CallFramingSolver.DistanceMax : 1.6f);
+            }, headAnchor ? CallFramingSolver.DistanceMax : 1.6f, CallFramingSolver.PhoneVideoCallEyeLineRatio);
 
             var horizontal = headAnchor
                 ? new Vector3(head.position.x, 0f, head.position.z)
@@ -509,7 +508,7 @@ namespace QuestMmdPlayer
                 FootWorld = footWorld,
             };
 
-            var eyeLine = top + (bottom - top) * CallFramingSolver.EyeLineRatio;
+            var eyeLine = top + (bottom - top) * CallFramingSolver.PhoneVideoCallEyeLineRatio;
             var framingChanged = !hasLoggedFraming ||
                 Mathf.Abs(lastLoggedDistance - solve.Distance) > 0.001f ||
                 Mathf.Abs(lastLoggedCameraY - solve.CameraY) > 0.001f ||

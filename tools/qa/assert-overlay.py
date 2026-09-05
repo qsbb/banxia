@@ -6,7 +6,7 @@ Usage:
 
 Checks (docs/plans/QA-assertions.md sec.6):
     A  red safe-zone frame present (red pixel rectangular border bands)
-    B  green 1/3 line present (green horizontal line band at ~1/3 height)
+    B  green phone eye line present (green horizontal line band at ~42% height)
     C  top-left numeric readout present (dark small text block)
     All three together prove the overlay rendered = framing is observable.
 
@@ -74,9 +74,9 @@ def red_stats(data, w, h, max_samples=8):
 
 
 def green_line_stats(data, w, h, max_samples=8):
-    """Green pixels inside the 1/3-line band y in [0.28, 0.38] * h."""
-    y0 = int(0.28 * h)
-    y1 = int(0.38 * h) + 1
+    """Green pixels inside the phone eye-line band y in [0.38, 0.46] * h."""
+    y0 = int(0.38 * h)
+    y1 = int(0.46 * h) + 1
     count = 0
     samples = []
     minx = 1 << 30
@@ -154,7 +154,7 @@ def main(argv=None):
     if gc >= MIN_GREEN and gspan >= 0.5 * w:
         checks.append(Check(
             "B", "PASS",
-            "green 1/3 line present: %d green px, x-span %dpx (>=%d), "
+            "green phone eye line present: %d green px, x-span %dpx (>=%d), "
             "centroid y=%.1f" % (gc, gspan, int(0.5 * w), gcentroid),
             extra={"green_px": gc, "x_span": gspan,
                    "centroid_y": round(gcentroid, 1)}))

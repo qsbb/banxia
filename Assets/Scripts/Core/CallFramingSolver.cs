@@ -16,9 +16,14 @@ namespace QuestMmdPlayer
         public const float EyeToWaist = 2.2f * HeadHeight;
         public const float EyeToChest = 1.5f * HeadHeight;
         public const float HeadTopAboveEye = 0.10f;
-        public const float FrameBandTop = 0.08f;
-        public const float FrameBandBottom = 0.92f;
+        // Full-body framing leaves a little more room above the head and keeps
+        // the avatar's visual center below the screen midpoint.
+        public const float FrameBandTop = 0.12f;
+        public const float FrameBandBottom = 0.96f;
+        public const float FrameBandCenter = (FrameBandTop + FrameBandBottom) * 0.5f;
         public const float EyeLineRatio = 1f / 3f;
+        // Phone call chrome allocates more visual weight below the avatar.
+        public const float PhoneVideoCallEyeLineRatio = 0.42f;
         public const float DistanceMin = 0.55f;
         public const float DistanceMax = 2.4f;
         public const float FallbackDistance = 0.9f;
@@ -46,7 +51,7 @@ namespace QuestMmdPlayer
 
         public static Result SolveBust(in Inputs i)
         {
-            return SolveBust(i, DistanceMax);
+            return SolveBust(i, DistanceMax, EyeLineRatio);
         }
 
         /// <summary>
@@ -54,6 +59,14 @@ namespace QuestMmdPlayer
         /// maxDistance 允许 bounds 退化路径收紧距离上限。
         /// </summary>
         public static Result SolveBust(in Inputs i, float maxDistance)
+        {
+            return SolveBust(i, maxDistance, EyeLineRatio);
+        }
+
+        /// <summary>
+        /// 胸像的可视眼线可由手机视频通话壳层下移，保持 Quest 默认构图不变。
+        /// </summary>
+        public static Result SolveBust(in Inputs i, float maxDistance, float eyeLineRatio)
         {
             var fallback = new Result
             {
@@ -64,6 +77,7 @@ namespace QuestMmdPlayer
             if (!TryGetK(i.S, i.ThetaDeg, out float k) ||
                 !IsFinite(i.TopPx) || !IsFinite(i.BottomPx) ||
                 !IsFinite(i.EyeY) || !IsFinite(i.LowCutY) ||
+                !IsFinite(eyeLineRatio) || eyeLineRatio <= 0f || eyeLineRatio >= 1f ||
                 i.TopPx < 0f || i.BottomPx > i.S)
             {
                 return fallback;
@@ -76,7 +90,7 @@ namespace QuestMmdPlayer
                 return fallback;
             }
 
-            var sEye = i.TopPx + band * EyeLineRatio;
+            var sEye = i.TopPx + band * eyeLineRatio;
             var bottomSpanPx = i.BottomPx - sEye;
             if (bottomSpanPx <= 1e-3f)
             {
@@ -117,7 +131,7 @@ namespace QuestMmdPlayer
         }
 
         /// <summary>
-        /// 全身像：头顶落 8%、脚落 92% 安全带。
+        /// 全身像：头顶落 12%、脚落 96% 安全带，整体视觉中心偏下。
         /// 返回距离交由轨道相机的硬件量程再次夹取。
         /// </summary>
         public static Result SolveFullBody(in Inputs i)
@@ -150,6 +164,10 @@ namespace QuestMmdPlayer
                 return fallback;
             }
             var d = Clamp(dRaw, DistanceMin, DistanceMax);
+            // Keep the full-body span centered on the lower framing band even
+            // when the distance is clamped by the phone camera range.
+            var centerShiftPx = i.S * (FrameBandCenter - 0.5f);
+            h += centerShiftPx * d / k;
             return new Result
             {
                 Distance = d,

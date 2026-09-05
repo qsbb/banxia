@@ -48,7 +48,6 @@ namespace QuestMmdPlayer
         private const float PerformanceIntervalSeconds = 2f;
         private const int LogRefreshLineCount = 12;
         private const int PairingCodeLength = 6;
-        private const float EyeLineRatio = 1f / 3f;
 
         private static readonly string[] ExpressionIds = { "neutral", "happy", "shy", "surprised", "sad" };
 
@@ -1641,7 +1640,7 @@ namespace QuestMmdPlayer
 
             var top = Mathf.Clamp(snapshot.TopPx, 0f, screenHeight);
             var bottom = Mathf.Clamp(snapshot.BottomPx, top, screenHeight);
-            var eyeLine = top + (bottom - top) * EyeLineRatio;
+            var eyeLine = top + (bottom - top) * CallFramingSolver.PhoneVideoCallEyeLineRatio;
             var eyeLinePct = screenHeight > 0f ? eyeLine / screenHeight * 100f : 0f;
             var anchorKind = snapshot.HeadAnchor ? "head" : "bounds";
             if (!TryProjectAnchor(camera, snapshot.HeadTopWorld, out var headTop) ||

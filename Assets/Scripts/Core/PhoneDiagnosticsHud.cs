@@ -10,7 +10,6 @@ namespace QuestMmdPlayer
     {
         private const float MetricsRefreshInterval = 0.25f;
         private const float FpsSmoothing = 0.08f;
-        private const float EyeLineRatio = 1f / 3f;
         private const float SecondaryLineRatio = 0.70f;
 
         private RuntimePerformanceMonitor monitor;
@@ -168,8 +167,8 @@ namespace QuestMmdPlayer
                 ? Mathf.Clamp(snapshot.BottomPx, top, screenHeight)
                 : screenHeight * CallFramingSolver.FrameBandBottom;
             var eyeLine = snapshot.Valid
-                ? top + (bottom - top) * EyeLineRatio
-                : screenHeight / 3f;
+                ? top + (bottom - top) * CallFramingSolver.PhoneVideoCallEyeLineRatio
+                : screenHeight * CallFramingSolver.PhoneVideoCallEyeLineRatio;
             var secondaryLine = snapshot.Valid
                 ? top + (bottom - top) * SecondaryLineRatio
                 : screenHeight * SecondaryLineRatio;

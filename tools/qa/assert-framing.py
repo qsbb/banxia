@@ -10,8 +10,8 @@ Checks (docs/plans/QA-assertions.md sec.1):
        (optional: needs the HUD framing grid; WARN when no marker is found)
     C  fill rate: non-background ratio in y > 0.6*screen_h is > 30%
        (background = dominant four-corner color, tolerance +-30)
-    D  full-body strip (only with --fullbody): head in [8,12]% and
-       feet in [88,92]% of the full-body image height
+    D  full-body strip (only with --fullbody): head in [12,16]% and
+       feet in [92,96]% of the full-body image height
 
 exit 0 = PASS, exit 1 = FAIL.  --json for machine output.
 """
@@ -35,9 +35,9 @@ from qa_common import (  # noqa: E402
 
 # green marker color used by the HUD framing grid is #34C759 = (52, 199, 89)
 GREEN_MIN_PIXELS = 60
-GREEN_SEARCH_TOP = 0.15     # exclude headTop cross (~8%) from the eye search
+GREEN_SEARCH_TOP = 0.15     # exclude the headTop cross from the eye search
 GREEN_SEARCH_BOTTOM = 0.55  # exclude the 7/10 green line from the eye search
-EYE_BAND = (0.28, 0.38)     # INV-1: eye line must sit in 28%-38%
+EYE_BAND = (0.38, 0.46)     # phone call eye line sits below the upper third
 
 
 def green_marker(r, g, b):
@@ -210,10 +210,10 @@ def main(argv=None):
         else:
             head_pct = 100.0 * ftop / fh
             feet_pct = 100.0 * fbottom / fh
-            ok = (8.0 <= head_pct <= 12.0) and (88.0 <= feet_pct <= 92.0)
+            ok = (12.0 <= head_pct <= 16.0) and (92.0 <= feet_pct <= 96.0)
             checks.append(Check(
                 "D", "PASS" if ok else "FAIL",
-                "head=%.1f%% feet=%.1f%% (want 8-12%% / 88-92%%)"
+                "head=%.1f%% feet=%.1f%% (want 12-16%% / 92-96%%)"
                 % (head_pct, feet_pct),
                 extra={"head_pct": round(head_pct, 2),
                        "feet_pct": round(feet_pct, 2)}))

@@ -7,7 +7,7 @@ import '../core/bridge/bridge_protocol.dart';
 /// M1 QA framing overlay (INV-7 observability) — a faithful port of
 /// `PhoneDiagnosticsHud.DrawFramingGrid`:
 ///   * red safety-band frame around the chrome-free viewport,
-///   * green 1/3 eye line + 7/10 secondary line,
+///   * green phone eye line (42% of the visible band) + 7/10 secondary line,
 ///   * cross-hair markers for headTop / eye / waist / feet,
 ///   * top-left readout `d=… h=… eye=…% anchor=head|bounds`.
 ///
@@ -24,10 +24,10 @@ class FramingGrid extends StatelessWidget {
   final double devicePixelRatio;
 
   // Semantic constants kept 1:1 with CallFramingSolver / DrawFramingGrid.
-  static const double eyeLineRatio = 1 / 3;
+  static const double eyeLineRatio = 0.42;
   static const double secondaryLineRatio = 0.70;
-  static const double frameBandTop = 0.08;
-  static const double frameBandBottom = 0.92;
+  static const double frameBandTop = 0.12;
+  static const double frameBandBottom = 0.96;
 
   static const Color red = Color(0xE6FF3B30); // (1, 0.231, 0.188, 0.90)
   static const Color green = Color(0xF234C759); // (0.204, 0.780, 0.349, 0.95)

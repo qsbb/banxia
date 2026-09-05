@@ -111,6 +111,7 @@ class LocalBridgeClient implements BridgeClient {
   VirtualEnvironment _environment = VirtualEnvironment.nightStreet;
   bool _videoCallActive = false;
   bool _arPlaced = false;
+  bool _privateHttp = true;
   String _server = '';
   String _pairingCode = '';
 
@@ -216,11 +217,18 @@ class LocalBridgeClient implements BridgeClient {
         _emit(Evt.pairingStatus, <String, dynamic>{
           'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
           'server': _server,
-          'privateHttp': false,
+          'privateHttp': _privateHttp,
           'codeLen': _pairingCode.length,
         });
         return _ok(id);
       case Cmd.pairingSetPrivateHttp:
+        _privateHttp = p['enabled'] == true;
+        _emit(Evt.pairingStatus, <String, dynamic>{
+          'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
+          'server': _server,
+          'privateHttp': _privateHttp,
+          'codeLen': _pairingCode.length,
+        });
         return _ok(id);
       case Cmd.pairingDigit:
         final String op = p['op'] as String? ?? '';
@@ -246,7 +254,7 @@ class LocalBridgeClient implements BridgeClient {
         _emit(Evt.pairingStatus, <String, dynamic>{
           'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
           'server': _server,
-          'privateHttp': false,
+          'privateHttp': _privateHttp,
           'codeLen': _pairingCode.length,
         });
         return _ok(id);
@@ -256,7 +264,7 @@ class LocalBridgeClient implements BridgeClient {
         _emit(Evt.pairingStatus, <String, dynamic>{
           'status': '已连接',
           'server': _server,
-          'privateHttp': p['privateHttp'] ?? false,
+          'privateHttp': p['privateHttp'] ?? _privateHttp,
           'codeLen': 0,
         });
         _pairingCode = '';
@@ -266,7 +274,7 @@ class LocalBridgeClient implements BridgeClient {
         _emit(Evt.pairingStatus, <String, dynamic>{
           'status': '重连中…',
           'server': _server,
-          'privateHttp': false,
+          'privateHttp': _privateHttp,
           'codeLen': 0,
         });
         _emit(Evt.toast, <String, dynamic>{'message': '重新连接后端'});
@@ -278,7 +286,7 @@ class LocalBridgeClient implements BridgeClient {
         _emit(Evt.pairingStatus, <String, dynamic>{
           'status': '未连接',
           'server': '',
-          'privateHttp': false,
+          'privateHttp': _privateHttp,
           'codeLen': 0,
         });
         _emit(Evt.toast, <String, dynamic>{'message': '已解除后端绑定'});

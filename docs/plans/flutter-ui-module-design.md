@@ -86,7 +86,7 @@
 - `CopresenceSheet`（M2）：mode cards（同框现实/虚拟场景/视频通话）与
   environment chips（夜街/星空/卧室/海边）+ grabber + `换种同框方式`。
 - `ArPlaceHint`：AR 放置提示（不拦截点击）。
-- `FramingGrid`（M1）：红安全区 + 绿 1/3 线 + 锚点十字 + 左上角 d/h/eye% 数值。
+- `FramingGrid`（M1）：红安全区 + 绿手机 42% 眼线 + 锚点十字 + 左上角 d/h/eye% 数值。
 - 动作：`copresence.switchMode/switchEnvironment/enterScene/returnToMenu`、
   `copresence.arPlace`、`scene.moveMode/reframe/hud`、`copresence.setChromeInsets`。
 

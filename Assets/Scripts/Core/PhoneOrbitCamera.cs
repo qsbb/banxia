@@ -120,52 +120,43 @@ namespace QuestMmdPlayer
             {
                 return;
             }
-            // 头顶/脚锚点齐全 → 全身像闭式解（头 8%、脚 92% 安全带）；否则保留包围盒逻辑。
+            // Full-body framing uses visible renderer bounds for both anchored and
+            // bounds-only PMX models, so a missing HeadBone cannot silently restore
+            // the old geometric-center framing.
             var avatar = root.GetComponent<AvatarController>();
             var head = avatar != null ? avatar.HeadBone : null;
-            if (head != null)
+            var cam = cachedCamera != null ? cachedCamera : Camera.main;
+            float s = cam != null && cam.pixelHeight > 1 ? cam.pixelHeight : Screen.height;
+            float theta = cam != null && cam.fieldOfView > 0.1f ? cam.fieldOfView : 60f;
+            float eyeY = head != null
+                ? head.position.y + CallFramingSolver.EyeOffset
+                : bounds.min.y + bounds.size.y * 0.83f;
+            var solve = CallFramingSolver.SolveFullBody(new CallFramingSolver.Inputs
             {
-                var cam = cachedCamera != null ? cachedCamera : Camera.main;
-                float s = cam != null ? cam.pixelHeight : Screen.height;
-                float theta = cam != null ? cam.fieldOfView : 60f;
-                float eyeY = head.position.y + CallFramingSolver.EyeOffset;
-                var solve = CallFramingSolver.SolveFullBody(new CallFramingSolver.Inputs
-                {
-                    S = s,
-                    ThetaDeg = theta,
-                    TopPx = 0f,
-                    BottomPx = s,
-                    EyeY = eyeY,
-                    // Use the visible bounds for the top anchor. Hair, bows and
-                    // other PMX accessories are often not centered on HeadBone.
-                    HeadTopY = bounds.max.y,
-                    FootY = bounds.min.y,
-                    LowCutY = eyeY - CallFramingSolver.EyeToWaist,
-                });
-                orbitTarget = new Vector3(bounds.center.x, solve.CameraY, bounds.center.z);
-                // SolveFullBody owns the [DistanceMin, DistanceMax] contract and
-                // marks any clamp as degraded; keep this assignment unmodified so
-                // the diagnostic state cannot disagree with the camera state.
-                distance = solve.Distance;
-                if (solve.Degraded)
-                {
-                    Debug.LogWarning("[CallFraming] full-body framing degraded by distance clamp.", this);
-                }
-                // SolveFullBody uses the pitch=0 projection. Keep the runtime camera
-                // on that contract instead of applying the previous orbit tilt.
-                yaw = 0f;
-                pitch = 0f;
-            }
-            else
+                S = s,
+                ThetaDeg = theta,
+                TopPx = 0f,
+                BottomPx = s,
+                EyeY = eyeY,
+                // Use visible bounds for the top anchor. Hair, bows and models
+                // without a recognized head bone are covered by the same solver.
+                HeadTopY = bounds.max.y,
+                FootY = bounds.min.y,
+                LowCutY = eyeY - CallFramingSolver.EyeToWaist,
+            });
+            orbitTarget = new Vector3(bounds.center.x, solve.CameraY, bounds.center.z);
+            // SolveFullBody owns the [DistanceMin, DistanceMax] contract and
+            // marks any clamp as degraded; keep this assignment unmodified so
+            // diagnostics cannot disagree with the camera state.
+            distance = solve.Distance;
+            if (solve.Degraded)
             {
-                orbitTarget = bounds.center;
-                distance = Mathf.Clamp(bounds.size.y * 1.35f + 0.35f, MinDistance, MaxDistance);
-                // Bounds-only models still use the same neutral projection as the
-                // anchored path. Keeping the previous pitch here leaves a freshly
-                // loaded avatar above the visual center when the camera was reused.
-                yaw = 0f;
-                pitch = 0f;
+                Debug.LogWarning("[CallFraming] full-body framing degraded by distance clamp.", this);
             }
+            // SolveFullBody uses the pitch=0 projection. Keep the runtime camera
+            // on that contract instead of applying the previous orbit tilt.
+            yaw = 0f;
+            pitch = 0f;
             Debug.Log($"[PhoneFrame] root={root.name} boundsY={bounds.min.y:F3}-{bounds.max.y:F3} " +
                       $"targetY={orbitTarget.y:F3} distance={distance:F3} pitch={pitch:F1}", this);
             ApplyTransform();

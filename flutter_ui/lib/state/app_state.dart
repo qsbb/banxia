@@ -36,7 +36,7 @@ class ConnectionState {
   String serverDraft = '';
   String committedServer = '';
   bool serverDraftDirty = false;
-  bool privateHttp = false;
+  bool privateHttp = true;
   bool connected = false;
 }
 

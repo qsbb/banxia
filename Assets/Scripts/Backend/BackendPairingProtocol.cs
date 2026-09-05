@@ -50,7 +50,7 @@ namespace QuestMmdPlayer
         public const string LegacyExchangePath = LegacyPluginApiPath + "/pairing/exchange";
         public const int MaxServerInputLength = 512;
 
-        public static bool TryBuildExchangeEndpoint(string serverOrEndpoint, out string endpoint, out string reason, bool allowPrivateHttp = false)
+        public static bool TryBuildExchangeEndpoint(string serverOrEndpoint, out string endpoint, out string reason, bool allowPrivateHttp = true)
         {
             endpoint = string.Empty;
             reason = string.Empty;
@@ -75,7 +75,7 @@ namespace QuestMmdPlayer
                     reason = "Enable private-LAN HTTP before using a private IP address";
                     return false;
                 }
-                value = (isLiteralPrivateIp ? "http://" : "https://") + value;
+                value = "http://" + value;
             }
             if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
                 string.IsNullOrEmpty(uri.Host) ||
@@ -151,7 +151,7 @@ namespace QuestMmdPlayer
             out string exchangeEndpoint,
             out string token,
             out string reason,
-            bool allowPrivateHttp = false)
+            bool allowPrivateHttp = true)
         {
             exchangeEndpoint = string.Empty;
             token = string.Empty;
@@ -293,7 +293,7 @@ namespace QuestMmdPlayer
             string path,
             AstrBotBridgeSettings settings,
             out string reason,
-            bool allowPrivateHttp = false)
+            bool allowPrivateHttp = true)
         {
             reason = string.Empty;
             if (string.IsNullOrWhiteSpace(path))

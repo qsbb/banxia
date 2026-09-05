@@ -50,7 +50,9 @@ namespace QuestMmdPlayer
         private IPairingCodeScanner scanner = new UnsupportedPairingCodeScanner();
         private UnityWebRequest activeRequest;
         private Coroutine pairingRoutine;
-        private bool allowPrivateHttp;
+        // Local/private deployments commonly expose the bridge over plain HTTP.
+        // Explicit https:// endpoints remain HTTPS regardless of this default.
+        private bool allowPrivateHttp = true;
 
         public event Action StatusChanged;
 

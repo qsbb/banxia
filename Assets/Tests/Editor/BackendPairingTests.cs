@@ -7,7 +7,7 @@ namespace QuestMmdPlayer.Tests
 {
     public sealed class BackendPairingTests
     {
-        [TestCase("bot.example.com", "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
+        [TestCase("bot.example.com", "http://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
         [TestCase("https://bot.example.com:7443", "https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
         [TestCase("https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge", "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
         public void PairingEndpointNormalizesHostPluginPathAndPort(string input, string expected)
@@ -25,7 +25,6 @@ namespace QuestMmdPlayer.Tests
         {
             Assert.That(BackendPairingProtocol.GetServerEntry(endpoint), Is.EqualTo(expected));
         }
-        [TestCase("http://bot.example.com")]
         [TestCase("https://user:pass@bot.example.com")]
         [TestCase("https://bot.example.com/dashboard")]
         [TestCase("https://bot.example.com?secret=value")]
@@ -47,37 +46,34 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void ExplicitPrivateHttpAcceptsOnlyLiteralLanIp()
+        public void DefaultServerEntryUsesPlainHttpAndExplicitHttpsRemainsAvailable()
         {
-            Assert.That(
-                BackendPairingProtocol.TryBuildExchangeEndpoint("192.168.5.88:8520", out _, out var privateIpReason),
-                Is.False);
-            Assert.That(privateIpReason, Does.Contain("private-LAN HTTP"));
-
-            Assert.That(
-                BackendPairingProtocol.TryBuildExchangeEndpoint(
-                    "http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange",
-                    out _,
-                    out _),
-                Is.False,
-                "Private-LAN HTTP must remain disabled until the operator explicitly opts in");
-
             Assert.That(
                 BackendPairingProtocol.TryBuildExchangeEndpoint(
                     "192.168.5.88:8520",
-                    out var endpoint,
-                    out var reason,
-                    true),
+                    out var privateEndpoint,
+                    out var privateReason),
                 Is.True,
-                reason);
-            Assert.That(endpoint, Is.EqualTo("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange"));
+                privateReason);
+            Assert.That(privateEndpoint, Is.EqualTo("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange"));
 
             Assert.That(
-                BackendPairingProtocol.TryBuildExchangeEndpoint("http://api.example.com", out _, out _, true),
-                Is.False);
+                BackendPairingProtocol.TryBuildExchangeEndpoint(
+                    "https://bot.example.com:7443",
+                    out var secureEndpoint,
+                    out var secureReason),
+                Is.True,
+                secureReason);
+            Assert.That(secureEndpoint, Does.StartWith("https://"));
+
             Assert.That(
-                BackendPairingProtocol.TryBuildExchangeEndpoint("http://nas.local", out _, out _, true),
+                BackendPairingProtocol.TryBuildExchangeEndpoint(
+                    "http://192.168.5.88:8520",
+                    out _,
+                    out var disabledReason,
+                    false),
                 Is.False);
+            Assert.That(disabledReason, Does.Contain("HTTPS"));
         }
 
         [Test]

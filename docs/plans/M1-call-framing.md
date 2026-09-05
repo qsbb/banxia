@@ -48,7 +48,7 @@ k = (S/2) / tan(θ/2)
 **胸像（视频通话）**：
 
 ```
-s_E = T + (B−T)/3          眼线 = 可视区上 1/3 线
+s_E = T + 0.42·(B−T)       手机通话眼线 = 可视区 42%（Quest 默认仍为 1/3）
 s_C = B                    腰线切底
 d   = k · (E − C_waist) / (s_C − s_E)
 h   = E + (s_E − S/2) · d / k      相机高度
@@ -58,9 +58,9 @@ d 夹到 [0.55, 2.4]；取上限时降级为腰线→胸口局部构图并记 wa
 **全身像（虚拟场景，FrameModel 同步升级）**：
 
 ```
-s_head = 0.08·S；s_feet = 0.92·S
+s_head = 0.12·S；s_feet = 0.96·S
 d   = k · (headTop − feet) / (0.84·S)
-h   = (headTop + feet)/2
+h   = (headTop + feet)/2 + 0.04·S·d/k   （中心下移到 54%）
 ```
 
 **工作示例**（S=3200, θ=60°→k≈2771, T=330, B=2640，已验算）：
@@ -74,8 +74,8 @@ h   = (headTop + feet)/2
 | `HEAD_HEIGHT` | 0.20m | MMD 头高 |
 | `EYE_TO_WAIST` | 2.2×HEAD | 眼到腰 |
 | `EYE_TO_CHEST` | 1.5×HEAD | 眼到胸 |
-| `FRAME_BAND` | [8%, 92%] | 全身像上下安全带 |
-| `EYE_LINE_RATIO` | 1/3 | 三分法眼线 |
+| `FRAME_BAND` | [12%, 96%] | 全身像上下安全带（整体中心 54%） |
+| `EYE_LINE_RATIO` | 1/3（Quest）/ 0.42（手机通话） | 三分法/手机偏下眼线 |
 | `DIST_CLAMP` | [0.55, 2.4] | 相机距离 |
 
 ---
@@ -98,8 +98,8 @@ public static class CallFramingSolver
     public struct Inputs { public float S, ThetaDeg, TopPx, BottomPx;      // 实测
                            public float EyeY, HeadTopY, FootY, LowCutY; }  // 语义锚
     public struct Result  { public float Distance, CameraY; }
-    public static Result SolveBust(in Inputs i);     // 眼1/3线+腰线切底
-    public static Result SolveFullBody(in Inputs i); // 8–92% 带
+    public static Result SolveBust(in Inputs i);     // Quest 默认眼1/3线+腰线切底
+    public static Result SolveFullBody(in Inputs i); // 12–96% 带（中心 54%）
 }
 ```
 两函数按 §1.3 公式实现；`SolveBust` 内含距离夹取与降级分支。
@@ -120,12 +120,12 @@ public static class CallFramingSolver
 ```
 
 ### 步骤 5 · `FrameModel` 全身像升级
-`PhoneOrbitCamera.FrameModel`：headTop/feet 锚点齐全时走 `SolveFullBody`；否则保留现行 bounds 逻辑。
+`PhoneOrbitCamera.FrameModel`：headTop/feet 锚点齐全或仅有 renderer bounds 时统一走 `SolveFullBody`，避免无头骨模型恢复几何中心取景。
 
 ### 步骤 6 · QA 构图叠加层
 `PhoneDiagnosticsHud`（既有诊断 HUD，设置页有开关）新增「构图网格」开关，开启时用 `IMGUI`/UI Toolkit 画：
 - 红框：`[0,T]` 与 `[B,S]` 安全区矩形
-- 绿虚线：1/3 线、7/10 线
+- 绿线：手机通话 42% 眼线、7/10 辅助线
 - 十字标：headTop / 眼线 / 腰线 / feet 的实时屏幕投影（从 director 拿锚点世界坐标，`camera.WorldToScreenPoint`）
 - 左上角数字：`d=… h=… eye%=… anchor=head|bounds`
 发布构建默认关（跟随 HUD 开关，无需剔除代码）。
@@ -136,7 +136,7 @@ tar 三文件+USS → 5.55 → touch → del apk → wait.ps1 → sleep 570 → 
 装机（force-stop 冷启动 26s）→ 进场景（默认模式记忆 VideoCall）
 → logcat grep 求解行：读 d/h/eye% 三值
 → 开 HUD 构图网格（设置→通用→HUD；网格开关）→ 截图
-→ 断言：绿 1/3 线存在 + 十字标眼线落在绿带内（叠加层自证）
+→ 断言：绿手机眼线存在 + 十字标眼线落在绿带内（叠加层自证）
 ```
 
 ### 步骤 8 · 真机验收（用户）
@@ -148,8 +148,8 @@ tar 三文件+USS → 5.55 → touch → del apk → wait.ps1 → sleep 570 → 
 ## 3. 验收清单
 
 - [ ] INV-1：顶栏区 [0, T] 肤色像素 = 0（assert-framing.py A 项）
-- [ ] INV-1：眼线（十字标）∈ 可视区 28–38%
-- [ ] INV-2：通话 y>0.6S 区域人物覆盖 >30%；全身像头 ∈ [8,12]%、脚 ∈ [88,92]%
+- [ ] INV-1：手机通话眼线（十字标）∈ 可视区 38–46%
+- [ ] INV-2：通话 y>0.6S 区域人物覆盖 >30%；全身像头 ∈ [12,16]%、脚 ∈ [92,96]%
 - [ ] INV-7：logcat 求解行存在；锚点类型显示（head / bounds）
 - [ ] bounds 退化路径单独验证一次（临时禁用头骨 accessor 或用 fallback 场景）
 - [ ] 模拟器全链路 force-stop 冷启动通过；构建完告知 5.55 可关机

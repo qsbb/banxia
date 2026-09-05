@@ -41,6 +41,25 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void BustSolutionSupportsLowerPhoneEyeLine()
+        {
+            var input = TypicalInputs();
+            const float phoneEyeLineRatio = 0.42f;
+            var result = CallFramingSolver.SolveBust(
+                input,
+                CallFramingSolver.DistanceMax,
+                phoneEyeLineRatio);
+            var k = 3200f * 0.5f / 0.577350269f;
+            var eyeScreen = 3200f * 0.5f +
+                (result.CameraY - input.EyeY) * k / result.Distance;
+            var expectedEye = input.TopPx +
+                (input.BottomPx - input.TopPx) * phoneEyeLineRatio;
+
+            Assert.That(result.Degraded, Is.False);
+            Assert.That(eyeScreen, Is.EqualTo(expectedEye).Within(.5f));
+        }
+
+        [Test]
         public void BustSolutionMarksDistanceLowerClampAsDegraded()
         {
             var input = TypicalInputs();
@@ -67,7 +86,7 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void FullBodySolutionUsesEightToNinetyTwoPercentBand()
+        public void FullBodySolutionUsesLowerTwelveToNinetySixPercentBand()
         {
             var input = TypicalInputs();
             var result = CallFramingSolver.SolveFullBody(input);
@@ -81,6 +100,8 @@ namespace QuestMmdPlayer.Tests
             Assert.That(result.Distance, Is.EqualTo(1.78f).Within(.03f));
             Assert.That(headScreen, Is.EqualTo(3200f * CallFramingSolver.FrameBandTop).Within(.5f));
             Assert.That(footScreen, Is.EqualTo(3200f * CallFramingSolver.FrameBandBottom).Within(.5f));
+            Assert.That((headScreen + footScreen) * 0.5f,
+                Is.EqualTo(3200f * 0.54f).Within(.5f));
         }
 
         [Test]

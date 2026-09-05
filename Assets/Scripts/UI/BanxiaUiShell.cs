@@ -1783,7 +1783,7 @@ namespace QuestMmdPlayer
             {
                 var bridge = BanxiaUiText.LocalizeBridgeStatus(owner.AstrBot?.Status ?? string.Empty);
                 var pairingText = BanxiaUiText.LocalizePairingStatus(pairing?.Status ?? "Pairing controller offline");
-                var modeText = pairing != null && pairing.PrivateHttpAllowed ? "私网 HTTP 已允许" : "HTTPS 模式";
+                var modeText = pairing != null && pairing.PrivateHttpAllowed ? "HTTP 默认（可填写 HTTPS）" : "仅 HTTPS";
                 pairingStatusLabel.text = "实时连接：" + bridge + "\n配对：" + pairingText + "\n" + modeText;
             }
         }
