@@ -47,12 +47,16 @@ The host exposes **two** concrete attach/transport paths plus a preflight:
 ### Phone — real FlutterView
 
 `attachToUnityPlayer(Activity)` creates a real `io.flutter.embedding.android.
-FlutterView`, calls `attachToFlutterEngine(engine)`, and adds it to the player
-via `UnityPlayer.addViewToPlayer(view, true)`, which places the Flutter
-surface above Unity's GL view. Only after the view is actually added is
-`phoneViewAttached` set true (reported in `getStateJson()`). If the view is
-created but `addViewToPlayer` fails, the reason is recorded and the flag stays
-false — no silent "attached" claim.
+FlutterView`, calls `attachToFlutterEngine(engine)`, and adds it as a tokened
+`TYPE_APPLICATION_PANEL` window above the Activity's Unity window. Flutter uses
+the embedding's `RenderMode.texture`, so its content is a regular `TextureView`
+overlay above Unity while preserving the Unity surface. The panel disables
+WindowManager's automatic system-bar fitting, retains `ADJUST_RESIZE` for the
+IME, and forwards touch sequences from the lazily-created texture child into
+`FlutterView`. Only after the view is actually added is `phoneViewAttached` set
+true (reported in `getStateJson()`). If the view is created but the panel cannot
+be added, the reason is recorded and the flag stays false — no silent
+"attached" claim.
 
 ### Quest — offscreen SurfaceTexture seam (transport only, not completion)
 

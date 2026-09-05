@@ -1,7 +1,8 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using System.IO;
 using System.Text;
 using System.Xml;
+using UnityEditor;
 using UnityEditor.Android;
 using UnityEngine;
 
@@ -32,6 +33,11 @@ namespace QuestMmdPlayer.Editor
 
             application.SetAttribute("usesCleartextTraffic", AndroidNamespace, "true");
             EnsureUnityPlayerActivityLabel(application);
+            if (PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android) ==
+                "com.lingxi.banxia.phone")
+            {
+                EnsureUnityPlayerActivityHardwareAcceleration(application, true);
+            }
             EnsureAppLabelResource(path);
             EnsurePermission(document, "android.permission.INTERNET");
             EnsurePermission(document, "horizonos.permission.HAND_TRACKING");
@@ -92,14 +98,25 @@ namespace QuestMmdPlayer.Editor
 
         internal static void EnsureUnityPlayerActivityLabel(XmlElement application)
         {
+            var activity = FindUnityPlayerActivity(application);
+            activity.SetAttribute("label", AndroidNamespace, "伴夏");
+        }
+
+        internal static void EnsureUnityPlayerActivityHardwareAcceleration(
+            XmlElement application,
+            bool enabled)
+        {
+            var activity = FindUnityPlayerActivity(application);
+            activity.SetAttribute("hardwareAccelerated", AndroidNamespace,
+                enabled ? "true" : "false");
+        }
+
+        private static XmlElement FindUnityPlayerActivity(XmlElement application)
+        {
             if (application == null)
             {
                 throw new System.ArgumentNullException(nameof(application));
             }
-
-            // Keep the task/application label independent of Unity's generated
-            // app_name resource, which can be absent on Quest merge variants.
-            const string applicationLabel = "伴夏";
 
             var activities = application.SelectNodes("activity");
             if (activities == null)
@@ -109,15 +126,12 @@ namespace QuestMmdPlayer.Editor
 
             foreach (XmlNode node in activities)
             {
-                if (!(node is XmlElement activity) ||
-                    activity.GetAttribute("name", AndroidNamespace) !=
+                if (node is XmlElement activity &&
+                    activity.GetAttribute("name", AndroidNamespace) ==
                     "com.unity3d.player.UnityPlayerActivity")
                 {
-                    continue;
+                    return activity;
                 }
-
-                activity.SetAttribute("label", AndroidNamespace, applicationLabel);
-                return;
             }
 
             throw new InvalidDataException(

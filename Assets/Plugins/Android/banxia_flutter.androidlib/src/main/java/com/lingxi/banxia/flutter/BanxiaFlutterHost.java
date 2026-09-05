@@ -2,6 +2,7 @@ package com.lingxi.banxia.flutter;
 
 import android.app.Activity;
 import android.content.Context;
+import android.graphics.Insets;
 import android.graphics.PixelFormat;
 import android.graphics.SurfaceTexture;
 import android.os.Build;
@@ -10,6 +11,8 @@ import android.os.Looper;
 import android.util.Log;
 import android.view.Surface;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowManager;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 
@@ -171,6 +174,7 @@ public final class BanxiaFlutterHost {
     private volatile Context applicationContext;
     private volatile boolean dartStarted;
     private Object phoneFlutterView; // io.flutter.embedding.android.FlutterView
+    private WindowManager phoneWindowManager;
 
     // Reflected Flutter embedding instances (all null until initialize()).
     private Object flutterEngine;   // io.flutter.embedding.engine.FlutterEngine
@@ -548,11 +552,21 @@ public final class BanxiaFlutterHost {
             return;
         }
         if (view instanceof View) {
-            ViewParent parent = ((View) view).getParent();
-            if (parent instanceof ViewGroup) {
-                ((ViewGroup) parent).removeView((View) view);
+            View nativeView = (View) view;
+            if (phoneWindowManager != null && nativeView.getWindowToken() != null) {
+                try {
+                    phoneWindowManager.removeViewImmediate(nativeView);
+                } catch (Throwable t) {
+                    Log.w(TAG, "Phone Flutter overlay removal failed", t);
+                }
+            } else {
+                ViewParent parent = nativeView.getParent();
+                if (parent instanceof ViewGroup) {
+                    ((ViewGroup) parent).removeView(nativeView);
+                }
             }
         }
+        phoneWindowManager = null;
         try {
             view.getClass().getMethod("detachFromFlutterEngine").invoke(view);
         } catch (Throwable t) {
@@ -785,9 +799,10 @@ public final class BanxiaFlutterHost {
 
     /**
      * Phone path. Creates a real FlutterView attached to the shared engine and
-     * adds it to the Unity player via {@code UnityPlayer.addViewToPlayer(view,
-     * true)} so the Flutter surface is above Unity's GL view. All view
-     * operations are marshalled to Android's main looper.
+     * adds it as a sibling content overlay on the existing Unity activity. The
+     * Unity GL view remains in the content hierarchy underneath it. The embedded
+     * Flutter texture render mode keeps Flutter as a regular View overlay above
+     * Unity. All view operations are marshalled to Android's main looper.
      */
     public boolean attachToUnityPlayer(final Activity activity) {
         if (activity == null) {
@@ -884,15 +899,30 @@ public final class BanxiaFlutterHost {
     private Object createFlutterViewOnMainThread(Context context) {
         try {
             Class<?> viewClass = Class.forName(CLS_VIEW);
-            Constructor<?> ctor = viewClass.getConstructor(Context.class);
-            Object view = ctor.newInstance(context);
+            Class<?> renderModeClass = Class.forName("io.flutter.embedding.android.RenderMode");
+            Object textureMode = Enum.valueOf(
+                    (Class<? extends Enum>) renderModeClass.asSubclass(Enum.class), "texture");
+            Constructor<?> ctor = viewClass.getConstructor(Context.class, renderModeClass);
+            Object view = ctor.newInstance(context, textureMode);
             viewClass.getMethod("attachToFlutterEngine", Class.forName(CLS_ENGINE))
                     .invoke(view, flutterEngine);
+            notifyFlutterResumed();
             return view;
         } catch (Throwable t) {
             Log.e(TAG, "createFlutterView failed", t);
             unavailableReason = "createFlutterView failed: " + t;
             return null;
+        }
+    }
+
+    private void notifyFlutterResumed() {
+        try {
+            Object lifecycle = flutterEngine.getClass()
+                    .getMethod("getLifecycleChannel")
+                    .invoke(flutterEngine);
+            lifecycle.getClass().getMethod("appIsResumed").invoke(lifecycle);
+        } catch (Throwable t) {
+            Log.w(TAG, "Flutter lifecycle resume notification failed", t);
         }
     }
 
@@ -922,26 +952,108 @@ public final class BanxiaFlutterHost {
         flutterView.setVisibility(View.VISIBLE);
         flutterView.setFocusable(true);
         flutterView.setFocusableInTouchMode(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            flutterView.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+                @Override
+                public WindowInsets onApplyWindowInsets(View view, WindowInsets insets) {
+                    WindowInsets adjusted = insets;
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                        adjusted = insets.replaceSystemWindowInsets(
+                                0,
+                                0,
+                                0,
+                                insets.getSystemWindowInsetBottom());
+                    } else {
+                        Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                        adjusted = new WindowInsets.Builder(insets)
+                                .setInsets(WindowInsets.Type.statusBars()
+                                        | WindowInsets.Type.navigationBars(), Insets.NONE)
+                                .setInsets(WindowInsets.Type.ime(), ime)
+                                .build();
+                    }
+                    // The listener replaces View.dispatchApplyWindowInsets, so
+                    // call FlutterView's implementation explicitly with the
+                    // adjusted object to keep its viewport metrics in sync.
+                    return view.onApplyWindowInsets(adjusted);
+                }
+            });
+        }
+        // FlutterTextureView is a child of FlutterView and can become the
+        // Android touch target inside Unity's nested ViewGroup. Forward the
+        // complete sequence from the render child into FlutterView so
+        // AndroidTouchProcessor receives every action, including UP.
+        // Keep FlutterView as the panel root so its own dispatchTouchEvent path
+        // feeds AndroidTouchProcessor and the text-input proxy directly. The
+        // texture child is a rendering surface, not a reliable touch target on
+        // all Flutter embedding revisions, so place a transparent full-size
+        // proxy above it and forward the complete MotionEvent sequence.
+        installFlutterTouchProxy(flutterView);
         flutterView.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
         return flutterView;
     }
 
+    private void installFlutterTouchProxy(final View flutterView) {
+        if (!(flutterView instanceof ViewGroup)) {
+            return;
+        }
+        ViewGroup group = (ViewGroup) flutterView;
+        final View proxy = new View(flutterView.getContext());
+        proxy.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        proxy.setClickable(true);
+        proxy.setFocusable(true);
+        proxy.setFocusableInTouchMode(true);
+        proxy.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, android.view.MotionEvent event) {
+                android.view.MotionEvent forwarded = android.view.MotionEvent.obtain(event);
+                try {
+                    return flutterView.onTouchEvent(forwarded);
+                } finally {
+                    forwarded.recycle();
+                }
+            }
+        });
+        group.addView(proxy, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
     private boolean addViewToUnityPlayer(Activity activity, View view) {
         try {
-            Object unityPlayer = findUnityPlayer(activity);
-            if (unityPlayer == null) {
-                throw new IllegalStateException("UnityPlayerActivity has no mUnityPlayer field");
+            // UnityPlayer's content root is inset/clipped on devices with a
+            // display cutout. A tokened application-panel window keeps the
+            // Flutter texture above Unity while giving Android the full-screen
+            // touch region and the same resize behavior as the Activity.
+            WindowManager manager = (WindowManager) activity.getSystemService(Context.WINDOW_SERVICE);
+            if (manager == null) {
+                throw new IllegalStateException("Activity WindowManager is unavailable");
             }
-            Method addView = findMethod(unityPlayer.getClass(), "addViewToPlayer",
-                    View.class, boolean.class);
-            if (addView == null) {
-                throw new NoSuchMethodException(unityPlayer.getClass().getName()
-                        + ".addViewToPlayer(View, boolean)");
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                            ? WindowManager.LayoutParams.TYPE_APPLICATION_PANEL
+                            : WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT);
+            params.token = activity.getWindow().getDecorView().getWindowToken();
+            params.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+            params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Do not let WindowManager re-fit an application panel to the
+                // parent app bounds (145..2208 on the 5.21 emulator). Flutter
+                // owns safe-area/IME metrics inside the full-screen view.
+                params.setFitInsetsTypes(0);
+                params.setFitInsetsSides(0);
+                params.layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
             }
-            addView.invoke(unityPlayer, view, true);
-            Log.i(TAG, "FlutterView added above Unity GL view: class="
+            manager.addView(view, params);
+            phoneWindowManager = manager;
+            Log.i(TAG, "FlutterView added as Activity panel above Unity GL: class="
                     + view.getClass().getName() + ", size=" + view.getWidth() + "x" + view.getHeight()
                     + ", visibility=" + view.getVisibility());
             return true;

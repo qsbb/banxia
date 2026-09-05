@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using System.Xml;
 using NUnit.Framework;
 using QuestMmdPlayer.Editor;
@@ -41,6 +41,49 @@ namespace QuestMmdPlayer.Tests
 
             var activity = (XmlElement)application.SelectSingleNode("activity");
             Assert.That(activity.GetAttribute("label", AndroidNamespace), Is.EqualTo("伴夏"));
+        }
+
+        [Test]
+        public void UnityPlayerActivityHardwareAccelerationCanBeEnabledForPhone()
+        {
+            var document = new XmlDocument();
+            document.LoadXml(
+                "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">" +
+                "<application>" +
+                "<activity android:name=\"com.unity3d.player.UnityPlayerActivity\" " +
+                "android:hardwareAccelerated=\"false\" />" +
+                "</application></manifest>");
+            var application = (XmlElement)document.DocumentElement.SelectSingleNode("application");
+
+            QuestPrivateLanManifestPostprocessor.EnsureUnityPlayerActivityHardwareAcceleration(
+                application,
+                true);
+
+            var activity = (XmlElement)application.SelectSingleNode("activity");
+            Assert.That(
+                activity.GetAttribute("hardwareAccelerated", AndroidNamespace),
+                Is.EqualTo("true"));
+        }
+
+        [Test]
+        public void UnityPlayerActivityHardwareAccelerationCanRemainDisabledForQuest()
+        {
+            var document = new XmlDocument();
+            document.LoadXml(
+                "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">" +
+                "<application>" +
+                "<activity android:name=\"com.unity3d.player.UnityPlayerActivity\" />" +
+                "</application></manifest>");
+            var application = (XmlElement)document.DocumentElement.SelectSingleNode("application");
+
+            QuestPrivateLanManifestPostprocessor.EnsureUnityPlayerActivityHardwareAcceleration(
+                application,
+                false);
+
+            var activity = (XmlElement)application.SelectSingleNode("activity");
+            Assert.That(
+                activity.GetAttribute("hardwareAccelerated", AndroidNamespace),
+                Is.EqualTo("false"));
         }
 
         [Test]

@@ -177,6 +177,20 @@ void main() {
     });
   });
 
+  test('switchTab updates the tab notifier and app notifier', () async {
+    final bridge = LocalBridgeClient();
+    final app = AppState(bridge);
+    int notifications = 0;
+    app.addListener(() => notifications++);
+
+    app.switchTab(AppTab.chat);
+
+    expect(app.tab.value, AppTab.chat);
+    expect(notifications, 1);
+    app.dispose();
+    bridge.dispose();
+  });
+
   test('local camera send preserves typed text and emits suggestions', () async {
     final bridge = LocalBridgeClient();
     final app = AppState(bridge);

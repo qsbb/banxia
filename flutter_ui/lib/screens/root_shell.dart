@@ -44,30 +44,59 @@ class RootShell extends StatelessWidget {
   }
 }
 
-class _MenuShell extends StatelessWidget {
+class _MenuShell extends StatefulWidget {
   const _MenuShell({required this.appState});
 
   final AppState appState;
 
   @override
+  State<_MenuShell> createState() => _MenuShellState();
+}
+
+class _MenuShellState extends State<_MenuShell> {
+  @override
+  void initState() {
+    super.initState();
+    widget.appState.tab.addListener(_onTabChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.appState.tab.removeListener(_onTabChanged);
+    super.dispose();
+  }
+
+  void _onTabChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final AppState appState = widget.appState;
     return ColoredBox(
       color: BanxiaTokens.bg,
-      child: Column(
+      child: Stack(
+        fit: StackFit.expand,
         children: <Widget>[
-          Expanded(
-            child: IndexedStack(
-              index: appState.tab.value.index,
-              children: <Widget>[
-                CompanionScreen(appState: appState),
-                ChatScreen(appState: appState),
-                ActionsScreen(appState: appState),
-                SettingsScreen(appState: appState),
-              ],
-            ),
+          IndexedStack(
+            index: appState.tab.value.index,
+            children: <Widget>[
+              CompanionScreen(appState: appState),
+              ChatScreen(appState: appState),
+              ActionsScreen(appState: appState),
+              SettingsScreen(appState: appState),
+            ],
           ),
           if (MediaQuery.of(context).viewInsets.bottom <= 0)
-            _BottomNav(appState: appState),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.viewPaddingOf(context).bottom,
+                ),
+                child: _BottomNav(appState: appState),
+              ),
+            ),
         ],
       ),
     );

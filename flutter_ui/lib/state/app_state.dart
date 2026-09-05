@@ -689,6 +689,7 @@ class AppState extends ChangeNotifier {
 
   void switchTab(AppTab next) {
     tab.value = next;
+    _notify();
   }
 
   void _notify() {
