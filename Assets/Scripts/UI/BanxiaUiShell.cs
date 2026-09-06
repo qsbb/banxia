@@ -389,6 +389,7 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "ui.font.settings-probe");
                 Debug.LogWarning("[BanxiaUi] Panel text settings fallback failed: " + exception.Message);
                 return;
             }
@@ -434,6 +435,7 @@ namespace QuestMmdPlayer
                 }
                 catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "ui.font.candidate-probe");
                     Debug.LogWarning("[BanxiaUi] OS font failed: " + family + "/" + style +
                                      " " + exception.Message);
                 }
@@ -741,7 +743,7 @@ namespace QuestMmdPlayer
             }
             if (tab == Tab.Actions && owner?.VmdActions != null && owner.VmdActions.Actions.Count == 0)
             {
-                _ = RefreshActionsAsync();
+                RefreshActionsAsync().Forget("ui.actions.refresh");
             }
             if (tab == Tab.Settings)
             {
@@ -833,7 +835,7 @@ namespace QuestMmdPlayer
             grid.Add(MakeTile("对话", "和 TA 聊天 · 可拍一拍", () => SelectTab(Tab.Chat)));
             grid.Add(MakeTile("动作", "VMD · 待机 · 表情", () => SelectTab(Tab.Actions)));
             grid.Add(MakeTile("设置", "画质 · 摄像头 · 音量", () => SelectTab(Tab.Settings)));
-            grid.Add(MakeTile("更新", "检查新版本并安装", () => _ = CheckUpdateAsync()));
+            grid.Add(MakeTile("更新", "检查新版本并安装", () => CheckUpdateAsync().Forget("ui.update.check")));
             scroll.Add(grid);
 
             page.Add(scroll);
@@ -879,6 +881,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "ui.models.refresh");
+                QuestDebugMode.RethrowIfEnabled(exception, "ui.models.refresh");
                 ShowToast("模型列表读取失败：" + exception.Message);
             }
 
@@ -960,6 +964,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "ui.models.delete");
+                QuestDebugMode.RethrowIfEnabled(exception, "ui.models.delete");
                 ShowToast("删除失败：" + exception.Message);
             }
             ShowToast(deleted ? "模型包已删除" : "当前模型正在使用或无法删除");
@@ -998,7 +1004,7 @@ namespace QuestMmdPlayer
             }
             ShowToast(string.IsNullOrEmpty(lastImportStatus) ? "导入状态已更新" : lastImportStatus);
             RefreshModels(forceInvalidate: true);
-            _ = RefreshActionsAsync();
+            RefreshActionsAsync().Forget("ui.actions.refresh");
         }
 
         private static string DescribeModel(RuntimeMmdModelInfo model)
@@ -1014,8 +1020,14 @@ namespace QuestMmdPlayer
                         : (bytes / 1024f).ToString("F0") + " KB";
                 }
             }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            catch (IOException exception)
+            {
+                QuestDebugMode.Report(exception, "ui.models.size-probe");
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                QuestDebugMode.Report(exception, "ui.models.size-probe");
+            }
             return "PMX · " + sizeText;
         }
 
@@ -1434,7 +1446,7 @@ namespace QuestMmdPlayer
             var cameraLabel = new Label("拍");
             cameraLabel.AddToClassList("chat-camera-label");
             camera.Add(cameraLabel);
-            camera.RegisterCallback<ClickEvent>(_evt => { _ = SendChatWithCameraFrameAsync(); });
+            camera.RegisterCallback<ClickEvent>(_evt => SendChatWithCameraFrameAsync().Forget("ui.camera-frame"));
             bar.Add(camera);
             var send = new VisualElement();
             send.AddToClassList("chat-send");
@@ -1729,6 +1741,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "ui.pairing.clear");
+                QuestDebugMode.RethrowIfEnabled(exception, "ui.pairing.clear");
                 ShowToast("解除绑定失败：" + exception.Message);
             }
             RefreshConnectionUi();
@@ -1965,7 +1979,7 @@ namespace QuestMmdPlayer
 
             scroll.Add(MakeButtonRow(
                 MakeSmallButton("表情轮换", false, CycleExpression),
-                MakeSmallButton("刷新动作", false, () => _ = RefreshActionsAsync()),
+                MakeSmallButton("刷新动作", false, () => RefreshActionsAsync().Forget("ui.actions.refresh")),
                 MakeSmallButton("导入 VMD", false, () => OpenImportPicker("正在打开动作导入器…"))));
 
             actionsStatusLabel = new Label("外部动作列表待刷新");
@@ -2001,6 +2015,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "ui.actions.refresh");
+                QuestDebugMode.RethrowIfEnabled(exception, "ui.actions.refresh");
                 if (actionsStatusLabel != null)
                 {
                     actionsStatusLabel.text = "动作列表刷新失败：" + exception.Message;
@@ -2075,8 +2091,8 @@ namespace QuestMmdPlayer
             body.Add(badge);
             card.Add(body);
             var actionId = action.Id;
-            card.Add(MakeCardAction("播放", () => _ = PlayOrStopAction(actionId)));
-            card.Add(MakeSmallButton("删除", true, () => _ = DeleteAction(actionId)));
+            card.Add(MakeCardAction("播放", () => PlayOrStopAction(actionId).Forget("ui.actions.play-or-stop")));
+            card.Add(MakeSmallButton("删除", true, () => DeleteAction(actionId).Forget("ui.actions.delete")));
             return card;
         }
 
@@ -2425,6 +2441,13 @@ namespace QuestMmdPlayer
                 // 关闭后拍摄入口直接拒绝。
                 ShowToast(value ? "摄像头单帧已开启：对话页「拍」按钮可用" : "摄像头单帧已关闭");
             }));
+            var debugModeRow = MakeToggleRow("调试模式（不拦截报错）", QuestDebugMode.Enabled, value =>
+            {
+                QuestDebugMode.SetEnabled(value);
+                ShowToast(value ? "调试模式已开启：异常打印完整堆栈" : "调试模式已关闭");
+            });
+            generalGroup.Add(debugModeRow);
+            segmentRefreshers.Add(() => debugModeRow.Q<Toggle>().SetValueWithoutNotify(QuestDebugMode.Enabled));
             generalGroup.Add(MakeInfoRow("摄像头单帧说明", "每次只拍一帧，不保存不录像"));
             // 语音配置收纳：对话页已微信化（输入条切换 + 按住说话），原
             // “语音（可选）”面板的配置项迁到此处。
@@ -2442,10 +2465,15 @@ namespace QuestMmdPlayer
                     ShowToast("麦克风监控已重启");
                 })));
             generalGroup.Add(MakeSegmentedRow("目标帧率",
-                new SegmentChoice("30", () => Application.targetFrameRate == 30, () => SetTargetFps(30)),
-                new SegmentChoice("60", () => Application.targetFrameRate == 60 || Application.targetFrameRate <= 0, () => SetTargetFps(60)),
-                new SegmentChoice("120", () => Application.targetFrameRate == 120, () => SetTargetFps(120))));
-            generalGroup.Add(MakeSliderRow("音量", AudioListener.volume, value => AudioListener.volume = value));
+                new SegmentChoice("30", () => CurrentTargetFps() == 30, () => SetTargetFps(30)),
+                new SegmentChoice("60", () => CurrentTargetFps() == 60, () => SetTargetFps(60)),
+                new SegmentChoice("120", () => CurrentTargetFps() == 120, () => SetTargetFps(120))));
+            generalGroup.Add(MakeSliderRow("音量", AudioListener.volume, value =>
+            {
+                AudioListener.volume = value;
+                PlayerPrefs.SetFloat(QuestQualitySettings.VolumePreferenceKey, value);
+                PlayerPrefs.Save();
+            }));
             scroll.Add(generalGroup);
         }
 
@@ -2487,7 +2515,7 @@ namespace QuestMmdPlayer
             updateProgressRow.Add(updateProgressFill);
             updateProgressRow.style.display = DisplayStyle.None;
             updateGroup.Add(updateProgressRow);
-            updateGroup.Add(MakeButton("检查更新", true, () => _ = CheckUpdateAsync()));
+            updateGroup.Add(MakeButton("检查更新", true, () => CheckUpdateAsync().Forget("ui.update.check")));
             scroll.Add(updateGroup);
         }
 
@@ -2509,11 +2537,25 @@ namespace QuestMmdPlayer
             scroll.Add(logGroup);
         }
 
+        private int CurrentTargetFps()
+        {
+            return owner?.Quality == null
+                ? QuestQualitySettings.ResolveStartupTargetFrameRate()
+                : owner.Quality.ApplicationTargetFrameRate;
+        }
+
         private void SetTargetFps(int fps)
         {
-            Application.targetFrameRate = fps;
-            PlayerPrefs.SetInt(PrefsPrefix + "fps", fps);
-            PlayerPrefs.Save();
+            if (owner?.Quality != null)
+            {
+                owner.Quality.SetUserTargetFrameRate(fps);
+            }
+            else
+            {
+                Application.targetFrameRate = fps;
+                PlayerPrefs.SetInt(QuestQualitySettings.TargetFpsPreferenceKey, fps);
+                PlayerPrefs.Save();
+            }
             ShowToast("目标帧率：" + fps);
             RefreshSegments();
         }
@@ -2604,7 +2646,7 @@ namespace QuestMmdPlayer
                 return;
             }
             enteringScene = true;
-            _ = EnterSceneAsync(target);
+            EnterSceneAsync(target).Forget("ui.enter-scene");
         }
 
         private async Task EnterSceneAsync(RuntimeMmdModelInfo target)
@@ -2662,6 +2704,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "ui.enter-scene");
+                QuestDebugMode.RethrowIfEnabled(exception, "ui.enter-scene");
                 ShowToast("进入场景失败：" + exception.Message);
                 Debug.LogWarning("[BanxiaUi] Enter scene failed: " + exception, this);
             }
@@ -3381,7 +3425,10 @@ namespace QuestMmdPlayer
                     {
                         selected = options[i].IsSelected?.Invoke() ?? false;
                     }
-                    catch (NullReferenceException) { }
+                    catch (NullReferenceException exception)
+                    {
+                        QuestDebugMode.Report(exception, "ui.settings.selection-probe");
+                    }
                     items[i].EnableInClassList("is-active", selected);
                 }
             };

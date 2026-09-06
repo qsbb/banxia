@@ -247,6 +247,11 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "flutter.protocol");
+                if (!(exception is ArgumentException))
+                {
+                    QuestDebugMode.RethrowIfEnabled(exception, "flutter.protocol");
+                }
                 error = "Flutter envelope JSON is malformed: " + exception.Message;
                 envelope = null;
                 return false;
@@ -297,6 +302,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "flutter.payload-serialize");
+                QuestDebugMode.RethrowIfEnabled(exception, "flutter.payload-serialize");
                 error = "Flutter payload serialization failed: " + exception.Message;
                 return false;
             }
@@ -323,6 +330,11 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "flutter.protocol");
+                if (!(exception is ArgumentException))
+                {
+                    QuestDebugMode.RethrowIfEnabled(exception, "flutter.protocol");
+                }
                 error = "Flutter payload deserialization failed: " + exception.Message;
                 return false;
             }
@@ -344,6 +356,11 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "flutter.protocol");
+                if (!(exception is ArgumentException))
+                {
+                    QuestDebugMode.RethrowIfEnabled(exception, "flutter.protocol");
+                }
                 throw new ArgumentException("Flutter payload JSON is malformed", nameof(json), exception);
             }
         }
@@ -490,7 +507,15 @@ namespace QuestMmdPlayer
 
     [Serializable] public sealed class FlutterPlaybackChangedPayload { public string playingId = string.Empty; }
 
-    [Serializable] public sealed class FlutterQualityChangedPayload { public string renderPreset = string.Empty; public string physicsPreset = string.Empty; public string status = string.Empty; }
+    [Serializable] public sealed class FlutterQualityChangedPayload
+    {
+        public string renderPreset = string.Empty;
+        public string physicsPreset = string.Empty;
+        public string status = string.Empty;
+        public int targetFps;
+        public float volume;
+        public bool debugMode;
+    }
 
     [Serializable] public sealed class FlutterCopresenceModePayload
     {

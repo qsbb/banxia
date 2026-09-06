@@ -71,7 +71,7 @@ class ActionLibraryState {
 class QualityState {
   String renderPreset = 'balanced';
   String physicsPreset = 'balanced';
-  int fps = 60;
+  int fps = 120;
   double volume = 1.0;
   String status = '';
 }
@@ -96,7 +96,8 @@ class SettingsState {
   bool hud = true;
   bool framingGrid = false;
   bool camera = false;
-  int targetFps = 60;
+  bool debugMode = false;
+  int targetFps = 120;
   double volume = 1.0;
 }
 
@@ -356,6 +357,22 @@ class AppState extends ChangeNotifier {
         }
         if (p?['physicsPreset'] is String) {
           quality.physicsPreset = p!['physicsPreset'] as String;
+        }
+        if (p?['targetFps'] is num &&
+            [30, 60, 120].contains((p!['targetFps'] as num).toInt())) {
+          final int targetFps = (p['targetFps'] as num).toInt();
+          quality.fps = targetFps;
+          settings.targetFps = targetFps;
+        }
+        if (p?['volume'] is num) {
+          final double volume = (p!['volume'] as num).toDouble();
+          if (volume.isFinite && volume >= 0 && volume <= 1) {
+            quality.volume = volume;
+            settings.volume = volume;
+          }
+        }
+        if (p?['debugMode'] is bool) {
+          settings.debugMode = p!['debugMode'] as bool;
         }
         quality.status = _str(p?['status']);
         break;
@@ -669,6 +686,14 @@ class AppState extends ChangeNotifier {
 
   // ── Settings helpers ──────────────────────────────────────────────────────
   Future<void> toggleSetting(String key, bool value) async {
+    if (key == 'debugMode') {
+      if (await dispatch(Cmd.settingsToggle,
+          <String, dynamic>{'key': key, 'value': value})) {
+        settings.debugMode = value;
+        _notify();
+      }
+      return;
+    }
     switch (key) {
       case 'hud':
         settings.hud = value;

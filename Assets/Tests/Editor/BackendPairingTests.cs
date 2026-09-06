@@ -317,7 +317,7 @@ namespace QuestMmdPlayer.Tests
                 settings.base_url = "http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
                 settings.allow_insecure_http = true;
                 Assert.That(
-                    BackendPairingProtocol.TryWriteSettingsAtomically(path, settings, out _),
+                    BackendPairingProtocol.TryWriteSettingsAtomically(path, settings, out _, false),
                     Is.False,
                     "A paired payload cannot enable private-LAN HTTP without the local operator opt-in");
                 Assert.That(File.Exists(path), Is.False);

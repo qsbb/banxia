@@ -140,6 +140,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "world-ui.qa.capture");
+                QuestDebugMode.RethrowIfEnabled(exception, "world-ui.qa.capture");
                 WriteQaMarker("NULL:" + exception.GetType().Name + ":" + exception.Message);
                 return null;
             }
@@ -156,8 +158,9 @@ namespace QuestMmdPlayer
             {
                 File.WriteAllText(Path.Combine(Application.persistentDataPath, "banxia-world-ui-qa.txt"), content);
             }
-            catch
+            catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "world-ui.qa.marker");
                 // QA marker is best-effort only; never break the runtime UI.
             }
         }

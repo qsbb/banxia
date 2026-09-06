@@ -376,7 +376,7 @@ namespace QuestMmdPlayer
                         QueuePendingDanceRequest(acceptedGesture == "dance_next", executionContext);
                         return true;
                     }
-                    _ = PlayRecommendedDance(acceptedGesture == "dance_next", executionContext);
+                    PlayRecommendedDance(acceptedGesture == "dance_next", executionContext).Forget("conversation.dance-gesture");
                     return true;
                 }
                 else
@@ -467,7 +467,7 @@ namespace QuestMmdPlayer
             }
             if (normalized == "dance" || normalized == "dance_next")
             {
-                _ = PlayRecommendedDance(normalized == "dance_next");
+                PlayRecommendedDance(normalized == "dance_next").Forget("conversation.dance-action");
                 return;
             }
 
@@ -556,6 +556,8 @@ namespace QuestMmdPlayer
                 }
                 catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "conversation.dance-play");
+                    QuestDebugMode.RethrowIfEnabled(exception, "conversation.dance-play");
                     diagnostics?.Record("AvatarAction", "导入舞蹈播放失败：" + exception.Message);
                     Debug.LogWarning("[ConversationPresenter] Dance motion fallback failed: " + exception.Message, this);
                 }
@@ -669,7 +671,7 @@ namespace QuestMmdPlayer
                     ? "[ConversationPresenter] dance_model_bound_resume_next: starting imported dance."
                     : "[ConversationPresenter] dance_model_bound_resume: starting imported dance.",
                 this);
-            _ = PlayRecommendedDance(selectNext, context);
+            PlayRecommendedDance(selectNext, context).Forget("conversation.dance-resume");
         }
 
         private bool ShouldWaitForDanceBinding()

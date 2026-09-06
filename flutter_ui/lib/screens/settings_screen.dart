@@ -68,6 +68,11 @@ class SettingsScreen extends StatelessWidget {
                       style: TextStyle(
                           fontSize: 13, color: BanxiaTokens.labelSecondary)),
                 ),
+                _ToggleRow(
+                  label: '调试模式（不拦截报错）',
+                  value: app.settings.debugMode,
+                  onChanged: (bool v) => app.toggleSetting('debugMode', v),
+                ),
                 _NavRow(
                   label: '目标帧率',
                   value: '${app.settings.targetFps} fps',

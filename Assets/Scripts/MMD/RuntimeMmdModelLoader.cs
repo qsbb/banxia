@@ -213,6 +213,7 @@ namespace QuestMmdPlayer
         public async Task<bool> RestoreLastModelAsync()
         {
             var restored = false;
+            var operationalError = false;
             try
             {
                 var savedPath = SavedModelPath;
@@ -247,15 +248,23 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                operationalError = true;
                 // A bad imported package must not prevent the rest of the app
                 // from starting. Keep the preference for a later retry after the
                 // user repairs/replaces the package.
+                QuestDebugMode.Report(exception, "loader.startup-restore");
+                QuestDebugMode.RethrowIfEnabled(exception, "loader.startup-restore");
                 Debug.LogWarning("[ModelLoader] startup restore failed: " + exception.GetType().Name);
                 return false;
             }
             finally
             {
-                LastModelRestoreCompleted?.Invoke(restored);
+                // Keep cleanup/final state, but debug mode must not let the
+                // bootstrap fallback event mask the operational exception.
+                if (!operationalError || !QuestDebugMode.Enabled)
+                {
+                    LastModelRestoreCompleted?.Invoke(restored);
+                }
             }
         }
 
@@ -275,12 +284,16 @@ namespace QuestMmdPlayer
             {
                 files = Directory.GetFiles(rootFull, "*", SearchOption.AllDirectories);
             }
-            catch (IOException)
+            catch (IOException exception)
             {
+                QuestDebugMode.Report(exception, "loader.discover-models");
+                QuestDebugMode.RethrowIfEnabled(exception, "loader.discover-models");
                 return results;
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException exception)
             {
+                QuestDebugMode.Report(exception, "loader.discover-models");
+                QuestDebugMode.RethrowIfEnabled(exception, "loader.discover-models");
                 return results;
             }
 
@@ -487,12 +500,14 @@ namespace QuestMmdPlayer
                         string.Equals(extension, ".sph", StringComparison.OrdinalIgnoreCase);
                 });
             }
-            catch (IOException)
+            catch (IOException exception)
             {
+                QuestDebugMode.Report(exception, "loader.texture-metadata");
                 return 0;
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException exception)
             {
+                QuestDebugMode.Report(exception, "loader.texture-metadata");
                 return 0;
             }
         }
@@ -509,12 +524,14 @@ namespace QuestMmdPlayer
                     return true;
                 }
             }
-            catch (IOException)
+            catch (IOException exception)
             {
+                QuestDebugMode.Report(exception, "loader.metadata-cache-read");
                 return false;
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException exception)
             {
+                QuestDebugMode.Report(exception, "loader.metadata-read");
                 return false;
             }
         }
@@ -628,6 +645,7 @@ namespace QuestMmdPlayer
                 exception is ArgumentException ||
                 exception is EndOfStreamException)
             {
+                QuestDebugMode.Report(exception, "loader.model-name-metadata");
                 return false;
             }
         }
@@ -705,12 +723,14 @@ namespace QuestMmdPlayer
                         StringComparison.OrdinalIgnoreCase);
                 }
             }
-            catch (IOException)
+            catch (IOException exception)
             {
+                QuestDebugMode.Report(exception, "loader.metadata-cache-read");
                 return false;
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException exception)
             {
+                QuestDebugMode.Report(exception, "loader.metadata-read");
                 return false;
             }
         }
@@ -782,12 +802,16 @@ namespace QuestMmdPlayer
                 }
                 return true;
             }
-            catch (IOException)
+            catch (IOException exception)
             {
+                QuestDebugMode.Report(exception, "loader.delete-package");
+                QuestDebugMode.RethrowIfEnabled(exception, "loader.delete-package");
                 return false;
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException exception)
             {
+                QuestDebugMode.Report(exception, "loader.delete-package");
+                QuestDebugMode.RethrowIfEnabled(exception, "loader.delete-package");
                 return false;
             }
         }
@@ -1235,8 +1259,9 @@ namespace QuestMmdPlayer
             {
                 return false;
             }
-            catch (IOException)
+            catch (IOException exception)
             {
+                QuestDebugMode.Report(exception, "loader.metadata-cache-read");
                 return false;
             }
 
@@ -1523,6 +1548,8 @@ namespace QuestMmdPlayer
                 }
                 catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "loader.unload-subscriber");
+                    QuestDebugMode.RethrowIfEnabled(exception, "loader.unload-subscriber");
                     Debug.LogWarning(
                         "[RuntimeMmdModelLoader] unload subscriber failed: " + exception.Message,
                         this);
@@ -1545,6 +1572,8 @@ namespace QuestMmdPlayer
                 }
                 catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "loader.event-subscriber");
+                    QuestDebugMode.RethrowIfEnabled(exception, "loader.event-subscriber");
                     Debug.LogWarning(
                         "[RuntimeMmdModelLoader] event subscriber failed: " + exception.Message,
                         this);

@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -8,6 +8,8 @@ namespace QuestMmdPlayer.Tests
     public sealed class QuestQualitySettingsTests
     {
         private const string PhysicsPresetPreferenceKey = "quest.physics.preset";
+        private const string TargetFpsPreferenceKey = QuestQualitySettings.TargetFpsPreferenceKey;
+        private const string VolumePreferenceKey = QuestQualitySettings.VolumePreferenceKey;
 
         [TestCase(MmdPhysicsPreset.Performance, 60, 2, 0, false)]
         [TestCase(MmdPhysicsPreset.Balanced, 60, 2, 1, true)]
@@ -36,8 +38,8 @@ namespace QuestMmdPlayer.Tests
         [TestCase(90f, 90)]
         [TestCase(59.6f, 60)]
         [TestCase(240f, 120)]
-        [TestCase(0f, 72)]
-        public void RefreshRateIsNormalizedToAValidApplicationTarget(float refreshRate, int expected)
+        [TestCase(0f, 120)]
+        public void RefreshRateIsNormalizedToAValidDisplayRequest(float refreshRate, int expected)
         {
             Assert.That(QuestQualitySettings.NormalizeRefreshRate(refreshRate), Is.EqualTo(expected));
         }
@@ -55,6 +57,100 @@ namespace QuestMmdPlayer.Tests
             Assert.That(
                 QuestQualitySettings.IsRequestedRefreshRateActive(reported, requested),
                 Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void StartupTargetFrameRateDefaultsTo120AndHonorsOnlySupportedPreferences()
+        {
+            var hadPreference = PlayerPrefs.HasKey(TargetFpsPreferenceKey);
+            var previousPreference = PlayerPrefs.GetInt(TargetFpsPreferenceKey);
+            try
+            {
+                PlayerPrefs.DeleteKey(TargetFpsPreferenceKey);
+                Assert.That(QuestQualitySettings.ResolveStartupTargetFrameRate(), Is.EqualTo(120));
+
+                foreach (var fps in new[] { 30, 60, 120 })
+                {
+                    PlayerPrefs.SetInt(TargetFpsPreferenceKey, fps);
+                    Assert.That(QuestQualitySettings.ResolveStartupTargetFrameRate(), Is.EqualTo(fps));
+                }
+
+                PlayerPrefs.SetInt(TargetFpsPreferenceKey, 72);
+                Assert.That(QuestQualitySettings.ResolveStartupTargetFrameRate(), Is.EqualTo(120));
+            }
+            finally
+            {
+                if (hadPreference)
+                {
+                    PlayerPrefs.SetInt(TargetFpsPreferenceKey, previousPreference);
+                }
+                else
+                {
+                    PlayerPrefs.DeleteKey(TargetFpsPreferenceKey);
+                }
+                PlayerPrefs.Save();
+            }
+        }
+
+        [Test]
+        public void StartupVolumeIsClampedFromSharedPreference()
+        {
+            var hadPreference = PlayerPrefs.HasKey(VolumePreferenceKey);
+            var previousPreference = PlayerPrefs.GetFloat(VolumePreferenceKey);
+            try
+            {
+                PlayerPrefs.SetFloat(VolumePreferenceKey, 1.5f);
+                Assert.That(QuestQualitySettings.ResolveStartupVolume(), Is.EqualTo(1f));
+                PlayerPrefs.SetFloat(VolumePreferenceKey, -.5f);
+                Assert.That(QuestQualitySettings.ResolveStartupVolume(), Is.EqualTo(0f));
+            }
+            finally
+            {
+                if (hadPreference)
+                {
+                    PlayerPrefs.SetFloat(VolumePreferenceKey, previousPreference);
+                }
+                else
+                {
+                    PlayerPrefs.DeleteKey(VolumePreferenceKey);
+                }
+                PlayerPrefs.Save();
+            }
+        }
+
+        [Test]
+        public void SetUserTargetFrameRateAppliesAndPersistsTheSharedChoice()
+        {
+            var hadPreference = PlayerPrefs.HasKey(TargetFpsPreferenceKey);
+            var previousPreference = PlayerPrefs.GetInt(TargetFpsPreferenceKey);
+            var previousTarget = Application.targetFrameRate;
+            var owner = new GameObject("Target FPS Quality Settings");
+            try
+            {
+                var quality = owner.AddComponent<QuestQualitySettings>();
+                quality.SetUserTargetFrameRate(30);
+                Assert.That(quality.ApplicationTargetFrameRate, Is.EqualTo(30));
+                Assert.That(Application.targetFrameRate, Is.EqualTo(30));
+                Assert.That(PlayerPrefs.GetInt(TargetFpsPreferenceKey), Is.EqualTo(30));
+
+                quality.SetUserTargetFrameRate(72);
+                Assert.That(quality.ApplicationTargetFrameRate, Is.EqualTo(30));
+                Assert.That(PlayerPrefs.GetInt(TargetFpsPreferenceKey), Is.EqualTo(30));
+            }
+            finally
+            {
+                Object.DestroyImmediate(owner);
+                Application.targetFrameRate = previousTarget;
+                if (hadPreference)
+                {
+                    PlayerPrefs.SetInt(TargetFpsPreferenceKey, previousPreference);
+                }
+                else
+                {
+                    PlayerPrefs.DeleteKey(TargetFpsPreferenceKey);
+                }
+                PlayerPrefs.Save();
+            }
         }
 
         [Test]

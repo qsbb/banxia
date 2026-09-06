@@ -53,6 +53,8 @@ namespace QuestMmdPlayer
                 PlayerPrefs.GetInt(PrefsKey + "env", (int)VirtualEnvironment.NightStreet), 0, 3);
             framing = default(CoPresenceFraming);
             arPlaced = false;
+            QuestDebugMode.Log($"quest director init mode={mode} env={environment} " +
+                $"camera={(questCamera != null)} passthrough={(passthrough != null)} ar={ArCameraAvailable}");
             if (mode == CoPresenceMode.ArReality && !ArCameraAvailable)
             {
                 mode = CoPresenceMode.VirtualScene;
@@ -62,6 +64,8 @@ namespace QuestMmdPlayer
         public void SetAvatar(Transform avatar)
         {
             avatarRoot = avatar;
+            QuestDebugMode.Log($"quest set-avatar bound={(avatar != null)} mode={mode} " +
+                $"callActive={VideoCallActive}");
             if (VideoCallActive)
             {
                 UpdateFraming();
@@ -71,6 +75,8 @@ namespace QuestMmdPlayer
         public void ApplyOnEnterScene()
         {
             arPlaced = false;
+            QuestDebugMode.Log($"quest apply-on-enter-scene mode={mode} " +
+                $"avatar={(avatarRoot != null)} camera={(questCamera != null)}");
             if (mode == CoPresenceMode.ArReality)
             {
                 if (ArCameraAvailable)
@@ -79,6 +85,8 @@ namespace QuestMmdPlayer
                 }
                 else
                 {
+                    QuestDebugMode.LogGuard("quest.apply-on-enter-scene",
+                        "AR requested but passthrough is unavailable; using VirtualScene");
                     mode = CoPresenceMode.VirtualScene;
                     PersistMode();
                 }
@@ -111,17 +119,21 @@ namespace QuestMmdPlayer
         {
             if (!Enum.IsDefined(typeof(CoPresenceMode), next))
             {
+                QuestDebugMode.LogGuard("quest.switch-mode", $"undefined mode {next}");
                 return false;
             }
             if (next == mode)
             {
+                QuestDebugMode.Log($"quest switch-mode no-op (already {next})");
                 return true;
             }
             arPlaced = false;
             if (next == CoPresenceMode.ArReality && !ArCameraAvailable)
             {
+                QuestDebugMode.LogGuard("quest.switch-mode", "AR requested but passthrough unavailable");
                 return false;
             }
+            QuestDebugMode.Log($"quest switch-mode {mode} -> {next}");
 
             if (passthrough != null)
             {
@@ -162,6 +174,8 @@ namespace QuestMmdPlayer
             if (!IsFinite(top) || !IsFinite(bottom) || screenHeight <= 1f ||
                 top < 0f || bottom <= top || bottom > screenHeight)
             {
+                QuestDebugMode.LogGuard("quest.chrome-insets",
+                    $"invalid top={top} bottom={bottom} screenHeight={screenHeight}");
                 return;
             }
             chromeTopPx = top;
@@ -195,16 +209,23 @@ namespace QuestMmdPlayer
             framing = default(CoPresenceFraming);
             if (questCamera == null || avatarRoot == null)
             {
+                QuestDebugMode.LogGuard("quest.framing", $"camera={(questCamera != null)} avatar={(avatarRoot != null)}");
                 return;
             }
 
             var bounds = RenderBoundsUtility.Compute(avatarRoot.gameObject);
             if (bounds.size.sqrMagnitude <= 1e-8f)
             {
+                QuestDebugMode.LogGuard("quest.framing", "render bounds empty");
                 return;
             }
 
             var screenHeight = questCamera.pixelHeight > 1 ? questCamera.pixelHeight : Screen.height;
+            if (screenHeight <= 1)
+            {
+                QuestDebugMode.LogGuard("quest.framing", $"screenHeight={screenHeight}");
+                return;
+            }
             var top = IsFinite(chromeTopPx) ? chromeTopPx : screenHeight * DefaultChromeTopRatio;
             var bottom = IsFinite(chromeBottomPx) ? chromeBottomPx : screenHeight * DefaultChromeBottomRatio;
             if (bottom <= top)

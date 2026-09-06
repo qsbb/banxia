@@ -42,7 +42,6 @@ namespace QuestMmdPlayer
         private const string CameraPrefKey = PrefsPrefix + "camera";
         private const string HudPrefKey = PrefsPrefix + "hud";
         private const string FramingGridPrefKey = PrefsPrefix + "framing-grid";
-        private const string FpsPrefKey = PrefsPrefix + "fps";
 
         private const float PollIntervalSeconds = 0.25f;
         private const float PerformanceIntervalSeconds = 2f;
@@ -259,7 +258,7 @@ namespace QuestMmdPlayer
             {
                 return FlutterCommandResult.Failure("未找到指定模型");
             }
-            _ = LoadModelAsync(path);
+            LoadModelAsync(path).Forget("model.load");
             return FlutterCommandResult.Success();
         }
 
@@ -284,6 +283,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "model.load");
+                QuestDebugMode.RethrowIfEnabled(exception, "model.load");
                 PublishToast("模型加载失败：" + exception.Message);
                 return false;
             }
@@ -334,7 +335,7 @@ namespace QuestMmdPlayer
             {
                 return FlutterCommandResult.Failure("动作库不可用");
             }
-            _ = VmdActions.RefreshAsync();
+            VmdActions.RefreshAsync().Forget("action.refresh");
             return FlutterCommandResult.Success();
         }
 
@@ -349,7 +350,7 @@ namespace QuestMmdPlayer
             {
                 return FlutterCommandResult.Failure("缺少动作 id");
             }
-            _ = VmdActions.PlayAsync(payload.id);
+            VmdActions.PlayAsync(payload.id).Forget("action.play");
             return FlutterCommandResult.Success();
         }
 
@@ -374,7 +375,7 @@ namespace QuestMmdPlayer
             {
                 return FlutterCommandResult.Failure("缺少动作 id");
             }
-            _ = VmdActions.DeleteActionAsync(payload.id);
+            VmdActions.DeleteActionAsync(payload.id).Forget("action.delete");
             return FlutterCommandResult.Success();
         }
 
@@ -474,7 +475,7 @@ namespace QuestMmdPlayer
             {
                 return FlutterCommandResult.Failure("请先在设置中开启摄像头单帧");
             }
-            _ = CaptureCameraFrameAndSendAsync(input);
+            CaptureCameraFrameAndSendAsync(input).Forget("camera.frame");
             return FlutterCommandResult.Success();
 #endif
         }
@@ -503,6 +504,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "camera.frame");
+                QuestDebugMode.RethrowIfEnabled(exception, "camera.frame");
                 PublishToast("摄像头单帧失败：" + exception.Message);
             }
         }
@@ -708,6 +711,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "pairing.unbind");
+                QuestDebugMode.RethrowIfEnabled(exception, "pairing.unbind");
                 PublishToast("解除绑定失败：" + exception.Message);
                 return FlutterCommandResult.Failure("解除绑定失败");
             }
@@ -761,9 +766,17 @@ namespace QuestMmdPlayer
             {
                 return FlutterCommandResult.Failure("目标帧率仅支持 30/60/120");
             }
-            Application.targetFrameRate = fps;
-            PlayerPrefs.SetInt(FpsPrefKey, fps);
-            PlayerPrefs.Save();
+            if (Quality != null)
+            {
+                Quality.SetUserTargetFrameRate(fps);
+            }
+            else
+            {
+                Application.targetFrameRate = fps;
+                PlayerPrefs.SetInt(QuestQualitySettings.TargetFpsPreferenceKey, fps);
+                PlayerPrefs.Save();
+            }
+            PublishQualityChanged();
             return FlutterCommandResult.Success();
         }
 
@@ -776,6 +789,9 @@ namespace QuestMmdPlayer
                 return FlutterCommandResult.Failure("音量必须是 0 到 1 之间的数值");
             }
             AudioListener.volume = payload.v;
+            PlayerPrefs.SetFloat(QuestQualitySettings.VolumePreferenceKey, payload.v);
+            PlayerPrefs.Save();
+            PublishQualityChanged();
             return FlutterCommandResult.Success();
         }
 
@@ -827,6 +843,12 @@ namespace QuestMmdPlayer
                     PlayerPrefs.SetInt(CameraPrefKey, value ? 1 : 0);
                     PlayerPrefs.Save();
                     return FlutterCommandResult.Success();
+                case "debugMode":
+                    // 调试模式是双端共享能力：开关持久化在 QuestDebugMode，
+                    // 由 Unity/Flutter 两端设置页共同控制。
+                    QuestDebugMode.SetEnabled(value);
+                    PublishQualityChanged();
+                    return FlutterCommandResult.Success();
                 default:
                     return FlutterCommandResult.Failure("未知设置项：" + payload.key);
             }
@@ -850,7 +872,7 @@ namespace QuestMmdPlayer
                 {
                     return FlutterCommandResult.Failure("未找到指定模型");
                 }
-                _ = LoadModelThenEnterSceneAsync(path);
+                LoadModelThenEnterSceneAsync(path).Forget("copresence.enter-scene");
                 return FlutterCommandResult.Success();
             }
             CoPresence.ApplyOnEnterScene();
@@ -1022,7 +1044,7 @@ namespace QuestMmdPlayer
             {
                 return FlutterCommandResult.Failure("更新检查不可用");
             }
-            _ = CheckForUpdateAsync();
+            CheckForUpdateAsync().Forget("update.check");
             return FlutterCommandResult.Success();
         }
 
@@ -1049,6 +1071,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "update.check");
+                QuestDebugMode.RethrowIfEnabled(exception, "update.check");
                 PublishToast("检查更新失败：" + exception.Message);
                 PublishUpdateStatus("idle", 0f);
             }
@@ -1064,7 +1088,7 @@ namespace QuestMmdPlayer
             {
                 return FlutterCommandResult.Failure("请先检查更新");
             }
-            _ = InstallUpdateAsync(lastUpdateInfo);
+            InstallUpdateAsync(lastUpdateInfo).Forget("update.install");
             return FlutterCommandResult.Success();
         }
 
@@ -1089,6 +1113,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "update.install");
+                QuestDebugMode.RethrowIfEnabled(exception, "update.install");
                 PublishToast("安装更新失败：" + exception.Message);
                 PublishUpdateStatus("idle", 0f);
             }
@@ -1140,7 +1166,7 @@ namespace QuestMmdPlayer
                     {
                         return FlutterCommandResult.Failure("未发现可用模型");
                     }
-                    _ = LoadFirstModelForQaAsync();
+                    LoadFirstModelForQaAsync().Forget("qa.load-first-model");
                     return FlutterCommandResult.Success();
                 case FlutterQaCommands.OpenImport:
                     return HandleModelImport();
@@ -1168,7 +1194,7 @@ namespace QuestMmdPlayer
                     {
                         return FlutterCommandResult.Failure("动作库不可用");
                     }
-                    _ = VmdActions.PlayRecommendedDanceAsync();
+                    VmdActions.PlayRecommendedDanceAsync().Forget("action.play-recommended");
                     return FlutterCommandResult.Success();
                 case FlutterQaCommands.ToggleMenu:
                     return FlutterCommandResult.Failure("QA 菜单命令需通过 Quest 硬件菜单入口触发");
@@ -1203,6 +1229,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "qa.load-first-model");
+                QuestDebugMode.RethrowIfEnabled(exception, "qa.load-first-model");
                 PublishToast("QA 模型加载失败：" + exception.Message);
             }
         }
@@ -1441,7 +1469,10 @@ namespace QuestMmdPlayer
             {
                 renderPreset = quality == null ? string.Empty : ToQualityPresetWire(quality.CurrentPreset),
                 physicsPreset = quality == null ? string.Empty : ToPhysicsPresetWire(quality.CurrentPhysicsPreset),
-                status = quality == null ? string.Empty : quality.Status
+                status = quality == null ? string.Empty : quality.Status,
+                targetFps = quality == null ? QuestQualitySettings.ResolveStartupTargetFrameRate() : quality.ApplicationTargetFrameRate,
+                volume = QuestQualitySettings.ResolveStartupVolume(),
+                debugMode = QuestDebugMode.Enabled
             });
         }
 

@@ -99,6 +99,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "camera.capture");
+                QuestDebugMode.RethrowIfEnabled(exception, "camera.capture");
                 return (null, "拍摄失败（" + exception.Message + "）");
             }
             finally

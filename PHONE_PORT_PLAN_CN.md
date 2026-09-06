@@ -48,7 +48,7 @@ VR/MR 只是 **呈现层**（双眼渲染、透视背景）与 **输入层**（�
 | UI 菜单 | 世界空间射线菜单 | 新增屏幕空间简易诊断面板（复用 DiagnosticReporter 数据）|
 | 麦克风权限 | `Permission.RequestUserPermission(RECORD_AUDIO)` Android 通用 | 原样可用 |
 | 音频输出 | Quest 走系统音频；PLAY_AUDIO AppOps 是 HorizonOS 特异行为 | 手机无此问题 |
-| 刷新率/画质 | 72/90Hz 档位、Quest3 专属 | 手机 60Hz；`QuestQualitySettings` 用其 Inspector 配置即可（已参数化）|
+| 刷新率/画质 | 应用帧率与 XR 显示刷新分别管理 | 双端默认目标 120 FPS，保留用户保存的 30/60/120；Quest 独立请求 120Hz，手机不轮询 XR；物理档不随显示帧率改变 |
 | 后台行为 | 摘头显 = 会话挂起（proximity/presence） | 手机用屏幕常亮 + `Screen.sleepTimeout = Never` |
 
 ### 1.4 关键利好
@@ -126,7 +126,7 @@ VR/MR 只是 **呈现层**（双眼渲染、透视背景）与 **输入层**（�
 
 #### (6) 质量档
 - `QuestQualitySettings` 的物理档参数已是 Inspector 可调；手机版预设「balanced 60/2/1」即可（Quest3 能跑的密度，骁龙 8 系手机同级）
-- 若实测手机发热/掉帧：下一步把 72Hz 重测（4b）等 Quest 优化结论同步过来，手机与 Quest 共享同一套物理优化代码——这正是先修物理再移植的意义
+- 若实测手机发热/掉帧：下一步独立调整渲染/物理档位并记录 120 FPS 目标下的实际帧时序；手机与 Quest 共享同一套物理优化代码——这正是先修物理再移植的意义
 
 ### 3.3 测试链路（与现有流程对齐）
 
@@ -323,6 +323,14 @@ banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落
       未完成，Dart isolate 尚未运行、Flutter UI 尚未实际渲染
 - [ ] **旧壳下线**：UI Toolkit `BanxiaUiShell` / IMGUI `CompanionWorldMenu` /
       世界面板 `BanxiaQuestWorldUiHost` 仍为在线 UI，尚未被 Flutter 替换
+
+### 共享 Debug 模式与帧率设置
+
+- 手机 Flutter 设置页、Quest 共用设置页及 Quest 运行诊断菜单使用同一 `QuestDebugMode` 开关，默认关闭，重启后保留。
+- Debug 开启时，模型加载/删除、导入、动作、配对配置、更新、摄像头与桥接操作异常记录完整堆栈并上抛，停止业务兜底。异步入口经 `TaskFaultLog.Forget` 回到 Unity 上下文暴露异常。
+- 主动取消和输入校验仍按现有协议处理；不适用的硬件能力、非关键缓存及清理操作保留恢复逻辑，并在 debug 下记录完整异常。此模式不改变第三方包或引擎内部的异常策略。
+- 双端应用目标默认 120 FPS，保存的 30/60/120 选择优先；音量和 debug 状态通过 `quality.changed` 回填 Flutter。Quest 独立请求 120Hz 显示刷新，手机不启动 XR 轮询，物理档保持独立。
+- 验证入口：`tools/validate-debug.ps1 -Phase Flutter|Tests|Phone|Quest`。模拟器用于手机交互与状态验证，不能证明 Quest MR/手柄体验或实际持续 120 FPS。
 
 ## 4. 风险与对策
 

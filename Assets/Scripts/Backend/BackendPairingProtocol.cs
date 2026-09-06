@@ -167,8 +167,9 @@ namespace QuestMmdPlayer
             {
                 payload = JsonUtility.FromJson<PairingQrPayload>(json);
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "pairing.parse-qr");
                 reason = "QR payload is not valid JSON";
                 return false;
             }
@@ -259,6 +260,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "pairing.migrate-configuration");
+                QuestDebugMode.RethrowIfEnabled(exception, "pairing.migrate-configuration");
                 reason = "Legacy configuration could not be migrated: " + exception.GetType().Name;
                 return false;
             }
@@ -364,10 +367,13 @@ namespace QuestMmdPlayer
                 {
                     if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
                 }
-                catch (Exception)
+                catch (Exception cleanupException)
                 {
                     // Preserve the original failure and leave cleanup for the next attempt.
+                    QuestDebugMode.Report(cleanupException, "pairing.configuration-cleanup");
                 }
+                QuestDebugMode.Report(exception, "pairing.save-configuration");
+                QuestDebugMode.RethrowIfEnabled(exception, "pairing.save-configuration");
                 return false;
             }
         }

@@ -29,9 +29,12 @@ namespace QuestMmdPlayer
     {
         private const string PresetKey = "quest.quality.preset";
         private const string PhysicsPresetKey = "quest.physics.preset";
+        public const string TargetFpsPreferenceKey = "banxia.phone.fps";
+        public const string VolumePreferenceKey = "banxia.phone.volume";
         private const float MinimumRenderScale = .7f;
         private const float MaximumRenderScale = 1.2f;
-        private const float PreferredRefreshRate = 72f;
+        private const float PreferredRefreshRate = 120f;
+        private const int DefaultTargetFrameRate = 120;
 
         [SerializeField] private QuestQualityPreset defaultPreset = QuestQualityPreset.Balanced;
         [SerializeField] private MmdPhysicsPreset defaultPhysicsPreset = MmdPhysicsPreset.Balanced;
@@ -52,6 +55,7 @@ namespace QuestMmdPlayer
         private AvatarMmdPhysicsAdapter idlePhysicsHandPhysics;
         private bool idlePhysicsSourcesBound;
         private Coroutine refreshRateRequest;
+        private int userTargetFrameRate;
 
         public event Action<QuestQualityPreset> QualityChanged;
         public QuestQualityPreset CurrentPreset { get; private set; }
@@ -70,10 +74,11 @@ namespace QuestMmdPlayer
 
         private void Awake()
         {
-            // XR presents on its own cadence. Unity's quality-level VSync can
-            // otherwise select a half-rate cadence on Quest even when the
-            // runtime is running at 72Hz.
-            ApplyFramePacing(PreferredRefreshRate);
+            // Keep the application cap independent from the XR display request.
+            // Both targets default to 120; an explicit prior 30/60/120 choice wins.
+            userTargetFrameRate = ResolveStartupTargetFrameRate();
+            ApplyFramePacing();
+            AudioListener.volume = ResolveStartupVolume();
             var saved = PlayerPrefs.GetInt(PresetKey, (int)defaultPreset);
             var savedPhysics = PlayerPrefs.GetInt(PhysicsPresetKey, (int)defaultPhysicsPreset);
             ApplyRenderPreset(ParsePreset(saved), false);
@@ -82,7 +87,11 @@ namespace QuestMmdPlayer
 
         private void OnEnable()
         {
-            ApplyFramePacing(PreferredRefreshRate);
+            if (userTargetFrameRate == 0)
+            {
+                userTargetFrameRate = ResolveStartupTargetFrameRate();
+            }
+            ApplyFramePacing();
             RestartRefreshRateRequest();
         }
 
@@ -117,7 +126,7 @@ namespace QuestMmdPlayer
         {
             if (hasFocus)
             {
-                ApplyFramePacing(PreferredRefreshRate);
+                ApplyFramePacing();
                 RestartRefreshRateRequest();
             }
         }
@@ -126,7 +135,7 @@ namespace QuestMmdPlayer
         {
             if (!pauseStatus)
             {
-                ApplyFramePacing(PreferredRefreshRate);
+                ApplyFramePacing();
                 RestartRefreshRateRequest();
                 // 摘下再佩戴恢复后，立即按当前状态恢复待机档评估，
                 // 避免恢复后直到下一次动作事件前一直跑满档物理。
@@ -136,7 +145,12 @@ namespace QuestMmdPlayer
 
         private void RestartRefreshRateRequest()
         {
-            if (!isActiveAndEnabled)
+#if BANXIA_PHONE
+            // 手机没有 XR 显示器；只保留 Application.targetFrameRate，避免
+            // Quest 的显示刷新请求协程覆盖手机策略或浪费轮询。
+            return;
+#else
+            if (!Application.isPlaying || !isActiveAndEnabled)
             {
                 return;
             }
@@ -145,6 +159,7 @@ namespace QuestMmdPlayer
                 StopCoroutine(refreshRateRequest);
             }
             refreshRateRequest = StartCoroutine(RequestPreferredRefreshRate());
+#endif
         }
 
         public void ApplyPreset(QuestQualityPreset preset)
@@ -155,6 +170,38 @@ namespace QuestMmdPlayer
         public void ApplyPhysicsPreset(MmdPhysicsPreset preset)
         {
             ApplyPhysicsPreset(preset, true);
+        }
+
+        /// <summary>设置并持久化应用目标帧率；XR 显示刷新请求由 Quest 独立处理。</summary>
+        public void SetUserTargetFrameRate(int fps)
+        {
+            if (!IsSupportedTargetFrameRate(fps))
+            {
+                return;
+            }
+            userTargetFrameRate = fps;
+            PlayerPrefs.SetInt(TargetFpsPreferenceKey, fps);
+            PlayerPrefs.Save();
+            ApplyFramePacing();
+        }
+
+        public static bool IsSupportedTargetFrameRate(int fps)
+        {
+            return fps == 30 || fps == 60 || fps == 120;
+        }
+
+        public static int ResolveStartupTargetFrameRate()
+        {
+            var saved = PlayerPrefs.GetInt(TargetFpsPreferenceKey, DefaultTargetFrameRate);
+            return IsSupportedTargetFrameRate(saved) ? saved : DefaultTargetFrameRate;
+        }
+
+        public static float ResolveStartupVolume()
+        {
+            var saved = PlayerPrefs.GetFloat(VolumePreferenceKey, 1f);
+            return float.IsNaN(saved) || float.IsInfinity(saved)
+                ? 1f
+                : Mathf.Clamp01(saved);
         }
 
         internal void ApplyPhysicsPresetForQa(MmdPhysicsPreset preset)
@@ -292,7 +339,7 @@ namespace QuestMmdPlayer
                 default:
                     // Keep the balanced profile at a bounded 60 Hz physics
                     // cadence. XR presentation remains explicitly requested
-                    // at 72 Hz, so Bullet does not consume the render budget
+                    // at 120 Hz, so Bullet does not consume the render budget
                     // just to mirror the display refresh rate.
                     frequencyHz = 60;
                     maximumSubsteps = 2;
@@ -539,7 +586,7 @@ namespace QuestMmdPlayer
             var initialDeadline = Time.unscaledTime + 10f;
             var nextRequestAt = 0f;
             var nextPollAt = Time.unscaledTime;
-            ApplyFramePacing(PreferredRefreshRate);
+            ApplyFramePacing();
             while (true)
             {
                 if (Time.unscaledTime < nextPollAt)
@@ -577,7 +624,7 @@ namespace QuestMmdPlayer
                         }
                     }
                     // TryGetDisplayRefreshRate can keep returning the old 60 Hz
-                    // value for several frames after a successful 72 Hz request.
+                    // value for several frames after a successful 120 Hz request.
                     // Never feed that transient value back into targetFrameRate.
                     RefreshRateStatus = requestAccepted
                         ? "已请求 " + PreferredRefreshRate.ToString("F0") + "Hz，等待运行时切换" +
@@ -612,12 +659,15 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void ApplyFramePacing(float refreshRate)
+        private void ApplyFramePacing()
         {
-            var target = NormalizeRefreshRate(refreshRate);
+            // Application cap and XR display cadence are separate contracts. The
+            // former follows the saved 30/60/120 user choice; the latter is only
+            // requested by RequestPreferredRefreshRate on Quest builds.
             QualitySettings.vSyncCount = 0;
-            Application.targetFrameRate = target;
-            ApplicationTargetFrameRate = target;
+            Application.targetFrameRate = userTargetFrameRate;
+            ApplicationTargetFrameRate = userTargetFrameRate;
+            QuestDebugMode.Log("frame-pacing targetFps=" + userTargetFrameRate);
         }
 
         public static int NormalizeRefreshRate(float refreshRate)

@@ -72,6 +72,10 @@ namespace QuestMmdPlayer
             performance = performanceMonitor;
             diagnostics = diagnosticsReporter;
             debugLog = runtimeDebugLog;
+            if (owner?.Quality == null)
+            {
+                AudioListener.volume = QuestQualitySettings.ResolveStartupVolume();
+            }
             if (fileImport != null)
             {
                 fileImport.StatusChanged -= HandleImportStatusChanged;
@@ -135,7 +139,7 @@ namespace QuestMmdPlayer
             }
             enteringScene = true;
             SetTransient("正在加载模型…", 8f);
-            _ = EnterSceneAsync(target);
+            EnterSceneAsync(target).Forget("home.enter-scene");
         }
 
         private async System.Threading.Tasks.Task EnterSceneAsync(RuntimeMmdModelInfo target)
@@ -166,6 +170,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "home.enter-scene");
+                QuestDebugMode.RethrowIfEnabled(exception, "home.enter-scene");
                 SetTransient("加载异常: " + exception.Message, 5f);
                 Debug.LogWarning("[PhoneHomeMenu] enter scene failed: " + exception.Message, this);
             }
@@ -363,16 +369,34 @@ namespace QuestMmdPlayer
             }
             y += 60f;
 
-            int fps = PlayerPrefs.GetInt(PrefsPrefix + "fps", 60);
+            bool debugOn = QuestDebugMode.Enabled;
+            bool newDebug = GUI.Toggle(new Rect(x, y, width, 48f), debugOn, "  调试模式", labelStyle);
+            if (newDebug != debugOn)
+            {
+                QuestDebugMode.SetEnabled(newDebug);
+            }
+            y += 60f;
+
+            int fps = owner?.Quality == null
+                ? QuestQualitySettings.ResolveStartupTargetFrameRate()
+                : owner.Quality.ApplicationTargetFrameRate;
             GUI.Label(new Rect(x, y, width, 34f), "目标帧率: " + fps, labelStyle);
-            int newFps = GUI.SelectionGrid(new Rect(x, y + 38f, width, 56f),
-                fps >= 60 ? 1 : 0, new[] { "30", "60" }, 2, buttonStyle);
-            newFps = newFps == 1 ? 60 : 30;
+            int selectedFpsIndex = fps == 30 ? 0 : fps == 120 ? 2 : 1;
+            int selectedFps = GUI.SelectionGrid(new Rect(x, y + 38f, width, 56f),
+                selectedFpsIndex, new[] { "30", "60", "120" }, 3, buttonStyle);
+            int newFps = selectedFps == 0 ? 30 : selectedFps == 2 ? 120 : 60;
             if (newFps != fps)
             {
-                PlayerPrefs.SetInt(PrefsPrefix + "fps", newFps);
-                PlayerPrefs.Save();
-                Application.targetFrameRate = newFps;
+                if (owner?.Quality != null)
+                {
+                    owner.Quality.SetUserTargetFrameRate(newFps);
+                }
+                else
+                {
+                    PlayerPrefs.SetInt(QuestQualitySettings.TargetFpsPreferenceKey, newFps);
+                    PlayerPrefs.Save();
+                    Application.targetFrameRate = newFps;
+                }
             }
             y += 110f;
 
@@ -382,6 +406,8 @@ namespace QuestMmdPlayer
             if (Mathf.Abs(newVolume - volume) > 0.001f)
             {
                 AudioListener.volume = newVolume;
+                PlayerPrefs.SetFloat(QuestQualitySettings.VolumePreferenceKey, newVolume);
+                PlayerPrefs.Save();
             }
             y += 96f;
 

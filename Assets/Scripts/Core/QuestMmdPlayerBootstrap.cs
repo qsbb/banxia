@@ -78,10 +78,14 @@ namespace QuestMmdPlayer
         private void Awake()
         {
             ApplyAndroidTaskLabel();
+            if (QuestDebugMode.Enabled)
+            {
+                Debug.Log("[DebugMode] enabled at startup (banxia.phone.debug-mode=1)");
+            }
 #if BANXIA_PHONE
-            // Phone form: no XR session; keep the screen awake and cap at 60fps.
+            // Phone form: no XR session; keep the screen awake. The shared
+            // QuestQualitySettings owns the persisted 120/60/30 application cap.
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
-            Application.targetFrameRate = 60;
 #endif
             DebugLog = gameObject.GetComponent<RuntimeDebugLog>() ?? gameObject.AddComponent<RuntimeDebugLog>();
             Performance = gameObject.GetComponent<RuntimePerformanceMonitor>() ??
@@ -152,7 +156,7 @@ namespace QuestMmdPlayer
             }
 #endif
             VmdActions = gameObject.GetComponent<VmdActionLibrary>() ?? gameObject.AddComponent<VmdActionLibrary>();
-            _ = VmdActions.RefreshAsync();
+            VmdActions.RefreshAsync().Forget("action.refresh");
             FileImport = gameObject.GetComponent<QuestFileImportService>() ?? gameObject.AddComponent<QuestFileImportService>();
             FileImport.Initialize(runtimeMmdLoader, VmdActions);
 

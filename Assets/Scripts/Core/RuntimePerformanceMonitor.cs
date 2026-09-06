@@ -1290,8 +1290,9 @@ namespace QuestMmdPlayer
                         }
                     }
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "diagnostics.android-pss");
                     pssAvailable = false;
                     pssBytes = 0L;
                 }
@@ -1307,8 +1308,9 @@ namespace QuestMmdPlayer
                         mappedThermalState = MapAndroidThermalStatus(status);
                     }
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "diagnostics.android-thermal");
                     thermalAvailable = false;
                     mappedThermalState = DeviceThermalState.Unavailable;
                 }

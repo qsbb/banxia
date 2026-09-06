@@ -567,6 +567,8 @@ namespace QuestMmdPlayer
                     exception is InvalidDataException ||
                     exception is OverflowException)
                 {
+                    QuestDebugMode.Report(exception, "vmd.refresh");
+                    QuestDebugMode.RethrowIfEnabled(exception, "vmd.refresh");
                     LastCatalogRefreshMilliseconds = ElapsedMilliseconds(refreshStartedAt);
                     ReportFailure("Unable to refresh VMD action directory: " + exception.Message);
                     diagnostics?.RecordStage(
@@ -1240,6 +1242,8 @@ namespace QuestMmdPlayer
                 exception is ArgumentException ||
                 exception is OverflowException)
             {
+                QuestDebugMode.Report(exception, "vmd.play");
+                QuestDebugMode.RethrowIfEnabled(exception, "vmd.play");
                 ReportFailure("VMD 动作加载失败：" + exception.Message);
                 PlaybackPhase = VmdPlaybackPhase.Failed;
                 LastPrepareMilliseconds = Mathf.Max(
@@ -1517,6 +1521,8 @@ namespace QuestMmdPlayer
                 exception is UnauthorizedAccessException ||
                 exception is ArgumentException)
             {
+                QuestDebugMode.Report(exception, "vmd.delete");
+                QuestDebugMode.RethrowIfEnabled(exception, "vmd.delete");
                 ReportFailure("VMD action delete failed: " + exception.Message);
                 return false;
             }
@@ -1652,6 +1658,7 @@ namespace QuestMmdPlayer
                 exception is ArgumentException ||
                 exception is OverflowException)
             {
+                QuestDebugMode.Report(exception, "vmd.cache-write");
                 diagnostics?.RecordStage(
                     "avatar_action",
                     "limited",
@@ -1666,7 +1673,7 @@ namespace QuestMmdPlayer
                 return;
             }
             pendingPersistentCacheWrites.Add(task);
-            _ = ObservePersistentCacheWriteAsync(task);
+            ObservePersistentCacheWriteAsync(task).Forget("vmd.cache-observe");
         }
 
         private async Task ObservePersistentCacheWriteAsync(Task task)
@@ -1675,8 +1682,9 @@ namespace QuestMmdPlayer
             {
                 await task;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "vmd.cache-write");
                 diagnostics?.RecordStage(
                     "avatar_action",
                     "limited",
@@ -1697,8 +1705,9 @@ namespace QuestMmdPlayer
                 {
                     await Task.WhenAll(snapshot);
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "vmd.cache-wait");
                     // Observation above records the bounded diagnostic. A cache
                     // write can never turn a successfully prepared action into
                     // a failed QA or conversation turn.

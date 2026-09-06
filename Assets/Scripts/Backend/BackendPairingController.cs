@@ -229,11 +229,20 @@ namespace QuestMmdPlayer
             {
                 response = JsonUtility.FromJson<PairingExchangeEnvelope>(request.downloadHandler.text);
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "pairing.response-parse");
+                if (QuestDebugMode.Enabled)
+                {
+                    pairingRoutine = null;
+                }
+                QuestDebugMode.RethrowIfEnabled(exception, "pairing.response-parse");
                 response = null;
             }
-            request.Dispose();
+            finally
+            {
+                request.Dispose();
+            }
 
             var settings = response == null || response.data == null ? null : response.data.configuration;
             if (settings != null &&

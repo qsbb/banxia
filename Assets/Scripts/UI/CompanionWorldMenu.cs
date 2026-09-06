@@ -26,6 +26,7 @@ namespace QuestMmdPlayer
         private Text statusText;
         private Text debugLogText;
         private Text debugScrollStatusText;
+        private Text debugModeToggleText;
         private bool debugMode;
         private bool debugAutoScroll = true;
         private int debugTimelineOffset;
@@ -334,6 +335,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "menu.qa.command");
+                QuestDebugMode.RethrowIfEnabled(exception, "menu.qa.command");
                 Debug.LogWarning($"[CompanionMenu] Android QA command unavailable: {exception.Message}", this);
             }
 
@@ -518,10 +521,11 @@ namespace QuestMmdPlayer
                 yield break;
             }
 
-            RunQaVmdScenarioAsync(requestedModelIndex, requestedActionIndex, exitWhenComplete);
+            RunQaVmdScenarioAsync(requestedModelIndex, requestedActionIndex, exitWhenComplete)
+                .Forget("menu.qa.vmd");
         }
 
-        private async void RunQaVmdScenarioAsync(
+        private async System.Threading.Tasks.Task RunQaVmdScenarioAsync(
             int requestedModelIndex,
             int requestedActionIndex,
             bool exitWhenComplete)
@@ -599,6 +603,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "menu.qa.vmd");
+                QuestDebugMode.RethrowIfEnabled(exception, "menu.qa.vmd");
                 Debug.LogWarning(
                     "[BanxiaQA] vmd_scenario status=failed error=" + exception.GetType().Name,
                     this);
@@ -616,6 +622,7 @@ namespace QuestMmdPlayer
                     }
                     catch (Exception exception)
                     {
+                        QuestDebugMode.Report(exception, "menu.qa.vmd.restore");
                         Debug.LogWarning(
                             "[BanxiaQA] vmd_scenario original_model_restored=false error=" +
                             exception.GetType().Name,
@@ -763,10 +770,10 @@ namespace QuestMmdPlayer
                 sampleSeconds,
                 physicsProfile,
                 handContact,
-                outline);
+                outline).Forget("menu.qa.performance");
         }
 
-        private async void RunQaPerformanceScenarioAsync(
+        private async System.Threading.Tasks.Task RunQaPerformanceScenarioAsync(
             int requestedModelIndex,
             int warmupSeconds,
             int sampleSeconds,
@@ -923,6 +930,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "menu.qa.performance");
+                QuestDebugMode.RethrowIfEnabled(exception, "menu.qa.performance");
                 Debug.LogWarning(
                     "[BanxiaQA] performance_scenario status=failed error=" +
                     exception.GetType().Name,
@@ -946,6 +955,7 @@ namespace QuestMmdPlayer
                     }
                     catch (Exception exception)
                     {
+                        QuestDebugMode.Report(exception, "menu.qa.performance.restore");
                         Debug.LogWarning(
                             "[BanxiaQA] performance_scenario original_model_restored=false error=" +
                             exception.GetType().Name,
@@ -1351,14 +1361,19 @@ namespace QuestMmdPlayer
             CreateImage("Accent", debugLayer.transform, new Vector2(0f, 335f), new Vector2(440f, 10f), new Color(.25f, .86f, .66f, 1f));
             CreateText("运行诊断", debugLayer.transform, new Vector2(0f, 292f), new Vector2(400f, 44f), 24, FontStyle.Bold, Color.white);
             debugScrollStatusText = CreateText("", debugLayer.transform, new Vector2(0f, 254f), new Vector2(400f, 26f), 12, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
-            debugLogText = CreateText("", debugLayer.transform, new Vector2(0f, 18f), new Vector2(410f, 420f), 11, FontStyle.Normal, new Color(.66f, .95f, .78f, 1f));
+            debugLogText = CreateText("", debugLayer.transform, new Vector2(0f, 38f), new Vector2(410f, 380f), 11, FontStyle.Normal, new Color(.66f, .95f, .78f, 1f));
             debugLogText.alignment = TextAnchor.UpperLeft;
-            CreateButton("上翻", -132f, -232f, 120f, 42f, () => ScrollDebugTimeline(DebugTimelinePageSize), debugLayer.transform);
-            CreateButton("下翻", 0f, -232f, 120f, 42f, () => ScrollDebugTimeline(-DebugTimelinePageSize), debugLayer.transform);
-            CreateButton("自动滚动", 132f, -232f, 120f, 42f, ToggleDebugAutoScroll, debugLayer.transform);
-            CreateButton("清空记录", -132f, -282f, 120f, 48f, ClearDebugLog, debugLayer.transform);
-            CreateButton("收起", 0f, -282f, 120f, 48f, ToggleDebugMode, debugLayer.transform);
-            CreateButton("关闭菜单", 132f, -282f, 120f, 48f, Hide, debugLayer.transform);
+            CreateButton("上翻", -132f, -186f, 120f, 42f, () => ScrollDebugTimeline(DebugTimelinePageSize), debugLayer.transform);
+            CreateButton("下翻", 0f, -186f, 120f, 42f, () => ScrollDebugTimeline(-DebugTimelinePageSize), debugLayer.transform);
+            CreateButton("自动滚动", 132f, -186f, 120f, 42f, ToggleDebugAutoScroll, debugLayer.transform);
+            CreateButton("清空记录", -132f, -242f, 120f, 48f, ClearDebugLog, debugLayer.transform);
+            CreateButton("收起", 0f, -242f, 120f, 48f, ToggleDebugMode, debugLayer.transform);
+            CreateButton("关闭菜单", 132f, -242f, 120f, 48f, Hide, debugLayer.transform);
+            // 与手机端（Flutter/UiShell 设置页）同步的异常排错开关（双端共享
+            // QuestDebugMode 状态；VR 侧日志主要进 logcat，本按钮提供状态回显）。
+            debugModeToggleText = CreateButton(
+                QuestDebugModeLabel(), 0f, -302f, 360f, 40f, ToggleQuestDebugMode, debugLayer.transform)
+                .GetComponentInChildren<Text>();
             debugLayer.SetActive(false);
         }
 
@@ -1520,7 +1535,12 @@ namespace QuestMmdPlayer
             RefreshModelStatusText();
         }
 
-        private async void LoadSelectedModel()
+        private void LoadSelectedModel()
+        {
+            LoadSelectedModelAsync().Forget("menu.models.load");
+        }
+
+        private async System.Threading.Tasks.Task LoadSelectedModelAsync()
         {
             var loader = owner?.ModelLoader;
             if (loader == null || loader.IsLoading || modelOptions.Count == 0)
@@ -1543,6 +1563,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "menu.models.load");
+                QuestDebugMode.RethrowIfEnabled(exception, "menu.models.load");
                 owner?.DebugLog?.RecordStage("avatar_action", "failed", "model_switch_failed");
                 Debug.LogWarning("[CompanionMenu] Model switch failed: " + exception.Message, this);
                 if (modelStatusText != null)
@@ -1839,7 +1861,12 @@ namespace QuestMmdPlayer
             RefreshExternalActionText();
         }
 
-        private async void RefreshExternalActions()
+        private void RefreshExternalActions()
+        {
+            RefreshExternalActionsAsync().Forget("menu.actions.refresh");
+        }
+
+        private async System.Threading.Tasks.Task RefreshExternalActionsAsync()
         {
             var library = owner?.VmdActions;
             if (library == null)
@@ -1870,7 +1897,12 @@ namespace QuestMmdPlayer
             RefreshExternalActionText();
         }
 
-        private async void PlaySelectedExternalAction()
+        private void PlaySelectedExternalAction()
+        {
+            PlaySelectedExternalActionAsync().Forget("menu.actions.play");
+        }
+
+        private async System.Threading.Tasks.Task PlaySelectedExternalActionAsync()
         {
             var library = owner?.VmdActions;
             if (library == null || library.Actions.Count == 0)
@@ -2000,7 +2032,12 @@ namespace QuestMmdPlayer
             }
         }
 
-        private async void DeleteSelectedExternalAction()
+        private void DeleteSelectedExternalAction()
+        {
+            DeleteSelectedExternalActionAsync().Forget("menu.actions.delete");
+        }
+
+        private async System.Threading.Tasks.Task DeleteSelectedExternalActionAsync()
         {
             var library = owner?.VmdActions;
             if (library == null || library.Actions.Count == 0)
@@ -2387,6 +2424,22 @@ namespace QuestMmdPlayer
             if (debugAutoScroll) debugTimelineOffset = 0;
             PlayerPrefs.SetInt(DebugAutoScrollPreferenceKey, debugAutoScroll ? 1 : 0);
             PlayerPrefs.Save();
+            UpdateDebugLogText();
+        }
+
+        private static string QuestDebugModeLabel()
+        {
+            return QuestDebugMode.Enabled ? "调试模式：已开启" : "调试模式：已关闭";
+        }
+
+        private void ToggleQuestDebugMode()
+        {
+            QuestDebugMode.SetEnabled(!QuestDebugMode.Enabled);
+            if (debugModeToggleText != null)
+            {
+                debugModeToggleText.text = QuestDebugModeLabel();
+            }
+            Status = QuestDebugModeLabel();
             UpdateDebugLogText();
         }
 
@@ -3040,6 +3093,10 @@ namespace QuestMmdPlayer
 
         private void UpdateStatusText()
         {
+            if (debugModeToggleText != null)
+            {
+                debugModeToggleText.text = QuestDebugModeLabel();
+            }
             if (owner == null)
             {
                 return;

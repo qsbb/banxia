@@ -101,6 +101,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "flutter.host-init");
+                QuestDebugMode.RethrowIfEnabled(exception, "flutter.host-init");
                 Debug.LogWarning("[BanxiaFlutterBridge] Native host initialization failed: " + exception.Message);
                 return false;
             }
@@ -123,6 +125,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "flutter.host-state");
+                QuestDebugMode.RethrowIfEnabled(exception, "flutter.host-state");
                 return "{\"available\":false,\"reason\":\"" + exception.Message.Replace("\"", "'") + "\"}";
             }
 #else
@@ -144,6 +148,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "flutter.host-shutdown");
+                QuestDebugMode.RethrowIfEnabled(exception, "flutter.host-shutdown");
                 Debug.LogWarning("[BanxiaFlutterBridge] Native host shutdown failed: " + exception.Message);
             }
 #endif
@@ -259,6 +265,9 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                // 调试模式下打印完整堆栈：命令链路里的静默失败是排错盲区。
+                QuestDebugMode.Report(exception, "flutter.command:" + envelope.name);
+                QuestDebugMode.RethrowIfEnabled(exception, "flutter.command:" + envelope.name);
                 Debug.LogWarning("[BanxiaFlutterBridge] Command failed: " + exception.Message);
                 return FlutterMessageProtocol.Reply(envelope.id, envelope.name, null, "Command handling failed: " + exception.Message);
             }
@@ -284,6 +293,8 @@ namespace QuestMmdPlayer
                 }
                 catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "flutter.event-delivery");
+                    QuestDebugMode.RethrowIfEnabled(exception, "flutter.event-delivery");
                     Debug.LogWarning("[BanxiaFlutterBridge] Native event delivery failed: " + exception.Message);
                 }
             }
@@ -308,6 +319,8 @@ namespace QuestMmdPlayer
                 }
                 catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "flutter.reply-delivery");
+                    QuestDebugMode.RethrowIfEnabled(exception, "flutter.reply-delivery");
                     Debug.LogWarning("[BanxiaFlutterBridge] Native reply delivery failed: " + exception.Message);
                 }
             }
@@ -348,6 +361,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "flutter.host-resolve");
+                QuestDebugMode.RethrowIfEnabled(exception, "flutter.host-resolve");
                 Debug.Log("[BanxiaFlutterBridge] Flutter native host unavailable (" + exception.Message + "); falling back to managed sinks.");
                 nativeHost = null;
             }

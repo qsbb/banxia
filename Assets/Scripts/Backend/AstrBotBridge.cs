@@ -904,6 +904,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "astrbot.command-ingest");
+                QuestDebugMode.RethrowIfEnabled(exception, "astrbot.command-ingest");
                 Debug.LogWarning("[AstrBotBridge] Invalid command JSON: " + exception.Message);
                 return false;
             }
@@ -1796,6 +1798,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "astrbot.load-configuration");
+                QuestDebugMode.RethrowIfEnabled(exception, "astrbot.load-configuration");
                 SetStatus("AstrBot config could not be read");
                 RecordStage("configuration", "failed", "configuration_invalid");
                 Debug.LogWarning("[AstrBotBridge] Configuration error: " + exception.Message);

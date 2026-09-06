@@ -28,18 +28,24 @@ class ChannelBridgeClient implements BridgeClient {
       StreamController<BridgeEvent>.broadcast();
   StreamSubscription<dynamic>? _sub;
   int _nextId = 1;
+  bool _debugMode = false;
 
   ChannelBridgeClient() {
     _sub = _events.receiveBroadcastStream().listen(
-          _onRaw,
-          onError: (Object _) {},
-        );
+      _onRaw,
+      onError: (Object error, StackTrace stack) {
+        if (_debugMode) _controller.addError(error, stack);
+      },
+    );
   }
 
   void _onRaw(dynamic raw) {
     final env = BridgeEnvelope.tryParse(raw);
     if (env == null || env.type != BridgeMessageType.event) {
       return;
+    }
+    if (env.name == Evt.qualityChanged && env.payload?['debugMode'] is bool) {
+      _debugMode = env.payload!['debugMode'] as bool;
     }
     _controller.add(BridgeEvent(env.name, env.payload));
   }
@@ -60,11 +66,20 @@ class ChannelBridgeClient implements BridgeClient {
     try {
       final dynamic result =
           await _method.invokeMethod<dynamic>('call', envelope.toJson());
-      return BridgeReply.tryParse(result) ??
-          BridgeReply.fail(id, 'malformed reply');
+      final reply = BridgeReply.tryParse(result);
+      if (reply == null && _debugMode) throw StateError('malformed bridge reply');
+      if (reply?.ok == true &&
+          name == Cmd.settingsToggle &&
+          payload?['key'] == 'debugMode' &&
+          payload?['value'] is bool) {
+        _debugMode = payload!['value'] as bool;
+      }
+      return reply ?? BridgeReply.fail(id, 'malformed reply');
     } on MissingPluginException {
+      if (_debugMode) rethrow;
       return BridgeReply.fail(id, 'bridge unavailable');
     } on PlatformException catch (e) {
+      if (_debugMode) rethrow;
       return BridgeReply.fail(id, e.message ?? 'bridge error');
     }
   }
@@ -112,6 +127,11 @@ class LocalBridgeClient implements BridgeClient {
   bool _videoCallActive = false;
   bool _arPlaced = false;
   bool _privateHttp = true;
+  String _renderPreset = 'balanced';
+  String _physicsPreset = 'balanced';
+  int _targetFps = 120;
+  double _volume = 1.0;
+  bool _debugMode = false;
   String _server = '';
   String _pairingCode = '';
 
@@ -129,6 +149,20 @@ class LocalBridgeClient implements BridgeClient {
 
   BridgeReply _ok(int id, [Map<String, dynamic>? data]) =>
       BridgeReply.ok(id, data);
+
+  Map<String, dynamic> _qualityPayload([String status = '']) =>
+      <String, dynamic>{
+        'renderPreset': _renderPreset,
+        'physicsPreset': _physicsPreset,
+        'status': status,
+        'targetFps': _targetFps,
+        'volume': _volume,
+        'debugMode': _debugMode,
+      };
+
+  void _emitQuality([String status = '']) {
+    _emit(Evt.qualityChanged, _qualityPayload(status));
+  }
 
   @override
   Future<BridgeReply> call(String name, [Map<String, dynamic>? payload]) async {
@@ -292,29 +326,39 @@ class LocalBridgeClient implements BridgeClient {
         _emit(Evt.toast, <String, dynamic>{'message': '已解除后端绑定'});
         return _ok(id);
       case Cmd.qualityApplyPreset:
-        _emit(Evt.qualityChanged, <String, dynamic>{
-          'renderPreset': p['preset'],
-          'physicsPreset': null,
-          'status': '画质已应用',
-        });
+        _renderPreset = p['preset'] as String? ?? _renderPreset;
+        _emitQuality('画质已应用');
         return _ok(id);
       case Cmd.qualityApplyPhysics:
-        _emit(Evt.qualityChanged, <String, dynamic>{
-          'renderPreset': null,
-          'physicsPreset': p['preset'],
-          'status': '物理已应用',
-        });
+        _physicsPreset = p['preset'] as String? ?? _physicsPreset;
+        _emitQuality('物理已应用');
         return _ok(id);
       case Cmd.qualityReset:
-        _emit(Evt.qualityChanged, <String, dynamic>{
-          'renderPreset': 'balanced',
-          'physicsPreset': 'balanced',
-          'status': '已恢复默认画质',
-        });
+        _renderPreset = 'balanced';
+        _physicsPreset = 'balanced';
+        _emitQuality('已恢复默认画质');
         return _ok(id);
       case Cmd.settingsTargetFps:
+        final int? fps = (p['fps'] as num?)?.toInt();
+        if (fps == null || ![30, 60, 120].contains(fps)) {
+          return BridgeReply.fail(id, '目标帧率仅支持 30/60/120');
+        }
+        _targetFps = fps;
+        _emitQuality('目标帧率已更新');
+        return _ok(id);
       case Cmd.settingsVolume:
+        final num? rawVolume = p['v'] as num?;
+        if (rawVolume == null || !rawVolume.isFinite || rawVolume < 0 || rawVolume > 1) {
+          return BridgeReply.fail(id, '音量必须是 0 到 1 之间的数值');
+        }
+        _volume = rawVolume.toDouble();
+        _emitQuality('音量已更新');
+        return _ok(id);
       case Cmd.settingsToggle:
+        if (p['key'] == 'debugMode' && p['value'] is bool) {
+          _debugMode = p['value'] as bool;
+          _emitQuality(_debugMode ? '调试模式已开启' : '调试模式已关闭');
+        }
         return _ok(id);
       case Cmd.copresenceEnterScene:
         _videoCallActive = _mode == CoPresenceMode.videoCall;

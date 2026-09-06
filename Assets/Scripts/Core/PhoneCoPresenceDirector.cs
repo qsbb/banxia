@@ -100,6 +100,8 @@ namespace QuestMmdPlayer
             framingSnapshot = default(CoPresenceFraming);
             arPlaced = false;
             hasLoggedFraming = false;
+            QuestDebugMode.Log($"director init mode={mode} env={environment} ar={ArCameraAvailable} " +
+                $"camera={(mainCamera != null)} orbit={(orbitCamera != null)}");
             if (!ArCameraAvailable && mode == CoPresenceMode.ArReality)
             {
                 mode = CoPresenceMode.VirtualScene;
@@ -118,6 +120,8 @@ namespace QuestMmdPlayer
                 needsAvatarReframe = avatar != null;
             }
             avatarRoot = avatar;
+            QuestDebugMode.Log($"set-avatar bound={(avatar != null)} mode={mode} " +
+                $"callActive={VideoCallActive} pendingReframe={needsAvatarReframe}");
             if (VideoCallActive)
             {
                 UpdateFramingSnapshot(applyCamera: true);
@@ -160,6 +164,8 @@ namespace QuestMmdPlayer
         public virtual void ApplyOnEnterScene()
         {
             arPlaced = false;
+            QuestDebugMode.Log($"apply-on-enter-scene mode={mode} " +
+                $"avatar={(avatarRoot != null)} camera={(mainCamera != null)}");
             if (mode == CoPresenceMode.VideoCall)
             {
                 EnterVideoCall();
@@ -170,6 +176,8 @@ namespace QuestMmdPlayer
             }
             else
             {
+                QuestDebugMode.LogGuard("apply-on-enter-scene",
+                    $"mode={mode} downgraded to VirtualScene (arAvailable={ArCameraAvailable})");
                 mode = CoPresenceMode.VirtualScene;
                 EnterVirtualScene();
             }
@@ -192,16 +200,21 @@ namespace QuestMmdPlayer
         {
             if (!Enum.IsDefined(typeof(CoPresenceMode), next))
             {
+                QuestDebugMode.LogGuard("switch-mode", $"undefined mode {next}");
                 return false;
             }
             if (next == mode)
             {
+                QuestDebugMode.Log($"switch-mode no-op (already {next})");
                 return true;
             }
             if (arRoutineRunning || (next == CoPresenceMode.ArReality && !ArCameraAvailable))
             {
+                QuestDebugMode.LogGuard("switch-mode",
+                    $"busy(arRoutine={arRoutineRunning}) or arUnavailable({ArCameraAvailable})");
                 return false;
             }
+            QuestDebugMode.Log($"switch-mode {mode} -> {next}");
             if (mode == CoPresenceMode.VideoCall)
             {
                 ExitVideoCall();
@@ -374,6 +387,8 @@ namespace QuestMmdPlayer
 
         private void EnterVideoCall()
         {
+            QuestDebugMode.Log($"enter-video-call begin avatar={(avatarRoot != null)} " +
+                $"camera={(mainCamera != null)} orbit={(orbitCamera != null)}");
             TeardownArBackground();
             if (environmentRoot != null)
             {
@@ -387,6 +402,7 @@ namespace QuestMmdPlayer
             SaveOrbitState();
             callStartedAt = Time.unscaledTime;
             UpdateFramingSnapshot(applyCamera: true);
+            QuestDebugMode.Log($"enter-video-call end active={VideoCallActive} framing={framingSnapshot.Valid}");
         }
 
         /// <summary>
@@ -398,6 +414,8 @@ namespace QuestMmdPlayer
         {
             if (orbitCamera == null || avatarRoot == null)
             {
+                QuestDebugMode.LogGuard("reframe-live-avatar",
+                    $"orbitCamera={(orbitCamera != null)} avatarRoot={(avatarRoot != null)}");
                 return;
             }
             orbitCamera.SetTrackedAvatar(avatarRoot);
@@ -411,18 +429,22 @@ namespace QuestMmdPlayer
             framingSnapshot = default(CoPresenceFraming);
             if (mainCamera == null || avatarRoot == null)
             {
+                QuestDebugMode.LogGuard("framing-snapshot",
+                    $"mainCamera={(mainCamera != null)} avatarRoot={(avatarRoot != null)}");
                 return;
             }
 
             var bounds = PhoneOrbitCamera.ComputeRenderBounds(avatarRoot.gameObject);
             if (bounds.size.sqrMagnitude <= 1e-8f)
             {
+                QuestDebugMode.LogGuard("framing-snapshot", "render bounds empty");
                 return;
             }
 
             var screenHeight = mainCamera.pixelHeight > 1 ? mainCamera.pixelHeight : Screen.height;
             if (screenHeight <= 1)
             {
+                QuestDebugMode.LogGuard("framing-snapshot", $"screenHeight={screenHeight}");
                 return;
             }
 
@@ -560,8 +582,10 @@ namespace QuestMmdPlayer
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "copresence.detect-rear-camera");
+                QuestDebugMode.RethrowIfEnabled(exception, "copresence.detect-rear-camera");
                 return false;
             }
             return false;
@@ -595,7 +619,16 @@ namespace QuestMmdPlayer
                 {
                     yield return null;
                 }
-                if (permissionTask.IsFaulted || permissionTask.Result != null)
+                if (permissionTask.IsFaulted)
+                {
+                    Exception exception = (Exception)permissionTask.Exception ??
+                        new InvalidOperationException("AR camera permission task faulted without exception details.");
+                    QuestDebugMode.Report(exception, "copresence.ar-permission");
+                    QuestDebugMode.RethrowIfEnabled(exception, "copresence.ar-permission");
+                    FallbackToVirtualScene();
+                    yield break;
+                }
+                if (permissionTask.Result != null)
                 {
                     FallbackToVirtualScene();
                     yield break;
@@ -613,8 +646,10 @@ namespace QuestMmdPlayer
                         }
                     }
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "copresence.ar-device-enum");
+                    QuestDebugMode.RethrowIfEnabled(exception, "copresence.ar-device-enum");
                     deviceName = null;
                 }
                 if (string.IsNullOrEmpty(deviceName))

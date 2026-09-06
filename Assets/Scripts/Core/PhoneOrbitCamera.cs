@@ -113,11 +113,13 @@ namespace QuestMmdPlayer
         {
             if (root == null)
             {
+                QuestDebugMode.LogGuard("frame-model", "root is null");
                 return;
             }
             var bounds = ComputeRenderBounds(root);
             if (bounds.size.sqrMagnitude < 1e-8f)
             {
+                QuestDebugMode.LogGuard("frame-model", "render bounds empty");
                 return;
             }
             // Full-body framing uses visible renderer bounds for both anchored and

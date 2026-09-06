@@ -64,6 +64,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "import.document-picker");
+                QuestDebugMode.RethrowIfEnabled(exception, "import.document-picker");
                 Debug.LogWarning("[FileImport] Unable to open Android document picker: " + exception, this);
                 SetStatus("无法打开文件选择器：" + exception.Message);
                 return false;
@@ -79,7 +81,7 @@ namespace QuestMmdPlayer
                 return false;
             }
 
-            _ = ImportPathAsync(selected);
+            ImportPathAsync(selected).Forget("import.editor-picker");
             return true;
 #else
             SetStatus("当前平台没有文件选择器");
@@ -123,7 +125,7 @@ namespace QuestMmdPlayer
                 return;
             }
 
-            _ = ImportPathAsync(path);
+            ImportPathAsync(path).Forget("import.android-picker");
         }
 
         public static string SanitizeImportedName(string value, string fallback = "Imported")
@@ -278,6 +280,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "import.path");
+                QuestDebugMode.RethrowIfEnabled(exception, "import.path");
                 Debug.LogWarning("[FileImport] " + exception.Message, this);
                 SetStatus("导入失败：" + exception.Message);
             }
@@ -369,6 +373,8 @@ namespace QuestMmdPlayer
                 }
                 catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "import.pmx-preview");
+                    QuestDebugMode.RethrowIfEnabled(exception, "import.pmx-preview");
                     lastException = exception;
                     reachedBuildPhase |= modelLoader.LastFailurePhase == RuntimeModelLoadPhase.Building;
                     Debug.LogWarning(
@@ -726,6 +732,7 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "import.directory-cleanup");
                 Debug.LogWarning("[FileImport] Temporary cleanup failed: " + exception.Message);
             }
         }
@@ -741,6 +748,7 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "import.file-cleanup");
                 Debug.LogWarning("[FileImport] Temporary file cleanup failed: " + exception.Message);
             }
         }

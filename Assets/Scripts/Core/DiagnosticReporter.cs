@@ -204,8 +204,9 @@ namespace QuestMmdPlayer
                         list.Add(new SystemRecorder { Name = name, Recorder = recorder });
                     }
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
+                    QuestDebugMode.Report(exception, "diagnostics.profiler:" + name);
                     // 标记在该构建配置下不可用，忽略。
                 }
             }
@@ -266,8 +267,9 @@ namespace QuestMmdPlayer
                     return appOps.Call<int>("checkOpNoThrow", "android:play_audio", uid, packageName);
                 }
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "diagnostics.audio-appop");
                 return -1;
             }
         }

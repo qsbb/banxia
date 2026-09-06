@@ -64,6 +64,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "update.check");
+                QuestDebugMode.RethrowIfEnabled(exception, "update.check");
                 Debug.LogWarning("[Update] 检查异常: " + exception.Message);
                 return info;
             }
@@ -118,6 +120,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "update.download-install");
+                QuestDebugMode.RethrowIfEnabled(exception, "update.download-install");
                 Debug.LogWarning("[Update] 下载/安装异常: " + exception.Message);
                 return "更新流程异常：" + exception.Message + "；请手动下载：" + info.ReleaseUrl;
             }
@@ -199,6 +203,8 @@ namespace QuestMmdPlayer
             }
             catch (Exception exception)
             {
+                QuestDebugMode.Report(exception, "update.start-install");
+                QuestDebugMode.RethrowIfEnabled(exception, "update.start-install");
                 Debug.LogWarning("[Update] 安装发起失败: " + exception.Message);
                 return false;
             }
