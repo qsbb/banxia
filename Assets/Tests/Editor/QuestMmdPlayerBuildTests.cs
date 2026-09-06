@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
@@ -24,6 +24,13 @@ namespace QuestMmdPlayer.Tests
         {
             if (!string.IsNullOrEmpty(temporaryDirectory) && Directory.Exists(temporaryDirectory))
                 Directory.Delete(temporaryDirectory, true);
+        }
+
+        [Test]
+        public void AndroidBuildUsesDateStampedVersionForBothVariants()
+        {
+            Assert.That(QuestMmdPlayerBuild.AndroidVersionName, Is.EqualTo("0.3.2.20260906"));
+            Assert.That(QuestMmdPlayerBuild.AndroidVersionCode, Is.EqualTo(20260906));
         }
 
         [Test]

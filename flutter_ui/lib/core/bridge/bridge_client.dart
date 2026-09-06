@@ -421,7 +421,7 @@ class LocalBridgeClient implements BridgeClient {
           'status': <String, dynamic>{
             'phase': 'idle',
             'hasUpdate': false,
-            'version': '0.3.2',
+            'version': '0.3.2.20260906',
           },
         });
       case Cmd.updateInstall:

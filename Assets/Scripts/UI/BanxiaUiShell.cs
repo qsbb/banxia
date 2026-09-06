@@ -2199,7 +2199,7 @@ namespace QuestMmdPlayer
             sectionCard.AddToClassList("ds-card");
             sectionCard.Add(MakeSettingsRow("连接后端", "服务器地址与配对码", () => ShowSettingsPage(connectionPage)));
             sectionCard.Add(MakeSettingsRow("画质与物理", "渲染画质 · MMD 物理", () => ShowSettingsPage(qualityPage)));
-            sectionCard.Add(MakeSettingsRow("通用", "HUD · 摄像头 · 帧率 · 音量", () => ShowSettingsPage(generalPage)));
+            sectionCard.Add(MakeSettingsRow("通用", "调试模式 · HUD · 摄像头 · 帧率 · 音量", () => ShowSettingsPage(generalPage)));
             sectionCard.Add(MakeSettingsRow("设备性能", "实时性能采样", () => ShowSettingsPage(performancePage)));
             sectionCard.Add(MakeSettingsRow("关于", "版本 · 设备 · 内存", () => ShowSettingsPage(aboutPage)));
             sectionCard.Add(MakeSettingsRow("软件更新", "检查 GitHub Releases", () => ShowSettingsPage(updatePage)));

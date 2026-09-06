@@ -92,7 +92,7 @@
 - 每里程碑完成 = 对应不变量在对应环境**观测到达标**，不是「构建成功」
 - 模拟器纪律（CLAUDE.md 钦定）：应用退出 `am force-stop com.lingxi.banxia.phone`；**整机用完 `pkill -f qemu-system`**（该机常驻他人服务，内存紧张）；需要时 `~/banxia-emu/start-emu.sh` 重启（20–35 秒）
 - 构建机（5.55）：每轮构建完即告知用户可关机
-- `Assets/Scripts/**/*.cs` 一律 UTF-8 BOM；python replace 后立即验证替换计数；版本号 0.3.2 不变
+- `Assets/Scripts/**/*.cs` 一律 UTF-8 BOM；python replace 后立即验证替换计数；当前日期构建版本为 `0.3.2.20260906` / `20260906`
 - vendored `Packages/com.candidumgames.unitymmdtools/` 零改动（本计划不涉）
 
 ## 5.5 双端同步义务（CLAUDE.md 钦定原则）

@@ -4,7 +4,7 @@ description: >-
   engine core, porting the M1-M3 semantics (framing grid, modal sheet
   ownership, derived 3x4 pairing keypad) to Flutter. No third-party deps.
 publish_to: 'none'
-version: 0.3.2+1
+version: 0.3.2+20260906
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

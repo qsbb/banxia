@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -553,6 +553,7 @@ namespace QuestMmdPlayer.Tests
                 Assert.That(root.GetComponentsInChildren<BoxCollider>(true).Length, Is.GreaterThanOrEqualTo(55));
                 Assert.That(root.transform.Find("Appearance Layer/\u626b\u63cf\u623f\u95f4"), Is.Not.Null);
                 Assert.That(root.transform.Find("Main Menu Layer/绑定后端"), Is.Not.Null);
+                Assert.That(root.transform.Find("Main Menu Layer/调试模式"), Is.Not.Null);
                 Assert.That(root.transform.Find("Main Menu Layer/诊断"), Is.Not.Null);
                 Assert.That(root.transform.Find("Main Menu Layer/语音"), Is.Not.Null);
                 Assert.That(root.transform.Find("Voice Layer/常开监听"), Is.Not.Null);

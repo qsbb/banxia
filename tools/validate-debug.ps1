@@ -15,6 +15,23 @@ if ($Phase -eq 'Flutter') {
     try {
         & $Flutter pub get
         if ($LASTEXITCODE -ne 0) { throw 'Flutter pub get failed' }
+        # Unity's bundled SDK exposes Build Tools 34.0.0, while AGP 7.3
+        # otherwise falls back to its historical 30.0.3 default. Patch the
+        # generated Flutter module after pub get so the offline AAR check uses
+        # a toolchain that is actually installed on the build host.
+        $flutterGradle = Join-Path $ProjectPath 'flutter_ui/.android/Flutter/build.gradle'
+        if (!(Test-Path $flutterGradle)) { throw 'Generated Flutter Gradle file is missing' }
+        $gradleText = Get-Content -Raw $flutterGradle
+        $gradleText = $gradleText.TrimStart([char]0xFEFF)
+        if ($gradleText -notmatch 'buildToolsVersion\s*=') {
+            $replacement = "    compileSdk = flutter.compileSdkVersion`r`n    buildToolsVersion = '34.0.0'"
+            $gradleText = $gradleText.Replace('    compileSdk = flutter.compileSdkVersion', $replacement)
+        }
+        # Windows PowerShell's -Encoding UTF8 emits a BOM; Groovy treats that
+        # generated BOM as a literal '?' on this host. Write explicitly without
+        # a BOM so the offline Gradle parser sees a normal source file.
+        $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+        [System.IO.File]::WriteAllText($flutterGradle, $gradleText, $utf8NoBom)
         & $Flutter analyze
         if ($LASTEXITCODE -ne 0) { throw 'Flutter analyze failed' }
         & $Flutter test
@@ -40,7 +57,7 @@ if ($Phase -eq 'Tests') {
     $results = Join-Path $output 'EditMode.xml'
     if (Test-Path $results) { Remove-Item $results }
     # The Test Runner exits after completion; -quit would stop it before tests run.
-    $filter = 'QuestMmdPlayer.Tests.QuestDebugModeTests;QuestMmdPlayer.Tests.QuestQualitySettingsTests;QuestMmdPlayer.Tests.CallFramingSolverTests;QuestMmdPlayer.Tests.FlutterMessageProtocolTests;QuestMmdPlayer.Tests.BackendPairingTests;QuestMmdPlayer.Tests.QuestFileImportServiceTests;QuestMmdPlayer.Tests.AstrBotProtocolTests;QuestMmdPlayer.Tests.QuestMmdPlayerBuildTests'
+    $filter = 'QuestMmdPlayer.Tests.QuestDebugModeTests;QuestMmdPlayer.Tests.QuestQualitySettingsTests;QuestMmdPlayer.Tests.CallFramingSolverTests;QuestMmdPlayer.Tests.FlutterMessageProtocolTests;QuestMmdPlayer.Tests.BackendPairingTests;QuestMmdPlayer.Tests.QuestFileImportServiceTests;QuestMmdPlayer.Tests.AstrBotProtocolTests;QuestMmdPlayer.Tests.QuestMmdPlayerBuildTests;QuestMmdPlayer.Tests.QuestPassthroughConfigurationTests;QuestMmdPlayer.Tests.QuestInteractionUxTests'
     $arguments += @('-runTests', '-testPlatform', 'EditMode', '-testFilter', $filter, '-testResults', $results)
 } else {
     $method = if ($Phase -eq 'Phone') { 'BuildAndroidPhoneApk' } else { 'BuildAndroidApk' }

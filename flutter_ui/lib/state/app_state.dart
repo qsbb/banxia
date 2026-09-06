@@ -104,7 +104,7 @@ class SettingsState {
 class UpdateState {
   String phase = 'idle';
   double progress = 0;
-  String version = '0.3.2';
+  String version = '0.3.2.20260906';
   bool hasUpdate = false;
 }
 

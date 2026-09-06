@@ -29,19 +29,22 @@ git push origin main
 ```
 （M1–M3 若同批验证，commit 仍拆三个；push 失败走既有 /tmp/push_retry.sh 后台重试。）
 
-### 步骤 3 · release 资产更新（版本 0.3.2 不变）
+### 步骤 3 · release 资产更新（日期版本 `0.3.2.20260906`）
 ```
 export PATH=/data/dsh/home/dsh/bin:$PATH
-cp <APK> /data/dsh/home/dsh/tmp-stage/Banxia-0.3.2-Phone.apk
-gh release delete-asset v0.3.2 Banxia-0.3.2-Phone.apk --yes
-gh release upload v0.3.2 /data/dsh/home/dsh/tmp-stage/Banxia-0.3.2-Phone.apk --clobber
-gh release view v0.3.2 --json assets -q '.assets[].name'   # 确认两个资产齐全
+cp <APK> /data/dsh/home/dsh/tmp-stage/Banxia-0.3.2.20260906-Phone.apk
+# 发布渠道 tag/旧资产是否替换由发布人确认；NAS 发布不覆盖旧无日期文件。
+# 最终 APK 元数据必须核对 versionName=0.3.2.20260906、versionCode=20260906
 ```
 
 ### 步骤 4 · NAS 发布
 ```
-bash /data/dsh/home/dsh/bin/banxia_publish_nas.sh /data/dsh/home/dsh/tmp-stage/Banxia-Phone.apk
-# 校验 uploaded ok + md5 一致
+# 先把 APK 按日期/commit 命名，避免用户误装旧包：
+# Banxia-Phone-0.3.2.20260906-<commit>.apk
+# 目标：192.168.5.88:/vol2/1000/download-WD40EZRZ/文件传输/
+# 通过 tools/remote.sh exec nas 原始 stdin 流写入 .upload 临时文件；
+# 远端核对 size + SHA-256 后再 mv 为正式文件，同时发布 .sha256 与 metadata.txt。
+# 严禁覆盖现有 Banxia-Phone.apk（旧无日期包必须保留）。
 ```
 
 ### 步骤 5 · 双端同步登记（CLAUDE.md 义务）

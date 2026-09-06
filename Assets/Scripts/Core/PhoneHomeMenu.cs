@@ -370,12 +370,15 @@ namespace QuestMmdPlayer
             y += 60f;
 
             bool debugOn = QuestDebugMode.Enabled;
-            bool newDebug = GUI.Toggle(new Rect(x, y, width, 48f), debugOn, "  调试模式", labelStyle);
+            bool newDebug = GUI.Toggle(new Rect(x, y, width, 48f), debugOn,
+                "  调试模式（不拦截报错）", labelStyle);
             if (newDebug != debugOn)
             {
                 QuestDebugMode.SetEnabled(newDebug);
             }
-            y += 60f;
+            GUI.Label(new Rect(x, y + 42f, width, 34f),
+                "开启后异常打印完整堆栈并重新抛出", smallStyle);
+            y += 84f;
 
             int fps = owner?.Quality == null
                 ? QuestQualitySettings.ResolveStartupTargetFrameRate()

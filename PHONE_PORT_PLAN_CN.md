@@ -326,11 +326,11 @@ banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落
 
 ### 共享 Debug 模式与帧率设置
 
-- 手机 Flutter 设置页、Quest 共用设置页及 Quest 运行诊断菜单使用同一 `QuestDebugMode` 开关，默认关闭，重启后保留。
+- 手机 Flutter 设置页的「调试」分组置顶显示 `调试模式（不拦截报错）`；首页快捷入口摘要也标明 `Debug`。Quest 旧世界菜单首页直接显示 `调试模式：已关闭/已开启` 按钮，另有「诊断」日志面板和共通设置页；三处使用同一 `QuestDebugMode` 开关，默认关闭，重启后保留。
 - Debug 开启时，模型加载/删除、导入、动作、配对配置、更新、摄像头与桥接操作异常记录完整堆栈并上抛，停止业务兜底。异步入口经 `TaskFaultLog.Forget` 回到 Unity 上下文暴露异常。
 - 主动取消和输入校验仍按现有协议处理；不适用的硬件能力、非关键缓存及清理操作保留恢复逻辑，并在 debug 下记录完整异常。此模式不改变第三方包或引擎内部的异常策略。
 - 双端应用目标默认 120 FPS，保存的 30/60/120 选择优先；音量和 debug 状态通过 `quality.changed` 回填 Flutter。Quest 独立请求 120Hz 显示刷新，手机不启动 XR 轮询，物理档保持独立。
-- 验证入口：`tools/validate-debug.ps1 -Phase Flutter|Tests|Phone|Quest`。模拟器用于手机交互与状态验证，不能证明 Quest MR/手柄体验或实际持续 120 FPS。
+- 验证入口：`tools/validate-debug.ps1 -Phase Flutter|Tests|Phone|Quest`。模拟器用于手机交互与状态验证，不能证明 Quest MR/手柄体验或实际持续 120 FPS。当前日期构建标识为 `versionName=0.3.2.20260906`、`versionCode=20260906`，Phone/Quest 共用；最终 APK 元数据仍须用 `dumpsys package`/`aapt` 核验。
 
 ## 4. 风险与对策
 

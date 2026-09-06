@@ -27,6 +27,7 @@ namespace QuestMmdPlayer
         private Text debugLogText;
         private Text debugScrollStatusText;
         private Text debugModeToggleText;
+        private Text mainDebugModeToggleText;
         private bool debugMode;
         private bool debugAutoScroll = true;
         private int debugTimelineOffset;
@@ -1289,10 +1290,16 @@ namespace QuestMmdPlayer
             CreateButton("动作", x[0], y[2], buttonWidth, buttonHeight, ShowActionPanel, mainLayer.transform);
             CreateButton("外观", x[1], y[2], buttonWidth, buttonHeight, ShowAppearancePanel, mainLayer.transform);
             CreateButton("设备性能", x[2], y[2], buttonWidth, buttonHeight, ShowPerformancePanel, mainLayer.transform);
+            var mainDebugButton = CreateButton(
+                QuestDebugModeLabel(), x[0], y[3], buttonWidth, buttonHeight, ToggleQuestDebugMode, mainLayer.transform);
+            // Keep a stable object name for QA while the visible label reflects state.
+            mainDebugButton.name = "调试模式";
+            mainDebugModeToggleText = mainDebugButton.GetComponentInChildren<Text>();
+            CreateButton("新界面", x[1], y[3], buttonWidth, buttonHeight, () => owner?.WorldUi?.ShowInFront(), mainLayer.transform);
+            CreateButton("诊断", x[2], y[3], buttonWidth, buttonHeight, ShowDebugPanel, mainLayer.transform);
 
             statusText = CreateText("", mainLayer.transform, new Vector2(0f, -177f), new Vector2(660f, 60f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
-            CreateButton("新界面", 166f, -278f, 108f, 44f, () => owner?.WorldUi?.ShowInFront(), mainLayer.transform);
-            CreateButton("诊断", 286f, -278f, 108f, 44f, ShowDebugPanel, mainLayer.transform);
+            CreateText("版本 " + Application.version, mainLayer.transform, new Vector2(0f, -278f), new Vector2(640f, 32f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
             CreateText("", mainLayer.transform, Vector2.zero, Vector2.zero, 1, FontStyle.Normal, Color.clear);
 
             pointerMaterial = CreatePointerMaterial(new Color(.25f, .86f, .66f, 1f));
@@ -2435,11 +2442,16 @@ namespace QuestMmdPlayer
         private void ToggleQuestDebugMode()
         {
             QuestDebugMode.SetEnabled(!QuestDebugMode.Enabled);
+            var label = QuestDebugModeLabel();
             if (debugModeToggleText != null)
             {
-                debugModeToggleText.text = QuestDebugModeLabel();
+                debugModeToggleText.text = label;
             }
-            Status = QuestDebugModeLabel();
+            if (mainDebugModeToggleText != null)
+            {
+                mainDebugModeToggleText.text = label;
+            }
+            Status = label;
             UpdateDebugLogText();
         }
 
@@ -3093,9 +3105,14 @@ namespace QuestMmdPlayer
 
         private void UpdateStatusText()
         {
+            var debugLabel = QuestDebugModeLabel();
             if (debugModeToggleText != null)
             {
-                debugModeToggleText.text = QuestDebugModeLabel();
+                debugModeToggleText.text = debugLabel;
+            }
+            if (mainDebugModeToggleText != null)
+            {
+                mainDebugModeToggleText.text = debugLabel;
             }
             if (owner == null)
             {

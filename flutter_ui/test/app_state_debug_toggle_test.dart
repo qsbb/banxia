@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:banxia_flutter_ui/core/bridge/bridge_client.dart';
 import 'package:banxia_flutter_ui/core/bridge/bridge_protocol.dart';
+import 'package:banxia_flutter_ui/screens/settings_screen.dart';
 import 'package:banxia_flutter_ui/state/app_state.dart';
 
 class _TestBridge implements BridgeClient {
@@ -45,6 +47,24 @@ void main() {
     bridge.accept = true;
     await app.toggleSetting('debugMode', false);
     expect(app.settings.debugMode, isFalse);
+  });
+
+  testWidgets('settings screen exposes one prominent debug toggle',
+      (WidgetTester tester) async {
+    final bridge = _TestBridge();
+    final app = AppState(bridge);
+    addTearDown(app.dispose);
+    addTearDown(bridge.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(body: SettingsScreen(appState: app)),
+    ));
+    expect(find.text('调试模式（不拦截报错）'), findsOneWidget);
+    expect(find.text('开启后异常会写入完整堆栈并重新抛出，仅建议改 bug 时使用。'),
+        findsOneWidget);
+    await tester.tap(find.byType(Switch).first);
+    await tester.pumpAndSettle();
+    expect(app.settings.debugMode, isTrue);
+    expect(bridge.lastPayload, {'key': 'debugMode', 'value': true});
   });
 
   test('quality events hydrate shared FPS volume and debug settings', () {

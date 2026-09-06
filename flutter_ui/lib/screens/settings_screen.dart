@@ -24,6 +24,22 @@ class SettingsScreen extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 24),
             children: <Widget>[
               const _NavBar(),
+              const _GroupHeader('调试'),
+              _Group(children: <Widget>[
+                _ToggleRow(
+                  label: '调试模式（不拦截报错）',
+                  value: app.settings.debugMode,
+                  onChanged: (bool v) => app.toggleSetting('debugMode', v),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Text(
+                    '开启后异常会写入完整堆栈并重新抛出，仅建议改 bug 时使用。',
+                    style: TextStyle(
+                        fontSize: 13, color: BanxiaTokens.labelSecondary),
+                  ),
+                ),
+              ]),
               const _GroupHeader('连接'),
               _Group(children: <Widget>[
                 _NavRow(
@@ -67,11 +83,6 @@ class SettingsScreen extends StatelessWidget {
                   child: Text('开启后可在对话中发送当前摄像头画面',
                       style: TextStyle(
                           fontSize: 13, color: BanxiaTokens.labelSecondary)),
-                ),
-                _ToggleRow(
-                  label: '调试模式（不拦截报错）',
-                  value: app.settings.debugMode,
-                  onChanged: (bool v) => app.toggleSetting('debugMode', v),
                 ),
                 _NavRow(
                   label: '目标帧率',

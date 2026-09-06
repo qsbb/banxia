@@ -263,7 +263,7 @@ class _QuickTiles extends StatelessWidget {
               Expanded(
                   child: _Tile(
                       label: '设置',
-                      sub: '连接与画质',
+                      sub: 'Debug · 帧率 · 连接',
                       onTap: () => app.switchTab(AppTab.settings))),
               const SizedBox(width: 10),
               Expanded(

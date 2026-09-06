@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -14,8 +14,8 @@ namespace QuestMmdPlayer.Tests
             Assert.That(QuestMmdPlayerBootstrap.AndroidTaskLabel, Is.EqualTo("\u4F34\u590F"));
             Assert.That(PlayerSettings.productName, Is.EqualTo(QuestMmdPlayerBootstrap.AndroidTaskLabel));
             Assert.That(PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android), Is.EqualTo("com.lingxi.banxia"));
-            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.2.21"));
-            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(31));
+            Assert.That(PlayerSettings.bundleVersion, Is.EqualTo("0.3.2.20260906"));
+            Assert.That(PlayerSettings.Android.bundleVersionCode, Is.EqualTo(20260906));
         }
 
         [Test]

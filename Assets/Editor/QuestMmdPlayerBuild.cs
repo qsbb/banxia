@@ -37,8 +37,10 @@ namespace QuestMmdPlayer.Editor
         private const string AndroidApplicationIdentifier = "com.lingxi.banxia";
         private const string PhoneApplicationIdentifier = "com.lingxi.banxia.phone";
         private const string PhoneScriptingDefine = "BANXIA_PHONE";
-        private const string AndroidVersionName = "0.3.2";
-        private const int AndroidVersionCode = 34;
+        // Keep the semantic release and append the build date so an installed APK
+        // can be distinguished from an older package without guessing its hash.
+        public const string AndroidVersionName = "0.3.2.20260906";
+        public const int AndroidVersionCode = 20260906;
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
         private const string EditorSimulationSettingsPath = "Assets/XR/Settings/XRSimulationSettings.asset";
