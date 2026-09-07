@@ -909,6 +909,21 @@ namespace QuestMmdPlayer
                 {
                     return FlutterCommandResult.Failure("未找到指定模型");
                 }
+                // 2026-09 修复：目标模型已加载时跳过重载直接进场景。此前每次
+                // 进场景都全量重载（2-5s），且重载会杀掉进行中的 VMD 播放
+                // （ClearModel→CompleteReturnToIdle），动作页点播放后进场景
+                // 永远看不到动作。
+                var loader = ModelLoader;
+                if (loader != null && loader.CurrentAvatar != null &&
+                    string.Equals(loader.CurrentModelPath, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    CoPresence.ApplyOnEnterScene();
+                    PublishCopresenceMode();
+                    PollArPlacement();
+                    PollCallTimer();
+                    PollFraming();
+                    return FlutterCommandResult.Success();
+                }
                 LoadModelThenEnterSceneAsync(path).Forget("copresence.enter-scene");
                 return FlutterCommandResult.Success();
             }
