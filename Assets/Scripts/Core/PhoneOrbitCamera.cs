@@ -207,15 +207,13 @@ namespace QuestMmdPlayer
                     if (Mathf.Abs(pinchDelta) * ZoomDistancePerPixel >
                         centerDelta.magnitude * GroundPanUnitsPerPixel * distance * 3f)
                     {
-                        distance = Mathf.Clamp(
-                            distance - pinchDelta * ZoomDistancePerPixel,
-                            MinDistance, MaxDistance);
+                        ZoomByPinchPixels(pinchDelta);
                     }
                     else
                     {
                         MoveAvatarByScreenDelta(centerDelta);
+                        ApplyTransform();
                     }
-                    ApplyTransform();
                 }
                 previousPinchDistance = pinchDistance;
                 previousTwoFingerCenter = center;
@@ -241,13 +239,12 @@ namespace QuestMmdPlayer
                         if (SingleFingerMovesAvatar)
                         {
                             MoveAvatarByScreenDelta(delta);
+                            ApplyTransform();
                         }
                         else
                         {
-                            yaw += delta.x * OrbitDegreesPerPixel;
-                            pitch = Mathf.Clamp(pitch - delta.y * OrbitDegreesPerPixel, MinPitch, MaxPitch);
+                            OrbitByScreenDelta(delta);
                         }
-                        ApplyTransform();
                     }
                     previousTouchPosition = touch.position;
                     return;
@@ -266,6 +263,47 @@ namespace QuestMmdPlayer
             }
 
             hasGestureState = false;
+        }
+
+        /// <summary>
+        /// 单指环绕（物理像素增量）。与 Update() 触摸路径共用同一套数学——
+        /// 手机端触摸被 Flutter 面板吃掉后，手势经桥从 Flutter 手势层下发。
+        /// </summary>
+        public void OrbitByScreenDelta(Vector2 delta)
+        {
+            yaw += delta.x * OrbitDegreesPerPixel;
+            pitch = Mathf.Clamp(pitch - delta.y * OrbitDegreesPerPixel, MinPitch, MaxPitch);
+            ApplyTransform();
+        }
+
+        /// <summary>双指捏合（逐帧比例，>1 放大/靠近）。</summary>
+        public void ZoomByScaleFactor(float scale)
+        {
+            if (scale <= 0f || float.IsNaN(scale) || float.IsInfinity(scale))
+            {
+                return;
+            }
+            distance = Mathf.Clamp(distance / scale, MinDistance, MaxDistance);
+            ApplyTransform();
+        }
+
+        /// <summary>双指捏合（物理像素增量版本，原生触摸路径使用）。</summary>
+        public void ZoomByPinchPixels(float pinchDeltaPixels)
+        {
+            distance = Mathf.Clamp(
+                distance - pinchDeltaPixels * ZoomDistancePerPixel,
+                MinDistance, MaxDistance);
+            ApplyTransform();
+        }
+
+        /// <summary>
+        /// 屏幕拖动增量 → 地面平面(XZ)位移。已追踪角色时只移动角色根，
+        /// 不同步移动轨道目标，这样拖动会真正改变角色在屏幕中的位置；
+        /// 需要重新居中时再双击或点「取景」。
+        /// </summary>
+        public void PanAvatarByScreenDelta(Vector2 screenDelta)
+        {
+            MoveAvatarByScreenDelta(screenDelta);
         }
 
         /// <summary>

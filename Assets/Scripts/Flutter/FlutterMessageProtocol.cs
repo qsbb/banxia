@@ -78,6 +78,11 @@ namespace QuestMmdPlayer
         public const string SceneMoveMode = "scene.moveMode";
         public const string SceneReframe = "scene.reframe";
         public const string SceneHud = "scene.hud";
+        // 场景手势透传（Flutter 手势层 → 轨道相机）：面板窗口吃掉全部触摸，
+        // Unity 原生触摸路径在手机上不可达，手势只能经桥下发。
+        public const string SceneOrbit = "scene.orbit";
+        public const string SceneZoom = "scene.zoom";
+        public const string ScenePanAvatar = "scene.panAvatar";
 
         public const string UpdateCheck = "update.check";
         public const string UpdateInstall = "update.install";
@@ -112,6 +117,10 @@ namespace QuestMmdPlayer
         public const string LogUpdated = "log.updated";
         public const string PerformanceSnapshot = "performance.snapshot";
         public const string Toast = "toast";
+        /// <summary>设置项快照（启动恢复 + 每次切换后推送），修复 Flutter 路径启动不恢复开关状态的问题。</summary>
+        public const string SettingsState = "settings.state";
+        /// <summary>宿主按键事件（Android 面板窗口拦截的系统返回键），由 Java 宿主直接推送。</summary>
+        public const string SystemBack = "system.back";
     }
 
     /// <summary>Envelope type string constants (wire values, not an enum).</summary>
@@ -136,6 +145,8 @@ namespace QuestMmdPlayer
         public const string SendText = "send_text";
         public const string RunVmdQa = "run_vmd_qa";
         public const string RunPerformanceQa = "run_performance_qa";
+        /// <summary>蒙皮发散诊断探针：BakeMesh 真实蒙皮 AABB vs 骨骼/包围盒对照（2026-09 站位问题排查）。</summary>
+        public const string SkinAudit = "skin_audit";
     }
 
     /// <summary>
@@ -418,6 +429,9 @@ namespace QuestMmdPlayer
                 FlutterCommands.SceneMoveMode,
                 FlutterCommands.SceneReframe,
                 FlutterCommands.SceneHud,
+                FlutterCommands.SceneOrbit,
+                FlutterCommands.SceneZoom,
+                FlutterCommands.ScenePanAvatar,
                 FlutterCommands.UpdateCheck,
                 FlutterCommands.UpdateInstall,
                 FlutterCommands.LogRefresh,
@@ -450,7 +464,9 @@ namespace QuestMmdPlayer
                 FlutterEvents.UpdateStatus,
                 FlutterEvents.LogUpdated,
                 FlutterEvents.PerformanceSnapshot,
-                FlutterEvents.Toast
+                FlutterEvents.Toast,
+                FlutterEvents.SettingsState,
+                FlutterEvents.SystemBack
             };
         }
     }

@@ -93,6 +93,23 @@ C. 左上角数值区存在（深色小字块）
 3. M4 步骤 6 用户复拍截图 = 最终全脚本回归
 4. 脚本自身改动随对应里程碑 commit（`test(qa): …`）
 
+## 7.5 交互修复回归（2026-09-07，返回键/手势/设置恢复/蒙皮探针）
+
+```
+返回键语义（Java 面板根拦截 KEYCODE_BACK → system.back 事件 → Dart 语义）：
+  场景弹层开 → 关弹层；场景模式 → 回主界面；非首页 tab → 首页；首页 → 系统后台
+  验证：adb shell input keyevent 4 后 dump uiautomator，逐级对照
+场景手势（Flutter 手势层 → scene.orbit/scene.zoom/scene.panAvatar）：
+  单指拖 → [PhoneFrame] yaw/pitch 变化；双指捏合 → distance 变化；
+  双指共拖 → 角色根位移；双击 → [PhoneFrame] 重新取景
+  验证：logcat 观察 + 截屏像素位移断言
+设置恢复：设置 framingGrid=开 → 杀进程重启 → 设置页开关=开 且场景网格可见
+  验证：settings.state 事件载荷与场景截屏红色边框带
+蒙皮探针：adb shell am broadcast -a com.lingxi.banxia.phone.QA_COMMAND --es cmd skin_audit
+  → logcat [SkinAudit]：bakedWorldY 与 boneTreeY 对照；
+  修复验收：baked 高度 ≈ 骨骼高度（脚底 y≈0），场景截屏脚底 y≈2027±40px
+```
+
 ## 8. 边界与诚实声明
 
 - 模拟器无 PMX 模型且 fallback 不生成 → assert-framing 的 A/C 项**只在用户真机截图上有意义**；模拟器只跑 assert-overlay + logcat 求解行断言

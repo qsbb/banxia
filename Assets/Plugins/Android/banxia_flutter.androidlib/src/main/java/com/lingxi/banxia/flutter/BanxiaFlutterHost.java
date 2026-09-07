@@ -1,7 +1,10 @@
 package com.lingxi.banxia.flutter;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Insets;
 import android.graphics.PixelFormat;
 import android.graphics.SurfaceTexture;
@@ -9,12 +12,14 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.Surface;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.widget.FrameLayout;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -208,6 +213,11 @@ public final class BanxiaFlutterHost {
     // Phone path: true once a real FlutterView is added to the Unity player
     // (not merely "engine constructed"). Reported through getStateJson().
     private volatile boolean phoneViewAttached;
+    /** Window root actually added to the WindowManager: wraps the FlutterView so
+     * the system back key can be intercepted (2026-09 back-key fix). */
+    private View phonePanelRoot;
+    /** adb-reachable QA command hook (com.lingxi.banxia.phone.QA_COMMAND). */
+    private BroadcastReceiver qaCommandReceiver;
 
     // Quest offscreen path: Flutter renders into an android.view.Surface backed
     // by a *detached* SurfaceTexture. Unity attaches a GL texture on its render
@@ -418,10 +428,13 @@ public final class BanxiaFlutterHost {
             return false;
         }
         View flutterView = preparePhoneFlutterView((View) view);
-        boolean added = addViewToUnityPlayer(activity, flutterView);
+        View panelRoot = wrapPhonePanelRoot(flutterView);
+        boolean added = addViewToUnityPlayer(activity, panelRoot);
         if (added) {
             phoneFlutterView = view;
+            phonePanelRoot = panelRoot;
             phoneViewAttached = true;
+            registerQaCommandReceiver(activity.getApplicationContext());
             return true;
         }
         try {
@@ -467,7 +480,22 @@ public final class BanxiaFlutterHost {
             return true;
         }
         Object view = phoneFlutterView;
+        View panelRoot = phonePanelRoot;
         try {
+            // The WindowManager owns the wrapper (BackKeyInterceptLayout), not
+            // the FlutterView; remove the wrapper first, then detach the engine.
+            if (panelRoot != null && phoneWindowManager != null
+                    && panelRoot.getWindowToken() != null) {
+                try {
+                    phoneWindowManager.removeViewImmediate(panelRoot);
+                } catch (Throwable t) {
+                    Log.w(TAG, "Phone panel root removal failed", t);
+                }
+            }
+            if (panelRoot instanceof ViewGroup && view instanceof View) {
+                ((ViewGroup) panelRoot).removeView((View) view);
+            }
+            phonePanelRoot = null;
             detachAndRemoveView(view);
             phoneFlutterView = null;
             phoneViewAttached = false;
@@ -507,6 +535,7 @@ public final class BanxiaFlutterHost {
 
     private void shutdownOnMainThread() {
         lifecycleGeneration.incrementAndGet();
+        unregisterQaCommandReceiver();
         Map<Long, Object> abandonedResults;
         synchronized (pendingResults) {
             abandonedResults = new LinkedHashMap<Long, Object>(pendingResults);
@@ -528,6 +557,18 @@ public final class BanxiaFlutterHost {
     }
 
     private void releaseEngineOnMainThread() {
+        if (phonePanelRoot != null && phoneWindowManager != null
+                && phonePanelRoot.getWindowToken() != null) {
+            try {
+                phoneWindowManager.removeViewImmediate(phonePanelRoot);
+            } catch (Throwable t) {
+                Log.w(TAG, "Phone panel root removal on release failed", t);
+            }
+        }
+        if (phonePanelRoot instanceof ViewGroup && phoneFlutterView instanceof View) {
+            ((ViewGroup) phonePanelRoot).removeView((View) phoneFlutterView);
+        }
+        phonePanelRoot = null;
         if (phoneFlutterView != null) {
             detachAndRemoveView(phoneFlutterView);
             phoneFlutterView = null;
@@ -571,6 +612,141 @@ public final class BanxiaFlutterHost {
             view.getClass().getMethod("detachFromFlutterEngine").invoke(view);
         } catch (Throwable t) {
             Log.w(TAG, "FlutterView.detachFromFlutterEngine failed", t);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Back key + QA broadcast (2026-09 phone interaction fixes)
+    // ------------------------------------------------------------------
+
+    /**
+     * Panel window root that intercepts the system back key. The Flutter panel
+     * is a standalone window: unhandled keys in it reach nobody (not the
+     * Activity's onBackPressed, not Flutter's navigation channel reliably), so
+     * the back key used to be a global no-op. As the window's root view this
+     * layout sees every key first; BACK is forwarded to Dart as a
+     * {@code system.back} event (Dart owns the semantics: close sheet → leave
+     * scene → home tab → background). All other keys pass through untouched.
+     */
+    private final class BackKeyInterceptLayout extends FrameLayout {
+        BackKeyInterceptLayout(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean dispatchKeyEvent(KeyEvent event) {
+            if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+                // With the soft keyboard visible the first back press must keep
+                // its platform meaning (dismiss the IME). FlutterView consumes
+                // every key it forwards, so "super first, fallback" can never
+                // reach us — gate on IME visibility instead.
+                boolean imeVisible = false;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    WindowInsets insets = getRootWindowInsets();
+                    imeVisible = insets != null && insets.isVisible(WindowInsets.Type.ime());
+                }
+                if (!imeVisible) {
+                    if (event.getAction() == KeyEvent.ACTION_UP && event.getRepeatCount() == 0) {
+                        pushSystemBackEvent();
+                    }
+                    return true;
+                }
+            }
+            return super.dispatchKeyEvent(event);
+        }
+    }
+
+    private View wrapPhonePanelRoot(View flutterView) {
+        BackKeyInterceptLayout root = new BackKeyInterceptLayout(flutterView.getContext());
+        root.addView(flutterView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        return root;
+    }
+
+    /** Pushes a host-originated {@code system.back} event into the Dart shell. */
+    private void pushSystemBackEvent() {
+        try {
+            JSONObject envelope = new JSONObject();
+            envelope.put("v", 1);
+            envelope.put("id", 0);
+            envelope.put("type", "event");
+            envelope.put("name", "system.back");
+            envelope.put("payload", "{}");
+            envelope.put("error", "");
+            onUnityEvent(envelope.toString());
+        } catch (Throwable t) {
+            Log.w(TAG, "pushSystemBackEvent failed", t);
+        }
+    }
+
+    /**
+     * adb-reachable QA hook: {@code am broadcast -a com.lingxi.banxia.phone.QA_COMMAND
+     * --es cmd <name>} delivers a {@code qa.command} envelope straight to Unity,
+     * which is how the pixel-QA loop triggers diagnostics (e.g. skin_audit)
+     * without any Flutter UI affordance. Registered NOT_EXPORTED (root shell
+     * bypasses the export check); command names stay whitelisted engine-side.
+     */
+    private void registerQaCommandReceiver(Context appContext) {
+        if (qaCommandReceiver != null || appContext == null) {
+            return;
+        }
+        try {
+            qaCommandReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    String cmd = intent == null ? null : intent.getStringExtra("cmd");
+                    if (cmd == null || cmd.trim().isEmpty()) {
+                        return;
+                    }
+                    deliverQaCommand(cmd.trim());
+                }
+            };
+            IntentFilter filter = new IntentFilter("com.lingxi.banxia.phone.QA_COMMAND");
+            if (Build.VERSION.SDK_INT >= 33) {
+                // Context.RECEIVER_NOT_EXPORTED, inlined so the androidlib still
+                // compiles against pre-33 android.jar snapshots.
+                appContext.registerReceiver(qaCommandReceiver, filter, 4);
+            } else {
+                appContext.registerReceiver(qaCommandReceiver, filter);
+            }
+            Log.i(TAG, "QA command receiver registered");
+        } catch (Throwable t) {
+            Log.w(TAG, "QA command receiver registration failed", t);
+            qaCommandReceiver = null;
+        }
+    }
+
+    private void unregisterQaCommandReceiver() {
+        if (qaCommandReceiver == null) {
+            return;
+        }
+        try {
+            Context context = applicationContext;
+            if (context != null) {
+                context.unregisterReceiver(qaCommandReceiver);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "QA command receiver unregister failed", t);
+        }
+        qaCommandReceiver = null;
+    }
+
+    private void deliverQaCommand(String cmd) {
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("name", cmd);
+            JSONObject envelope = new JSONObject();
+            envelope.put("v", 1);
+            envelope.put("id", System.nanoTime() & 0x3fffffffL);
+            envelope.put("type", "cmd");
+            envelope.put("name", "qa.command");
+            envelope.put("payload", payload.toString());
+            envelope.put("error", "");
+            if (!deliverToUnity(envelope.toString())) {
+                Log.w(TAG, "QA command not delivered to Unity: " + cmd);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "deliverQaCommand failed", t);
         }
     }
 
@@ -847,10 +1023,13 @@ public final class BanxiaFlutterHost {
             return false;
         }
         View flutterView = preparePhoneFlutterView((View) view);
-        boolean added = addViewToUnityPlayer(activity, flutterView);
+        View panelRoot = wrapPhonePanelRoot(flutterView);
+        boolean added = addViewToUnityPlayer(activity, panelRoot);
         if (added) {
             phoneFlutterView = view;
+            phonePanelRoot = panelRoot;
             phoneViewAttached = true;
+            registerQaCommandReceiver(activity.getApplicationContext());
             return true;
         }
         detachAndRemoveView(view);

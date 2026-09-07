@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../core/bridge/bridge_client.dart';
@@ -424,10 +425,71 @@ class AppState extends ChangeNotifier {
       case Evt.toast:
         showToast(_str(p?['message']));
         break;
+      case Evt.settingsState:
+        // Unity (PlayerPrefs) owns the persisted truth; the shell's switches
+        // mirror it, including the values restored at engine startup.
+        if (p?['hud'] is bool) settings.hud = p!['hud'] as bool;
+        if (p?['framingGrid'] is bool) {
+          settings.framingGrid = p!['framingGrid'] as bool;
+        }
+        if (p?['camera'] is bool) settings.camera = p!['camera'] as bool;
+        if (p?['debugMode'] is bool) settings.debugMode = p!['debugMode'] as bool;
+        break;
+      case Evt.systemBack:
+        handleSystemBack();
+        break;
       default:
         break;
     }
     _notify();
+  }
+
+  // ── System back key (pushed by the Android host as `system.back`) ─────────
+  /// Semantics: close the sheet → leave the scene → back to the home tab →
+  /// let the system background the app. Without this the panel window swallows
+  /// KEYCODE_BACK and the back key is a global no-op (2026-09 fix).
+  void handleSystemBack() {
+    if (copresence.sheetOpen) {
+      closeSheet();
+      return;
+    }
+    if (inScene) {
+      unawaited(returnToMenu());
+      return;
+    }
+    if (tab.value != AppTab.companion) {
+      switchTab(AppTab.companion);
+      return;
+    }
+    SystemNavigator.pop();
+  }
+
+  // ── Scene gesture passthrough (2026-09 fix) ───────────────────────────────
+  /// The panel window eats every touch so Unity never sees one; gestures are
+  /// recognized by the Flutter scene layer and forwarded in physical pixels
+  /// (same convention as [arPlaceAt]).
+  double get _devicePixelRatio {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    return views.isEmpty ? 1.0 : views.first.devicePixelRatio;
+  }
+
+  void sceneOrbitBy(Offset logicalDelta) {
+    unawaited(dispatch(Cmd.sceneOrbit, <String, dynamic>{
+      'dx': logicalDelta.dx * _devicePixelRatio,
+      'dy': logicalDelta.dy * _devicePixelRatio,
+    }));
+  }
+
+  void sceneZoomBy(double scaleFactor) {
+    if (!scaleFactor.isFinite || scaleFactor <= 0) return;
+    unawaited(dispatch(Cmd.sceneZoom, <String, dynamic>{'scale': scaleFactor}));
+  }
+
+  void scenePanAvatarBy(Offset logicalDelta) {
+    unawaited(dispatch(Cmd.scenePanAvatar, <String, dynamic>{
+      'dx': logicalDelta.dx * _devicePixelRatio,
+      'dy': logicalDelta.dy * _devicePixelRatio,
+    }));
   }
 
   void _pushBubble(bool fromUser, dynamic text) {

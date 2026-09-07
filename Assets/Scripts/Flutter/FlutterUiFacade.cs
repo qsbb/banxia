@@ -134,9 +134,39 @@ namespace QuestMmdPlayer
             ResetDiffState();
             if (owner != null)
             {
+                RestorePhoneSettings();
                 SubscribeToServices();
                 PublishInitialState();
             }
+        }
+
+        /// <summary>
+        /// 启动恢复手机端设置（2026-09 修复）：Flutter 路径此前从不读取
+        /// PlayerPrefs 里的 hud/framing-grid 开关，导致"设置页显示关、重开不
+        /// 生效"；这里在 Bind 时一次性应用并随 PublishInitialState 推回
+        /// Flutter 侧显示真值。debugMode 由 QuestDebugMode 自行持久化恢复，
+        /// camera 开关仅作存储语义（发送单帧由对话侧消费），无需启动动作。
+        /// </summary>
+        private void RestorePhoneSettings()
+        {
+            var hud = PhoneHud;
+            if (hud != null)
+            {
+                hud.SetVisible(PlayerPrefs.GetInt(HudPrefKey, 1) == 1);
+                hud.SetFramingGridVisible(PlayerPrefs.GetInt(FramingGridPrefKey, 0) == 1);
+            }
+        }
+
+        private void PublishSettingsState()
+        {
+            var hud = PhoneHud;
+            PublishEvent(FlutterEvents.SettingsState, new FlutterSettingsStatePayload
+            {
+                hud = PlayerPrefs.GetInt(HudPrefKey, hud != null ? 1 : 0) == 1,
+                framingGrid = PlayerPrefs.GetInt(FramingGridPrefKey, 0) == 1,
+                camera = PlayerPrefs.GetInt(CameraPrefKey, 0) == 1,
+                debugMode = QuestDebugMode.Enabled
+            });
         }
 
         public void BindBridge(BanxiaFlutterBridge uiBridge)
@@ -210,6 +240,9 @@ namespace QuestMmdPlayer
                 case FlutterCommands.SceneMoveMode: return HandleSceneMoveMode();
                 case FlutterCommands.SceneReframe: return HandleSceneReframe();
                 case FlutterCommands.SceneHud: return HandleSceneHud();
+                case FlutterCommands.SceneOrbit: return HandleSceneOrbit(payloadJson);
+                case FlutterCommands.SceneZoom: return HandleSceneZoom(payloadJson);
+                case FlutterCommands.ScenePanAvatar: return HandleScenePanAvatar(payloadJson);
 
                 case FlutterCommands.UpdateCheck: return HandleUpdateCheckCommand();
                 case FlutterCommands.UpdateInstall: return HandleUpdateInstallCommand();
@@ -829,6 +862,7 @@ namespace QuestMmdPlayer
                     PlayerPrefs.SetInt(HudPrefKey, value ? 1 : 0);
                     PlayerPrefs.Save();
                     PhoneHud.SetVisible(value);
+                    PublishSettingsState();
                     return FlutterCommandResult.Success();
                 case "framingGrid":
                     if (PhoneHud == null)
@@ -838,16 +872,19 @@ namespace QuestMmdPlayer
                     PlayerPrefs.SetInt(FramingGridPrefKey, value ? 1 : 0);
                     PlayerPrefs.Save();
                     PhoneHud.SetFramingGridVisible(value);
+                    PublishSettingsState();
                     return FlutterCommandResult.Success();
                 case "camera":
                     PlayerPrefs.SetInt(CameraPrefKey, value ? 1 : 0);
                     PlayerPrefs.Save();
+                    PublishSettingsState();
                     return FlutterCommandResult.Success();
                 case "debugMode":
                     // 调试模式是双端共享能力：开关持久化在 QuestDebugMode，
                     // 由 Unity/Flutter 两端设置页共同控制。
                     QuestDebugMode.SetEnabled(value);
                     PublishQualityChanged();
+                    PublishSettingsState();
                     return FlutterCommandResult.Success();
                 default:
                     return FlutterCommandResult.Failure("未知设置项：" + payload.key);
@@ -1034,6 +1071,79 @@ namespace QuestMmdPlayer
 #endif
         }
 
+        /// <summary>
+        /// 场景手势透传（2026-09 修复）：Flutter 面板窗口吃掉全部触摸，Unity
+        /// 原生 Input.touches 在手机上不可达；手势由 Flutter 手势层识别后经桥
+        /// 下发到这里，复用轨道相机的同一套数学。dx/dy 为物理像素。
+        /// </summary>
+        private FlutterCommandResult HandleSceneOrbit(string payloadJson)
+        {
+#if !BANXIA_PHONE
+            return FlutterCommandResult.Failure("场景手势仅支持手机端");
+#else
+            if (OrbitCamera == null)
+            {
+                return FlutterCommandResult.Failure("轨道相机不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<SceneGesturePayload>(payloadJson);
+            if (payload == null)
+            {
+                return FlutterCommandResult.Failure("缺少手势参数");
+            }
+            // 单指拖动：AR 放置后或移动模式下移角色，否则环绕。视频通话构图由
+            // 求解器接管，环绕结果会在下一帧被覆盖——无害且不额外判断。
+            var director = CoPresence;
+            var arPlaced = director != null && director.CurrentMode == CoPresenceMode.ArReality && director.ArPlaced;
+            if (arPlaced || OrbitCamera.SingleFingerMovesAvatar)
+            {
+                OrbitCamera.PanAvatarByScreenDelta(new Vector2(payload.dx, payload.dy));
+            }
+            else
+            {
+                OrbitCamera.OrbitByScreenDelta(new Vector2(payload.dx, payload.dy));
+            }
+            return FlutterCommandResult.Success();
+#endif
+        }
+
+        private FlutterCommandResult HandleSceneZoom(string payloadJson)
+        {
+#if !BANXIA_PHONE
+            return FlutterCommandResult.Failure("场景手势仅支持手机端");
+#else
+            if (OrbitCamera == null)
+            {
+                return FlutterCommandResult.Failure("轨道相机不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<SceneGesturePayload>(payloadJson);
+            if (payload == null || payload.scale <= 0f || float.IsNaN(payload.scale) || float.IsInfinity(payload.scale))
+            {
+                return FlutterCommandResult.Failure("非法缩放比例");
+            }
+            OrbitCamera.ZoomByScaleFactor(payload.scale);
+            return FlutterCommandResult.Success();
+#endif
+        }
+
+        private FlutterCommandResult HandleScenePanAvatar(string payloadJson)
+        {
+#if !BANXIA_PHONE
+            return FlutterCommandResult.Failure("场景手势仅支持手机端");
+#else
+            if (OrbitCamera == null)
+            {
+                return FlutterCommandResult.Failure("轨道相机不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<SceneGesturePayload>(payloadJson);
+            if (payload == null)
+            {
+                return FlutterCommandResult.Failure("缺少手势参数");
+            }
+            OrbitCamera.PanAvatarByScreenDelta(new Vector2(payload.dx, payload.dy));
+            return FlutterCommandResult.Success();
+#endif
+        }
+
         // ------------------------------------------------------------------
         // Update / log / QA commands
         // ------------------------------------------------------------------
@@ -1195,6 +1305,15 @@ namespace QuestMmdPlayer
                         return FlutterCommandResult.Failure("动作库不可用");
                     }
                     VmdActions.PlayRecommendedDanceAsync().Forget("action.play-recommended");
+                    return FlutterCommandResult.Success();
+                case FlutterQaCommands.SkinAudit:
+                    // 蒙皮发散诊断（2026-09 站位问题）：BakeMesh 真实蒙皮 AABB
+                    // 与骨骼/包围盒逐层对照，输出 [SkinAudit] 日志。
+                    if (ModelLoader == null || ModelLoader.CurrentAvatar == null)
+                    {
+                        return FlutterCommandResult.Failure("尚未加载模型");
+                    }
+                    AvatarSkinAudit.Run(ModelLoader.CurrentAvatar);
                     return FlutterCommandResult.Success();
                 case FlutterQaCommands.ToggleMenu:
                     return FlutterCommandResult.Failure("QA 菜单命令需通过 Quest 硬件菜单入口触发");
@@ -1505,6 +1624,7 @@ namespace QuestMmdPlayer
             PublishModelUpdated();
             PublishActionUpdated();
             PublishQualityChanged();
+            PublishSettingsState();
             PublishCopresenceMode();
             PollConnection();
             PollConversationText();
@@ -2072,6 +2192,10 @@ namespace QuestMmdPlayer
     [Serializable] public sealed class CopresenceSwitchEnvironmentPayload { public string env = string.Empty; }
     [Serializable] public sealed class CopresenceSetChromeInsetsPayload { public float top; public float bottom; }
     [Serializable] public sealed class CopresenceArPlacePayload { public float x; public float y; }
+    /// <summary>场景手势透传负载：dx/dy 为物理像素增量，scale 为双指捏合的逐帧比例（1=无缩放）。</summary>
+    [Serializable] public sealed class SceneGesturePayload { public float dx; public float dy; public float scale; }
+    /// <summary>设置项快照（settings.state 事件）：启动恢复与每次切换后推送，Flutter 侧以其为准显示开关。</summary>
+    [Serializable] public sealed class FlutterSettingsStatePayload { public bool hud; public bool framingGrid; public bool camera; public bool debugMode; }
     [Serializable] public sealed class QaCommandPayload { public string name = string.Empty; public string args = string.Empty; }
     [Serializable] public sealed class QaSendTextArgs { public string text = string.Empty; }
 }

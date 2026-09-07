@@ -32,6 +32,16 @@ class SceneOverlay extends StatelessWidget {
           fit: StackFit.expand,
           children: <Widget>[
             const _SceneBackdrop(),
+            // Gesture passthrough (2026-09 fix): the Flutter panel swallows
+            // every touch, so Unity's orbit/pinch/pan handlers never fire on
+            // phone. This layer recognizes them and forwards bridge commands.
+            // Inactive during video call (the framing solver owns the camera)
+            // and during AR placement (the tap catcher above owns taps).
+            if (appState.inScene &&
+                !cp.sheetOpen &&
+                cp.mode != CoPresenceMode.videoCall &&
+                !arReality)
+              _SceneGestureLayer(appState: appState),
             if (appState.settings.framingGrid)
               Positioned.fill(
                 child: FramingGrid(
@@ -77,6 +87,57 @@ class _SceneBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const SizedBox.expand();
+}
+
+// ── Scene gesture passthrough (2026-09) ─────────────────────────────────────
+/// Full-screen gesture recognizer that forwards orbit / pinch-zoom / avatar
+/// pan to the engine via bridge commands (`scene.orbit` / `scene.zoom` /
+/// `scene.panAvatar`), replacing the unreachable Unity-native touch path.
+/// One finger orbits (or moves the avatar when the 移动 toggle is on, decided
+/// engine-side); two fingers pinch-zoom and common-drag the avatar on the
+/// ground plane; double-tap re-frames.
+class _SceneGestureLayer extends StatefulWidget {
+  const _SceneGestureLayer({required this.appState});
+
+  final AppState appState;
+
+  @override
+  State<_SceneGestureLayer> createState() => _SceneGestureLayerState();
+}
+
+class _SceneGestureLayerState extends State<_SceneGestureLayer> {
+  double _lastScale = 1;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onScaleStart: (_) => _lastScale = 1,
+        onScaleUpdate: (ScaleUpdateDetails details) {
+          // ScaleDetails.scale is cumulative from gesture start; the engine
+          // wants a per-frame factor.
+          final double scale = details.scale;
+          final double step = _lastScale <= 0 ? 1 : scale / _lastScale;
+          _lastScale = scale;
+          if (details.pointerCount >= 2) {
+            if ((step - 1).abs() > 0.004) {
+              widget.appState.sceneZoomBy(step);
+            }
+            if (details.focalPointDelta != Offset.zero) {
+              widget.appState.scenePanAvatarBy(details.focalPointDelta);
+            }
+          } else if (details.focalPointDelta != Offset.zero) {
+            widget.appState.sceneOrbitBy(details.focalPointDelta);
+          }
+        },
+        onScaleEnd: (_) => _lastScale = 1,
+        onDoubleTap: () =>
+            widget.appState.dispatch(Cmd.sceneReframe),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
 }
 
 // ── Scene toolbar (non-video-call modes) ────────────────────────────────────

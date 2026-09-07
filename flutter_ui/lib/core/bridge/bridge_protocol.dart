@@ -51,6 +51,12 @@ abstract final class Cmd {
   static const String sceneMoveMode = 'scene.moveMode';
   static const String sceneReframe = 'scene.reframe';
   static const String sceneHud = 'scene.hud';
+  // Scene gesture passthrough (2026-09 fix): the Flutter panel window swallows
+  // every touch, so Unity's native touch path is unreachable on phone; the
+  // scene gesture layer recognizes gestures and forwards them via these.
+  static const String sceneOrbit = 'scene.orbit';
+  static const String sceneZoom = 'scene.zoom';
+  static const String scenePanAvatar = 'scene.panAvatar';
   static const String updateCheck = 'update.check';
   static const String updateInstall = 'update.install';
   static const String logRefresh = 'log.refresh';
@@ -84,6 +90,14 @@ abstract final class Evt {
   static const String logUpdated = 'log.updated';
   static const String performanceSnapshot = 'performance.snapshot';
   static const String toast = 'toast';
+
+  /// Settings snapshot pushed at startup (after Unity restores persisted
+  /// toggles) and after every toggle; the shell displays this truth.
+  static const String settingsState = 'settings.state';
+
+  /// Host-pushed system back-key event (the Android panel window intercepts
+  /// KEYCODE_BACK; without this the back key is a global no-op).
+  static const String systemBack = 'system.back';
 }
 
 /// Envelope discriminator. Both directions share the same envelope (design §6).
