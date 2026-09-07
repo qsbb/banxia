@@ -219,6 +219,14 @@ namespace QuestMmdPlayer
                 request.responseCode < 200 || request.responseCode >= 300)
             {
                 var detail = string.IsNullOrWhiteSpace(request.error) ? string.Empty : ": " + request.error;
+                // TLS 握手失败（HTTP 0 + SSL 文案）几乎总是"对纯 HTTP 服务器
+                // 用了 https:// 前缀"。给出可操作的下一步，而不是只抛引擎原文。
+                if (request.responseCode == 0 && !string.IsNullOrEmpty(request.error) &&
+                    request.error.IndexOf("SSL", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    endpoint.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    detail += " (server may be plain HTTP - retry with http:// prefix or bare host:port)";
+                }
                 SetStatus("Pairing exchange failed (HTTP " + request.responseCode + ")" + detail);
                 request.Dispose();
                 pairingRoutine = null;

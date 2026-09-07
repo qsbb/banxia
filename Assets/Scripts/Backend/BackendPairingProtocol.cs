@@ -213,7 +213,10 @@ namespace QuestMmdPlayer
                 ? "[" + uri.Host + "]"
                 : uri.Host;
             var authority = uri.IsDefaultPort ? host : host + ":" + uri.Port;
-            if (uri.Scheme == Uri.UriSchemeHttps && AstrBotProtocol.IsPrivateNetworkHost(uri.Host))
+            // https 一律保留 scheme 回显：此前只对私网 https 保留，公网 https
+            // 会被剥成裸 host:port——用户看不出存的是 https，对纯 HTTP
+            // 服务器反复发起 TLS 握手却无从察觉（SSL 报错排查实坑）。
+            if (uri.Scheme == Uri.UriSchemeHttps)
             {
                 return Uri.UriSchemeHttps + "://" + authority;
             }

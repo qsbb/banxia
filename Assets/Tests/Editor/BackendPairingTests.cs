@@ -19,7 +19,9 @@ namespace QuestMmdPlayer.Tests
             Assert.That(endpoint, Is.EqualTo(expected));
         }
 
-        [TestCase("https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange", "bot.example.com:7443")]
+        // https 一律保留 scheme 回显（公网 https 曾剥成裸 host:port，
+        // 用户看不出存的是 https → 对纯 HTTP 服务器反复 TLS 握手失败）。
+        [TestCase("https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange", "https://bot.example.com:7443")]
         [TestCase("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange", "192.168.5.88:8520")]
         public void PairingServerEntryHidesTheGeneratedPluginPath(string endpoint, string expected)
         {

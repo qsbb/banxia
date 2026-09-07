@@ -481,9 +481,10 @@ class _ServerFieldState extends State<_ServerField> {
         style: const TextStyle(fontSize: 16, color: BanxiaTokens.label),
         decoration: const InputDecoration(
           border: InputBorder.none,
-          // 引擎对裸输入默认补 http:// 前缀，公网 HTTP 会被拒绝，因此公网
-          // 地址必须输入完整 https://域名:端口。
-          hintText: '内网 192.168.x.x:端口；公网必须 https://域名:端口',
+          // 引擎对裸输入默认补 http:// 前缀；公网明文 HTTP 在明文开关
+          // （默认开）下放行。只有服务器确实配了 TLS 证书时才用 https://，
+          // 否则会报 "Unable to complete SSL connection"。
+          hintText: '填 域名:端口 或 IP:端口（默认明文 http）',
           hintStyle:
               TextStyle(fontSize: 16, color: BanxiaTokens.labelSecondary),
           counterText: '',
@@ -672,7 +673,7 @@ class _EndpointSectionState extends State<_EndpointSection> {
                       fontSize: 14, color: BanxiaTokens.label),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
-                    hintText: '内网填 192.168.x.x:8520；公网必须 https:// 开头',
+                    hintText: '填 域名:端口 或 IP:端口（默认明文 http）',
                     hintStyle: TextStyle(
                         fontSize: 14, color: BanxiaTokens.labelSecondary),
                     counterText: '',
