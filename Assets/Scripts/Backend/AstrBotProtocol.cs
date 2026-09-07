@@ -20,6 +20,13 @@ namespace QuestMmdPlayer
         public string relationship_profile_id = "";
         public bool allow_insecure_http;
         /// <summary>
+        /// Local opt-in for plain HTTP to PUBLIC hosts (home-broadband direct
+        /// connect without a TLS cert). Keys and audio travel in cleartext —
+        /// only for the user's own server; set via the pairing-page plaintext
+        /// switch. Mirrors the server-side allow_insecure_remote_http gate.
+        /// </summary>
+        public bool allow_insecure_remote_http;
+        /// <summary>
         /// Ordered failover candidates (plugin base URLs). base_url remains the
         /// primary entry; these are tried in order when the active entry is
         /// unreachable at the network layer. Same credentials serve all entries.
@@ -230,9 +237,10 @@ namespace QuestMmdPlayer
                 return false;
             }
             if (uri.Scheme == Uri.UriSchemeHttp &&
+                !settings.allow_insecure_remote_http &&
                 (!settings.allow_insecure_http || !IsPrivateNetworkHost(uri.Host)))
             {
-                reason = "Plain HTTP requires allow_insecure_http=true and a literal private-network IP";
+                reason = "Plain HTTP requires allow_insecure_http=true and a literal private-network IP, or an explicit remote-plaintext opt-in";
                 return false;
             }
             if (string.IsNullOrWhiteSpace(settings.astrbot_api_key))

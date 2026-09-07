@@ -133,7 +133,7 @@ namespace QuestMmdPlayer
         /// mirrors AstrBotProtocol.TryValidateSettings: HTTPS everywhere, plain
         /// HTTP only for literal private-network IPs with the local opt-in.
         /// </summary>
-        public static bool TryBuildBridgeBaseUrl(string serverOrBaseUrl, out string baseUrl, out string reason, bool allowPrivateHttp = true)
+        public static bool TryBuildBridgeBaseUrl(string serverOrBaseUrl, out string baseUrl, out string reason, bool allowPrivateHttp = true, bool allowRemoteHttp = false)
         {
             baseUrl = string.Empty;
             reason = string.Empty;
@@ -164,10 +164,12 @@ namespace QuestMmdPlayer
             var isHttps = uri.Scheme == Uri.UriSchemeHttps;
             var isPrivateHttp = uri.Scheme == Uri.UriSchemeHttp &&
                 allowPrivateHttp && AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
-            if (!isHttps && !isPrivateHttp)
+            // 公网明文：仅在用户经明文开关显式 opt-in 时放行（密钥/音频明文传输，
+            // 仅限自有服务器）；否则公网主机必须显式 https://。
+            var isRemoteHttp = uri.Scheme == Uri.UriSchemeHttp && allowRemoteHttp;
+            if (!isHttps && !isPrivateHttp && !isRemoteHttp)
             {
-                // 公网主机必须显式 https://；内网字面量 IP 走私有 HTTP 开关。
-                reason = "Public endpoints require an explicit https:// URL; plain HTTP is limited to private-network IPs";
+                reason = "Public endpoints require an explicit https:// URL, or enabling the plaintext-HTTP switch";
                 return false;
             }
 
@@ -389,7 +391,11 @@ namespace QuestMmdPlayer
                                      allowPrivateHttp &&
                                      settings.allow_insecure_http &&
                                      AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
-            if (uri.Scheme != Uri.UriSchemeHttps && !privateHttpAllowed)
+            // 公网明文逃生门：仅当用户在配对页显式开启明文开关、且配对链路
+            // 本身就是 http:// 公网地址时置位（见 BackendPairingController）。
+            var remoteHttpAllowed = uri.Scheme == Uri.UriSchemeHttp &&
+                                    settings.allow_insecure_remote_http;
+            if (uri.Scheme != Uri.UriSchemeHttps && !privateHttpAllowed && !remoteHttpAllowed)
             {
                 reason = "Paired configuration must use HTTPS unless private-LAN HTTP was explicitly enabled";
                 return false;

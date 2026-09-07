@@ -349,7 +349,9 @@ class _ConnectionPageState extends State<_ConnectionPage> {
             _ServerField(appState: app),
             const SizedBox(height: 8),
             _SwitchRow(
-              label: '私网 HTTP',
+              // 该开关同时是公网明文 HTTP 的本地 opt-in：开启后允许配对/入口
+              // 使用 http:// 公网地址，密钥与语音将明文传输，仅限自有服务器。
+              label: '允许明文 HTTP（内网/公网直连，公网明文有泄漏风险）',
               value: app.connection.privateHttp,
               onChanged: (bool v) => app.dispatch(
                   Cmd.pairingSetPrivateHttp, <String, dynamic>{'enabled': v}),

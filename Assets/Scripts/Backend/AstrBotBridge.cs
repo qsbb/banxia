@@ -228,11 +228,11 @@ namespace QuestMmdPlayer
             return false;
         }
 
-        private static bool IsUsableEndpoint(string url)
+        private static bool IsUsableEndpoint(string url, bool allowRemoteHttp)
         {
-            // 与 TryValidateSettings 同一传输策略：公网必须 HTTPS，明文 HTTP
-            // 只放行私网 IP 字面量（防 DNS rebinding）。列表项在添加时已要求
-            // 用户显式 opt-in，此处按持久化结果复核即可。
+            // 与 TryValidateSettings 同一传输策略：公网必须 HTTPS；明文 HTTP
+            // 放行私网 IP 字面量（防 DNS rebinding），或在用户显式 opt-in
+            // （allow_insecure_remote_http）时放行公网主机。
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host))
             {
                 return false;
@@ -241,7 +241,8 @@ namespace QuestMmdPlayer
             {
                 return true;
             }
-            return uri.Scheme == Uri.UriSchemeHttp && AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
+            return uri.Scheme == Uri.UriSchemeHttp &&
+                (AstrBotProtocol.IsPrivateNetworkHost(uri.Host) || allowRemoteHttp);
         }
 
         private static void SanitizeEndpointUrls(AstrBotBridgeSettings value)
@@ -253,7 +254,7 @@ namespace QuestMmdPlayer
                 {
                     var normalized = AstrBotProtocol.NormalizeBaseUrl(entry);
                     if (string.IsNullOrEmpty(normalized) || ContainsEndpoint(result, normalized) ||
-                        !IsUsableEndpoint(normalized))
+                        !IsUsableEndpoint(normalized, value.allow_insecure_remote_http))
                     {
                         continue;
                     }
@@ -269,7 +270,7 @@ namespace QuestMmdPlayer
         }
 
         /// <summary>Add a failover endpoint (validated, deduped, persisted, applied).</summary>
-        public bool TryAddEndpoint(string input, bool allowPrivateHttp, out string reason)
+        public bool TryAddEndpoint(string input, bool allowPrivateHttp, bool allowRemoteHttp, out string reason)
         {
             reason = string.Empty;
             if (settings == null)
@@ -277,7 +278,7 @@ namespace QuestMmdPlayer
                 reason = "后端尚未绑定，请先完成配对";
                 return false;
             }
-            if (!BackendPairingProtocol.TryBuildBridgeBaseUrl(input, out var baseUrl, out reason, allowPrivateHttp))
+            if (!BackendPairingProtocol.TryBuildBridgeBaseUrl(input, out var baseUrl, out reason, allowPrivateHttp, allowRemoteHttp))
             {
                 return false;
             }
@@ -299,6 +300,15 @@ namespace QuestMmdPlayer
                 }
             }
             settings.endpoint_urls.Add(baseUrl);
+            // 手动添加公网明文入口本身就是 opt-in：置位远端明文标志，保证
+            // 该入口在下次载入时不被消毒逻辑剔除（与配对链路置位逻辑一致）。
+            if (allowRemoteHttp &&
+                Uri.TryCreate(baseUrl, UriKind.Absolute, out var addedUri) &&
+                addedUri.Scheme == Uri.UriSchemeHttp &&
+                !AstrBotProtocol.IsPrivateNetworkHost(addedUri.Host))
+            {
+                settings.allow_insecure_remote_http = true;
+            }
             return PersistEndpoints(out reason);
         }
 

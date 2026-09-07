@@ -2848,10 +2848,10 @@ namespace QuestMmdPlayer
             }
             if (pairingStatusText != null)
             {
-                const string entryHint = "内网填 IP:端口；公网必须完整 https:// 地址";
+                const string entryHint = "内网填 IP:端口；公网填完整 域名:端口（明文需开明文开关）";
                 var connectionMode = pairing != null && pairing.PrivateHttpAllowed
-                    ? "连接模式：仅私网 IP 的 HTTP（测试）"
-                    : "连接模式：HTTPS";
+                    ? "连接模式：允许明文 HTTP（公网明文有泄漏风险）"
+                    : "连接模式：仅 HTTPS";
                 var bridge = LocalizeBridgeStatus(owner?.AstrBot?.Status ?? "AstrBot configuration not loaded");
                 var activeBaseUrl = owner?.AstrBot?.ActiveBaseUrl ?? string.Empty;
                 var endpointCount = owner?.AstrBot?.GetEndpointCandidates()?.Count ?? 0;

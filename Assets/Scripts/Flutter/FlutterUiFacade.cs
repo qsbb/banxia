@@ -788,7 +788,9 @@ namespace QuestMmdPlayer
             var payload = FlutterMessageProtocol.DeserializePayload<PairingEndpointUrlPayload>(payloadJson);
             var allowPrivateHttp = (Pairing != null && Pairing.PrivateHttpAllowed) ||
                 (AstrBot.ConfiguredBaseUrl.StartsWith("http://", StringComparison.Ordinal));
-            if (!AstrBot.TryAddEndpoint(payload == null ? string.Empty : payload.url, allowPrivateHttp, out var reason))
+            // 公网明文入口的 opt-in 同样来自配对页明文开关（用户已明确允许）。
+            var allowRemoteHttp = Pairing != null && Pairing.PrivateHttpAllowed;
+            if (!AstrBot.TryAddEndpoint(payload == null ? string.Empty : payload.url, allowPrivateHttp, allowRemoteHttp, out var reason))
             {
                 return FlutterCommandResult.Failure(string.IsNullOrEmpty(reason) ? "添加入口失败" : reason);
             }

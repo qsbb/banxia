@@ -249,10 +249,19 @@ namespace QuestMmdPlayer
             if (settings != null &&
                 Uri.TryCreate(endpoint, UriKind.Absolute, out var pairingUri) &&
                 pairingUri.Scheme == Uri.UriSchemeHttp &&
-                allowPrivateHttp &&
-                AstrBotProtocol.IsPrivateNetworkHost(pairingUri.Host))
+                allowPrivateHttp)
             {
-                settings.allow_insecure_http = true;
+                if (AstrBotProtocol.IsPrivateNetworkHost(pairingUri.Host))
+                {
+                    settings.allow_insecure_http = true;
+                }
+                else
+                {
+                    // 公网明文直连：配对页明文开关（allowPrivateHttp）开启即视为
+                    // 用户对"密钥/音频明文传输（仅限自有服务器）"的显式 opt-in，
+                    // 与服务端 allow_insecure_remote_http 逃生门配对使用。
+                    settings.allow_insecure_remote_http = true;
+                }
             }
             if (response == null || response.status != "ok" || response.data == null ||
                 response.data.pairing_protocol_version != BackendPairingProtocol.Version || settings == null)
