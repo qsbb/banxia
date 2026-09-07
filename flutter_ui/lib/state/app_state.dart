@@ -42,6 +42,11 @@ class ConnectionState {
   bool serverDraftDirty = false;
   bool privateHttp = true;
   bool connected = false;
+  // 有序候选入口列表（完整 URL，首项=最高优先级，通常为配对下发的绑定
+  // 地址），由引擎经 pairing.status 下发真值，UI 不做乐观修改。
+  List<String> endpoints = const <String>[];
+  // 当前实际承载流量的入口完整 URL，未绑定时为空串。
+  String activeEndpoint = '';
 }
 
 class ConversationState {
@@ -312,6 +317,15 @@ class AppState extends ChangeNotifier {
         }
         if (p?['privateHttp'] is bool) {
           connection.privateHttp = p!['privateHttp'] as bool;
+        }
+        // 入口优先级列表：引擎下发有序完整 URL（首项=最高优先级）。
+        if (p?['endpoints'] is List) {
+          connection.endpoints = (p!['endpoints'] as List)
+              .whereType<String>()
+              .toList(growable: false);
+        }
+        if (p?['activeEndpoint'] is String) {
+          connection.activeEndpoint = p!['activeEndpoint'] as String;
         }
         break;
       case Evt.conversationState:
@@ -763,6 +777,33 @@ class AppState extends ChangeNotifier {
     connection.serverDraft = value;
     connection.serverDraftDirty = value != connection.committedServer;
     _notify();
+  }
+
+  // ── 入口优先级列表（pairing.endpoint*）─────────────────────────────────
+  // 三个操作都不做乐观更新：引擎接受后回放 pairing.status 真值，失败原因
+  // （中文）由 dispatch 统一 toast。addEndpoint 返回是否被引擎接受，便于
+  // 输入框仅在成功时清空。
+  Future<bool> addEndpoint(String url) async {
+    final String value = url.trim();
+    if (value.isEmpty) {
+      showToast('请输入入口地址');
+      return false;
+    }
+    return dispatch(
+        Cmd.pairingEndpointAdd, <String, dynamic>{'url': value});
+  }
+
+  Future<void> removeEndpoint(String url) async {
+    if (url.trim().isEmpty) return;
+    await dispatch(
+        Cmd.pairingEndpointRemove, <String, dynamic>{'url': url});
+  }
+
+  /// [offset] 仅允许 -1（上移）/ 1（下移），其余值直接丢弃。
+  Future<void> moveEndpoint(String url, int offset) async {
+    if (url.trim().isEmpty || (offset != -1 && offset != 1)) return;
+    await dispatch(Cmd.pairingEndpointMove,
+        <String, dynamic>{'url': url, 'offset': offset});
   }
 
   // ── Settings helpers ──────────────────────────────────────────────────────

@@ -134,6 +134,9 @@ class LocalBridgeClient implements BridgeClient {
   bool _debugMode = false;
   String _server = '';
   String _pairingCode = '';
+  // 演示用候选入口列表（完整 URL，首项=最高优先级）与当前生效入口。
+  final List<String> _endpoints = <String>[];
+  String _activeEndpoint = '';
 
   final List<String> _log = <String>[
     '[Banxia] shell ready',
@@ -295,11 +298,18 @@ class LocalBridgeClient implements BridgeClient {
       case Cmd.pairingPair:
         _emit(Evt.connectionChanged,
             <String, dynamic>{'connected': true, 'bridgeStatus': '已连接'});
+        // 演示：配对成功后把绑定地址作为首个入口（最高优先级）。
+        if (_server.isNotEmpty && !_endpoints.contains(_server)) {
+          _endpoints.insert(0, _server);
+        }
+        _activeEndpoint = _endpoints.isEmpty ? '' : _endpoints.first;
         _emit(Evt.pairingStatus, <String, dynamic>{
           'status': '已连接',
           'server': _server,
           'privateHttp': p['privateHttp'] ?? _privateHttp,
           'codeLen': 0,
+          'endpoints': List<String>.from(_endpoints),
+          'activeEndpoint': _activeEndpoint,
         });
         _pairingCode = '';
         _emit(Evt.toast, <String, dynamic>{'message': '配对成功'});
@@ -317,13 +327,55 @@ class LocalBridgeClient implements BridgeClient {
         _emit(Evt.connectionChanged,
             <String, dynamic>{'connected': false, 'bridgeStatus': '未连接'});
         _server = '';
+        _endpoints.clear();
+        _activeEndpoint = '';
         _emit(Evt.pairingStatus, <String, dynamic>{
           'status': '未连接',
           'server': '',
           'privateHttp': _privateHttp,
           'codeLen': 0,
+          'endpoints': const <String>[],
+          'activeEndpoint': '',
         });
         _emit(Evt.toast, <String, dynamic>{'message': '已解除后端绑定'});
+        return _ok(id);
+      case Cmd.pairingEndpointAdd:
+        // 演示占位：只做基本去重，URL 规范化/校验由真实引擎负责。
+        final String addUrl = (p['url'] as String? ?? '').trim();
+        if (addUrl.isEmpty) {
+          return BridgeReply.fail(id, '入口地址不能为空');
+        }
+        if (_endpoints.contains(addUrl)) {
+          return BridgeReply.fail(id, '该入口已在列表中');
+        }
+        _endpoints.add(addUrl);
+        _emitEndpointStatus();
+        return _ok(id);
+      case Cmd.pairingEndpointRemove:
+        final String removeUrl = (p['url'] as String? ?? '').trim();
+        if (!_endpoints.remove(removeUrl)) {
+          return BridgeReply.fail(id, '入口不存在');
+        }
+        if (_activeEndpoint == removeUrl) {
+          _activeEndpoint = _endpoints.isEmpty ? '' : _endpoints.first;
+        }
+        _emitEndpointStatus();
+        return _ok(id);
+      case Cmd.pairingEndpointMove:
+        final String moveUrl = (p['url'] as String? ?? '').trim();
+        final int offset = (p['offset'] as num?)?.toInt() ?? 0;
+        final int index = _endpoints.indexOf(moveUrl);
+        if (index < 0 || (offset != -1 && offset != 1)) {
+          return BridgeReply.fail(id, '入口或偏移无效');
+        }
+        final int target = index + offset;
+        if (target < 0 || target >= _endpoints.length) {
+          return BridgeReply.fail(id, '已到边界，无法继续移动');
+        }
+        final String tmp = _endpoints[index];
+        _endpoints[index] = _endpoints[target];
+        _endpoints[target] = tmp;
+        _emitEndpointStatus();
         return _ok(id);
       case Cmd.qualityApplyPreset:
         _renderPreset = p['preset'] as String? ?? _renderPreset;
@@ -438,6 +490,18 @@ class LocalBridgeClient implements BridgeClient {
       default:
         return _ok(id);
     }
+  }
+
+  /// 演示：入口增删/排序后回放 pairing.status（真实引擎由网络层下发真值）。
+  void _emitEndpointStatus() {
+    _emit(Evt.pairingStatus, <String, dynamic>{
+      'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
+      'server': _server,
+      'privateHttp': _privateHttp,
+      'codeLen': _pairingCode.length,
+      'endpoints': List<String>.from(_endpoints),
+      'activeEndpoint': _activeEndpoint,
+    });
   }
 
   Map<String, dynamic> _modeEvent() => <String, dynamic>{

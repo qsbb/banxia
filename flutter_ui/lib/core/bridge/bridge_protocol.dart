@@ -35,6 +35,12 @@ abstract final class Cmd {
   static const String pairingPair = 'pairing.pair';
   static const String pairingReconnect = 'pairing.reconnect';
   static const String pairingClearBinding = 'pairing.clearBinding';
+  // 入口优先级列表：候选后端入口的增删与优先级调整。payload 中的 url 一律
+  // 使用列表项完整 URL 原文（引擎负责规范化与持久化），move 的 offset 仅
+  // 允许 -1（上移）/ 1（下移）。
+  static const String pairingEndpointAdd = 'pairing.endpointAdd';
+  static const String pairingEndpointRemove = 'pairing.endpointRemove';
+  static const String pairingEndpointMove = 'pairing.endpointMove';
   static const String qualityApplyPreset = 'quality.applyPreset';
   static const String qualityApplyPhysics = 'quality.applyPhysics';
   static const String qualityReset = 'quality.reset';

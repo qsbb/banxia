@@ -354,6 +354,8 @@ class _ConnectionPageState extends State<_ConnectionPage> {
               onChanged: (bool v) => app.dispatch(
                   Cmd.pairingSetPrivateHttp, <String, dynamic>{'enabled': v}),
             ),
+            const SizedBox(height: 16),
+            _EndpointSection(appState: app),
             const SizedBox(height: 8),
             InkWell(
               onTap: () => setState(() {
@@ -477,7 +479,9 @@ class _ServerFieldState extends State<_ServerField> {
         style: const TextStyle(fontSize: 16, color: BanxiaTokens.label),
         decoration: const InputDecoration(
           border: InputBorder.none,
-          hintText: '服务器域名 / IP:端口',
+          // 引擎对裸输入默认补 http:// 前缀，公网 HTTP 会被拒绝，因此公网
+          // 地址必须输入完整 https://域名:端口。
+          hintText: '内网 192.168.x.x:端口；公网必须 https://域名:端口',
           hintStyle:
               TextStyle(fontSize: 16, color: BanxiaTokens.labelSecondary),
           counterText: '',
@@ -550,6 +554,255 @@ class _SwitchRow extends StatelessWidget {
           ),
           Switch(value: value, onChanged: onChanged),
         ],
+      ),
+    );
+  }
+}
+
+// ── 入口优先级列表（pairing.endpoint*）──────────────────────────────────────
+/// 有序展示候选后端入口：首项=最高优先级；当前实际承载流量的入口（==
+/// activeEndpoint）加「生效中」标记。删除/排序一律把完整 URL 原文回传引擎，
+/// 列表显示时缩成 host:port。故障转移语义：仅网络不可达才顺延下一候选，
+/// 鉴权失败不转移；配对凭据对所有入口通用，换入口无需重新配对。
+class _EndpointSection extends StatefulWidget {
+  const _EndpointSection({required this.appState});
+
+  final AppState appState;
+
+  @override
+  State<_EndpointSection> createState() => _EndpointSectionState();
+}
+
+class _EndpointSectionState extends State<_EndpointSection> {
+  final TextEditingController _addController = TextEditingController();
+  final FocusNode _addFocus = FocusNode();
+
+  @override
+  void dispose() {
+    _addController.dispose();
+    _addFocus.dispose();
+    super.dispose();
+  }
+
+  /// 把完整 URL 缩成 host:port 显示；解析失败时原样返回。
+  static String _shortEndpoint(String url) {
+    final Uri? uri = Uri.tryParse(url);
+    if (uri == null || uri.host.isEmpty) return url;
+    return uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
+  }
+
+  Future<void> _submitAdd() async {
+    final AppState app = widget.appState;
+    final bool ok = await app.addEndpoint(_addController.text);
+    // 仅引擎接受后清空输入框，失败时保留用户输入便于修改。
+    if (ok && mounted) _addController.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final AppState app = widget.appState;
+    final List<String> endpoints = app.connection.endpoints;
+    final String active = app.connection.activeEndpoint;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        const Padding(
+          padding: EdgeInsets.fromLTRB(6, 0, 6, 6),
+          child: Text('入口优先级',
+              style: TextStyle(fontSize: 16, color: BanxiaTokens.label)),
+        ),
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: BanxiaTokens.bgCard,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: endpoints.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    '配对后自动生成首个入口；可添加内网/公网/兜底入口，排最上的优先使用',
+                    style: TextStyle(
+                        fontSize: 13, color: BanxiaTokens.labelSecondary),
+                  ),
+                )
+              : Column(
+                  children: <Widget>[
+                    for (int i = 0; i < endpoints.length; i++) ...<Widget>[
+                      if (i > 0)
+                        const Divider(
+                            height: 1,
+                            indent: 16,
+                            endIndent: 16,
+                            color: BanxiaTokens.separator),
+                      _EndpointRow(
+                        index: i,
+                        total: endpoints.length,
+                        display: _shortEndpoint(endpoints[i]),
+                        isActive: endpoints[i] == active,
+                        onMoveUp: () =>
+                            app.moveEndpoint(endpoints[i], -1),
+                        onMoveDown: () =>
+                            app.moveEndpoint(endpoints[i], 1),
+                        onRemove: () => app.removeEndpoint(endpoints[i]),
+                      ),
+                    ],
+                  ],
+                ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Container(
+                height: 44,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                decoration: BoxDecoration(
+                  color: BanxiaTokens.glass,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: TextField(
+                  controller: _addController,
+                  focusNode: _addFocus,
+                  maxLength: 512,
+                  maxLengthEnforcement: MaxLengthEnforcement.enforced,
+                  style: const TextStyle(
+                      fontSize: 14, color: BanxiaTokens.label),
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    hintText: '内网填 192.168.x.x:8520；公网必须 https:// 开头',
+                    hintStyle: TextStyle(
+                        fontSize: 14, color: BanxiaTokens.labelSecondary),
+                    counterText: '',
+                  ),
+                  onSubmitted: (_) => _submitAdd(),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: _submitAdd,
+              child: Container(
+                height: 44,
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: BanxiaTokens.tintFill,
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: const Text('添加',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white)),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// 入口列表单行：序号 + 简化地址（+「生效中」标记）+ 上移/下移/删除。
+/// 首项禁用上移、末项禁用下移；删除与排序回传完整 URL 原文。
+class _EndpointRow extends StatelessWidget {
+  const _EndpointRow({
+    required this.index,
+    required this.total,
+    required this.display,
+    required this.isActive,
+    required this.onMoveUp,
+    required this.onMoveDown,
+    required this.onRemove,
+  });
+
+  final int index;
+  final int total;
+  final String display;
+  final bool isActive;
+  final VoidCallback onMoveUp;
+  final VoidCallback onMoveDown;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool canUp = index > 0;
+    final bool canDown = index < total - 1;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+      child: Row(
+        children: <Widget>[
+          Text('${index + 1}',
+              style: const TextStyle(
+                  fontSize: 14, color: BanxiaTokens.labelTertiary)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(display,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 15, color: BanxiaTokens.label)),
+                if (isActive)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Text('生效中',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: BanxiaTokens.tint)),
+                  ),
+              ],
+            ),
+          ),
+          _EndpointAction(
+            icon: Icons.arrow_upward,
+            enabled: canUp,
+            onTap: onMoveUp,
+          ),
+          _EndpointAction(
+            icon: Icons.arrow_downward,
+            enabled: canDown,
+            onTap: onMoveDown,
+          ),
+          _EndpointAction(
+            icon: Icons.close,
+            enabled: true,
+            onTap: onRemove,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EndpointAction extends StatelessWidget {
+  const _EndpointAction({
+    required this.icon,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: enabled ? onTap : null,
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Icon(
+          icon,
+          size: 20,
+          color: enabled
+              ? BanxiaTokens.labelSecondary
+              : BanxiaTokens.labelTertiary,
+        ),
       ),
     );
   }
