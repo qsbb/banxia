@@ -24,6 +24,15 @@
 - 手机端移植方案见 `PHONE_PORT_PLAN_CN.md`（含 reality_companion 功能审计
   结论：只采纳摄像头单帧，其余不做）
 
+## 新会话上手（先读这节）
+
+- **第一步跑 `tools/remote.sh preflight`**：三台机器 + GitHub + 本机环境
+  红绿榜自检，每项失败附修复命令——别徒手试连接。
+- 机器坑已固化：症状→根因→解法见 `docs/MACHINE-OPS-CN.md`；二进制传输
+  用 `remote.sh pull-bin/push-bin`（Windows scp 会截断）；QA 广播用
+  `remote.sh qa <cmd>`；构建脚本模板在 `tools/build-host/`。
+- adb 一律走 `tools/remote.sh adb`（锁死 emulator-5554，物理机碰不到）。
+
 ## 关键事实速查
 
 - Unity 2022.3.62f3c1 / Quest 3 / Vulkan / IL2CPP ARM64；构建机
