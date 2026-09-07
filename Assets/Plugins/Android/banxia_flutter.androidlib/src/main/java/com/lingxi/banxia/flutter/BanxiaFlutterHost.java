@@ -698,7 +698,7 @@ public final class BanxiaFlutterHost {
                     if (cmd == null || cmd.trim().isEmpty()) {
                         return;
                     }
-                    deliverQaCommand(cmd.trim());
+                    deliverQaCommand(cmd.trim(), intent);
                 }
             };
             IntentFilter filter = new IntentFilter("com.lingxi.banxia.phone.QA_COMMAND");
@@ -735,10 +735,16 @@ public final class BanxiaFlutterHost {
      * from 1, so 1.5e9+ can never collide with a pending MethodChannel id. */
     private static final AtomicLong qaCommandIds = new AtomicLong(1500000000L);
 
-    private void deliverQaCommand(String cmd) {
+    private void deliverQaCommand(String cmd, Intent intent) {
         try {
             JSONObject payload = new JSONObject();
             payload.put("name", cmd);
+            // Optional passthrough args for parameterized QA commands
+            // (e.g. set_mode --es mode virtualScene).
+            String mode = intent == null ? null : intent.getStringExtra("mode");
+            if (mode != null && !mode.trim().isEmpty()) {
+                payload.put("mode", mode.trim());
+            }
             JSONObject envelope = new JSONObject();
             envelope.put("v", 1);
             envelope.put("id", qaCommandIds.getAndIncrement());

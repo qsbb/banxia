@@ -152,6 +152,8 @@ namespace QuestMmdPlayer
         public const string SkinAudit = "skin_audit";
         /// <summary>确定性进场景（模型未加载则先加载第一个已安装模型），供 QA 广播驱动。</summary>
         public const string EnterScene = "enter_scene";
+        /// <summary>确定性切换同框模式（--es mode virtualScene|videoCall|arReality），供 QA 广播驱动。</summary>
+        public const string SetMode = "set_mode";
     }
 
     /// <summary>

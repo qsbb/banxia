@@ -1338,6 +1338,16 @@ namespace QuestMmdPlayer
             Debug.Log("[BanxiaQA] qa.command=" + name);
             switch (name)
             {
+                case FlutterQaCommands.SetMode:
+                {
+                    // QA 确定性切换同框模式（UI 卡片点按在盲测中坐标不可靠）：
+                    // am broadcast ... --es cmd set_mode --es mode virtualScene
+                    if (payload == null || string.IsNullOrWhiteSpace(payload.mode))
+                    {
+                        return FlutterCommandResult.Failure("set_mode 缺少 mode 参数");
+                    }
+                    return HandleCopresenceSwitchMode("{\"mode\":\"" + payload.mode + "\"}");
+                }
                 case FlutterQaCommands.LoadFirstModel:
                     if (ModelLoader == null)
                     {
@@ -2302,6 +2312,6 @@ namespace QuestMmdPlayer
     [Serializable] public sealed class SceneGesturePayload { public float dx; public float dy; public float scale; }
     /// <summary>设置项快照（settings.state 事件）：启动恢复与每次切换后推送，Flutter 侧以其为准显示开关。</summary>
     [Serializable] public sealed class FlutterSettingsStatePayload { public bool hud; public bool framingGrid; public bool camera; public bool debugMode; }
-    [Serializable] public sealed class QaCommandPayload { public string name = string.Empty; public string args = string.Empty; }
+    [Serializable] public sealed class QaCommandPayload { public string name = string.Empty; public string args = string.Empty; public string mode = string.Empty; }
     [Serializable] public sealed class QaSendTextArgs { public string text = string.Empty; }
 }
