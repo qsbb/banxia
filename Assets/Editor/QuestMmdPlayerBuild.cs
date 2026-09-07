@@ -1,4 +1,4 @@
-﻿#if UNITY_EDITOR
+#if UNITY_EDITOR
 using System;
 using System.IO;
 using System.Linq;
@@ -39,7 +39,7 @@ namespace QuestMmdPlayer.Editor
         private const string PhoneScriptingDefine = "BANXIA_PHONE";
         // Keep the semantic release and append the build date so an installed APK
         // can be distinguished from an older package without guessing its hash.
-        public const string AndroidVersionName = "0.3.2.20260907";
+        public const string AndroidVersionName = "0.3.3.20260907";
         public const int AndroidVersionCode = 20260907;
         private const string OpenXrLoader = "UnityEngine.XR.OpenXR.OpenXRLoader";
         private const string XrSettingsPath = "Assets/XR/XRGeneralSettingsPerBuildTarget.asset";
