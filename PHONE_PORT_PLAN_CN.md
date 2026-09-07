@@ -157,6 +157,17 @@ adb install 到手机（USB 或 5555 无线）→ 手机 adb push 模型到
 banxia 已有 `allowPrivateHttp` 私网 HTTP 白名单机制，与该手册
 `lanRelease`（可信私网允许 HTTP）/`release`（仅 HTTPS）的分包策略同构。
 
+> **2026-09-07 落地记录**：已按路线 D 落地（nginx TLS 反代 + DDNS 域名，
+> 详见 `docs/REMOTE-ACCESS-CN.md`），并叠加"端点优先级列表"——路线 A/B/C/D
+> 从互斥选型变成客户端有序候选（内网→公网→兜底，用户可自定义排序），
+> 网络层不可达自动顺延，引擎层双端共享。
+
+### 3.4.1 端点优先级列表双端同步状态
+
+- 引擎层（平台无关）：故障转移与候选列表双端自动共享，无平台分支
+- 手机端：设置页列表管理 UI 全量交付
+- **待同步（Quest）**：面板仅显示生效入口与候选数；列表管理 UI（增删/排序）待补
+
 ## 3.5 参考 `astrbot_plugin_reality_companion`（menglimi/现实触及插件）
 
 > 该项目是 AstrBot 生态的"现实设备联动"插件（第三方，**只参考、不改其源码**），
