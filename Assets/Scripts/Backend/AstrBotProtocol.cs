@@ -19,6 +19,12 @@ namespace QuestMmdPlayer
         public string group_id = "";
         public string relationship_profile_id = "";
         public bool allow_insecure_http;
+        /// <summary>
+        /// Ordered failover candidates (plugin base URLs). base_url remains the
+        /// primary entry; these are tried in order when the active entry is
+        /// unreachable at the network layer. Same credentials serve all entries.
+        /// </summary>
+        public List<string> endpoint_urls;
         public int audio_upload_batch_bytes = AstrBotProtocol.DefaultAudioUploadBatchBytes;
     }
 

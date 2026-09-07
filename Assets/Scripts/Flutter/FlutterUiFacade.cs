@@ -62,6 +62,7 @@ namespace QuestMmdPlayer
         // Diff state for polled events.
         private int lastConnectionState = -1;
         private string lastBridgeStatus = string.Empty;
+        private string lastActiveEndpoint = string.Empty;
         private string lastTranscript = string.Empty;
         private string lastReplyText = string.Empty;
         private string lastSuggestionsKey = string.Empty;
@@ -234,6 +235,9 @@ namespace QuestMmdPlayer
                 case FlutterCommands.PairingPair: return HandlePairingPair();
                 case FlutterCommands.PairingReconnect: return HandlePairingReconnect();
                 case FlutterCommands.PairingClearBinding: return HandlePairingClearBinding();
+                case FlutterCommands.PairingEndpointAdd: return HandlePairingEndpointAdd(payloadJson);
+                case FlutterCommands.PairingEndpointRemove: return HandlePairingEndpointRemove(payloadJson);
+                case FlutterCommands.PairingEndpointMove: return HandlePairingEndpointMove(payloadJson);
 
                 case FlutterCommands.QualityApplyPreset: return HandleQualityApplyPreset(payloadJson);
                 case FlutterCommands.QualityApplyPhysics: return HandleQualityApplyPhysics(payloadJson);
@@ -768,6 +772,63 @@ namespace QuestMmdPlayer
             pairingCodeBuffer = string.Empty;
             PublishPairingStatus();
             PublishToast("已解除后端绑定");
+            return FlutterCommandResult.Success();
+        }
+
+        // ------------------------------------------------------------------
+        // Endpoint priority list (failover candidates)
+        // ------------------------------------------------------------------
+
+        private FlutterCommandResult HandlePairingEndpointAdd(string payloadJson)
+        {
+            if (AstrBot == null)
+            {
+                return FlutterCommandResult.Failure("后端桥不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<PairingEndpointUrlPayload>(payloadJson);
+            var allowPrivateHttp = (Pairing != null && Pairing.PrivateHttpAllowed) ||
+                (AstrBot.ConfiguredBaseUrl.StartsWith("http://", StringComparison.Ordinal));
+            if (!AstrBot.TryAddEndpoint(payload == null ? string.Empty : payload.url, allowPrivateHttp, out var reason))
+            {
+                return FlutterCommandResult.Failure(string.IsNullOrEmpty(reason) ? "添加入口失败" : reason);
+            }
+            PublishPairingStatus();
+            PublishToast("已添加入口");
+            return FlutterCommandResult.Success();
+        }
+
+        private FlutterCommandResult HandlePairingEndpointRemove(string payloadJson)
+        {
+            if (AstrBot == null)
+            {
+                return FlutterCommandResult.Failure("后端桥不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<PairingEndpointUrlPayload>(payloadJson);
+            if (!AstrBot.TryRemoveEndpoint(payload == null ? string.Empty : payload.url, out var reason))
+            {
+                return FlutterCommandResult.Failure(string.IsNullOrEmpty(reason) ? "移除入口失败" : reason);
+            }
+            PublishPairingStatus();
+            PublishToast("已移除入口");
+            return FlutterCommandResult.Success();
+        }
+
+        private FlutterCommandResult HandlePairingEndpointMove(string payloadJson)
+        {
+            if (AstrBot == null)
+            {
+                return FlutterCommandResult.Failure("后端桥不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<PairingEndpointMovePayload>(payloadJson);
+            if (payload == null || payload.offset == 0)
+            {
+                return FlutterCommandResult.Failure("排序参数无效");
+            }
+            if (!AstrBot.TryMoveEndpoint(payload.url, payload.offset, out var reason))
+            {
+                return FlutterCommandResult.Failure(string.IsNullOrEmpty(reason) ? "调整优先级失败" : reason);
+            }
+            PublishPairingStatus();
             return FlutterCommandResult.Success();
         }
 
@@ -1669,13 +1730,16 @@ namespace QuestMmdPlayer
 
         private void PublishPairingStatus()
         {
+            var candidates = AstrBot == null ? null : AstrBot.GetEndpointCandidates();
             PublishEvent(FlutterEvents.PairingStatus, new FlutterPairingStatusPayload
             {
                 status = Pairing == null ? string.Empty : Pairing.Status,
                 server = Pairing == null ? string.Empty :
                     BackendPairingProtocol.GetServerEntry(Pairing.PairingServerEndpoint),
                 privateHttp = Pairing != null && Pairing.PrivateHttpAllowed,
-                codeLen = pairingCodeBuffer.Length
+                codeLen = pairingCodeBuffer.Length,
+                endpoints = candidates == null ? new string[0] : candidates.ToArray(),
+                activeEndpoint = AstrBot == null ? string.Empty : AstrBot.ActiveBaseUrl
             });
         }
 
@@ -1788,6 +1852,13 @@ namespace QuestMmdPlayer
                     connected = connected,
                     bridgeStatus = status
                 });
+            }
+            // 端点故障转移发生时刷新配对状态负载（生效入口高亮）。
+            var activeEndpoint = AstrBot == null ? string.Empty : AstrBot.ActiveBaseUrl;
+            if (!string.Equals(activeEndpoint, lastActiveEndpoint, StringComparison.Ordinal))
+            {
+                lastActiveEndpoint = activeEndpoint;
+                PublishPairingStatus();
             }
         }
 
@@ -2298,6 +2369,8 @@ namespace QuestMmdPlayer
     [Serializable] public sealed class PairingSetServerPayload { public string server = string.Empty; }
     [Serializable] public sealed class PairingSetPrivateHttpPayload { public bool enabled; }
     [Serializable] public sealed class PairingDigitPayload { public string op = string.Empty; public string digit = string.Empty; }
+    [Serializable] public sealed class PairingEndpointUrlPayload { public string url = string.Empty; }
+    [Serializable] public sealed class PairingEndpointMovePayload { public string url = string.Empty; public int offset; }
     [Serializable] public sealed class QualityApplyPresetPayload { public string preset = string.Empty; }
     [Serializable] public sealed class QualityApplyPhysicsPayload { public string preset = string.Empty; }
     [Serializable] public sealed class SettingsTargetFpsPayload { public int fps; }

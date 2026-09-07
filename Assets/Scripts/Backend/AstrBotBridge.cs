@@ -119,6 +119,13 @@ namespace QuestMmdPlayer
         private float audioUploadStartedAt;
         private float audioEndRequestedAt = -1f;
         private float nextSessionStartAt;
+        // 端点优先级列表（故障转移）：候选 = settings.endpoint_urls（首项通常为
+        // 配对下发的 base_url）。仅网络层不可达（ConnectionError）才冷却当前
+        // 入口并顺延；鉴权/协议错误不转移（防掩盖配置错误 + 防降级攻击）。
+        private readonly Dictionary<string, float> endpointCooldownUntil =
+            new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        private const float EndpointCooldownSeconds = 120f;
+        private string activeBaseUrl = string.Empty;
         private RuntimeDebugLog diagnostics;
         private long sseConnectStartedAt;
         private long audioUploadDiagnosticStartedAt;
@@ -182,6 +189,191 @@ namespace QuestMmdPlayer
         public bool IsConfigured { get; private set; }
         public string ConfigurationPath => Path.Combine(Application.persistentDataPath, configurationFileName);
         public string ConfiguredBaseUrl => settings == null ? string.Empty : settings.base_url ?? string.Empty;
+        /// <summary>Base URL currently carrying traffic (failover-selected).</summary>
+        public string ActiveBaseUrl => string.IsNullOrEmpty(activeBaseUrl) ? ConfiguredBaseUrl : activeBaseUrl;
+
+        /// <summary>Ordered failover candidates (sanitized snapshot; empty when unpaired).</summary>
+        public List<string> GetEndpointCandidates()
+        {
+            var candidates = new List<string>();
+            if (settings == null || settings.endpoint_urls == null)
+            {
+                var fallback = settings == null ? string.Empty : AstrBotProtocol.NormalizeBaseUrl(settings.base_url);
+                if (!string.IsNullOrEmpty(fallback))
+                {
+                    candidates.Add(fallback);
+                }
+                return candidates;
+            }
+            foreach (var entry in settings.endpoint_urls)
+            {
+                var normalized = AstrBotProtocol.NormalizeBaseUrl(entry);
+                if (!string.IsNullOrEmpty(normalized) && !ContainsEndpoint(candidates, normalized))
+                {
+                    candidates.Add(normalized);
+                }
+            }
+            return candidates;
+        }
+
+        private static bool ContainsEndpoint(List<string> list, string value)
+        {
+            for (var index = 0; index < list.Count; index++)
+            {
+                if (string.Equals(list[index], value, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsUsableEndpoint(string url)
+        {
+            // 与 TryValidateSettings 同一传输策略：公网必须 HTTPS，明文 HTTP
+            // 只放行私网 IP 字面量（防 DNS rebinding）。列表项在添加时已要求
+            // 用户显式 opt-in，此处按持久化结果复核即可。
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host))
+            {
+                return false;
+            }
+            if (uri.Scheme == Uri.UriSchemeHttps)
+            {
+                return true;
+            }
+            return uri.Scheme == Uri.UriSchemeHttp && AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
+        }
+
+        private static void SanitizeEndpointUrls(AstrBotBridgeSettings value)
+        {
+            var result = new List<string>();
+            if (value.endpoint_urls != null)
+            {
+                foreach (var entry in value.endpoint_urls)
+                {
+                    var normalized = AstrBotProtocol.NormalizeBaseUrl(entry);
+                    if (string.IsNullOrEmpty(normalized) || ContainsEndpoint(result, normalized) ||
+                        !IsUsableEndpoint(normalized))
+                    {
+                        continue;
+                    }
+                    result.Add(normalized);
+                }
+            }
+            var primary = AstrBotProtocol.NormalizeBaseUrl(value.base_url);
+            if (result.Count == 0 && !string.IsNullOrEmpty(primary))
+            {
+                result.Add(primary);
+            }
+            value.endpoint_urls = result;
+        }
+
+        /// <summary>Add a failover endpoint (validated, deduped, persisted, applied).</summary>
+        public bool TryAddEndpoint(string input, bool allowPrivateHttp, out string reason)
+        {
+            reason = string.Empty;
+            if (settings == null)
+            {
+                reason = "后端尚未绑定，请先完成配对";
+                return false;
+            }
+            if (!BackendPairingProtocol.TryBuildBridgeBaseUrl(input, out var baseUrl, out reason, allowPrivateHttp))
+            {
+                return false;
+            }
+            if (ContainsEndpoint(GetEndpointCandidates(), baseUrl))
+            {
+                reason = "该入口已在列表中";
+                return false;
+            }
+            if (settings.endpoint_urls == null)
+            {
+                settings.endpoint_urls = new List<string>();
+            }
+            if (settings.endpoint_urls.Count == 0)
+            {
+                var primary = AstrBotProtocol.NormalizeBaseUrl(settings.base_url);
+                if (!string.IsNullOrEmpty(primary))
+                {
+                    settings.endpoint_urls.Add(primary);
+                }
+            }
+            settings.endpoint_urls.Add(baseUrl);
+            return PersistEndpoints(out reason);
+        }
+
+        /// <summary>Remove a failover endpoint. The last remaining entry cannot be removed.</summary>
+        public bool TryRemoveEndpoint(string url, out string reason)
+        {
+            reason = string.Empty;
+            if (settings == null || settings.endpoint_urls == null)
+            {
+                reason = "端点列表为空";
+                return false;
+            }
+            var index = IndexOfEndpoint(settings.endpoint_urls, url);
+            if (index < 0)
+            {
+                reason = "该入口不在列表中";
+                return false;
+            }
+            if (settings.endpoint_urls.Count <= 1)
+            {
+                reason = "至少保留一个入口";
+                return false;
+            }
+            settings.endpoint_urls.RemoveAt(index);
+            return PersistEndpoints(out reason);
+        }
+
+        /// <summary>Reorder a failover endpoint by offset (-1 up / +1 down).</summary>
+        public bool TryMoveEndpoint(string url, int offset, out string reason)
+        {
+            reason = string.Empty;
+            if (settings == null || settings.endpoint_urls == null)
+            {
+                reason = "端点列表为空";
+                return false;
+            }
+            var index = IndexOfEndpoint(settings.endpoint_urls, url);
+            if (index < 0)
+            {
+                reason = "该入口不在列表中";
+                return false;
+            }
+            var target = Mathf.Clamp(index + offset, 0, settings.endpoint_urls.Count - 1);
+            if (target == index)
+            {
+                return true;
+            }
+            var entry = settings.endpoint_urls[index];
+            settings.endpoint_urls.RemoveAt(index);
+            settings.endpoint_urls.Insert(target, entry);
+            return PersistEndpoints(out reason);
+        }
+
+        private static int IndexOfEndpoint(List<string> list, string url)
+        {
+            var normalized = AstrBotProtocol.NormalizeBaseUrl(url);
+            for (var index = 0; index < list.Count; index++)
+            {
+                if (string.Equals(list[index], normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    return index;
+                }
+            }
+            return -1;
+        }
+
+        private bool PersistEndpoints(out string reason)
+        {
+            if (!BackendPairingProtocol.TryWriteSettingsAtomically(ConfigurationPath, settings, out reason, true))
+            {
+                return false;
+            }
+            ReloadConfiguration();
+            return true;
+        }
         public string Status { get; private set; } = "AstrBot configuration not loaded";
         public string BackendChainStatus { get; private set; } = "chain unknown";
         public int QueuedInputAudioBytes => queuedInputAudioBytes;
@@ -977,6 +1169,7 @@ namespace QuestMmdPlayer
                                 ? "ready"
                                 : "unavailable";
                         healthReady = true;
+                        endpointCooldownUntil.Clear();
                         SetStatus("AstrBot health check ready");
                         RecordStage(
                             "health",
@@ -1002,6 +1195,7 @@ namespace QuestMmdPlayer
                         ReadFailureCode(request, "health_failed"),
                         request.responseCode,
                         ElapsedMs(startedAt));
+                    NoteActiveEndpointUnreachable(request);
                 }
             }
         }
@@ -1089,6 +1283,7 @@ namespace QuestMmdPlayer
                         ReadFailureCode(request, "session_start_failed"),
                         request.responseCode,
                         ElapsedMs(startedAt));
+                    NoteActiveEndpointUnreachable(request);
                 }
             }
         }
@@ -1174,6 +1369,7 @@ namespace QuestMmdPlayer
                     EmitActiveTurnError(
                         "sse_disconnected",
                         HttpFailure("SSE disconnected", request));
+                    NoteActiveEndpointUnreachable(request);
                     SetStatus(HttpFailure("SSE disconnected", request));
                     RecordStage(
                         "sse",
@@ -1791,6 +1987,9 @@ namespace QuestMmdPlayer
                 // This is the single transport-policy gate. Plain HTTP is accepted
                 // only after local opt-in and only for a literal private-network IP.
                 settings.base_url = AstrBotProtocol.NormalizeBaseUrl(settings.base_url);
+                SanitizeEndpointUrls(settings);
+                var candidates = GetEndpointCandidates();
+                activeBaseUrl = candidates.Count > 0 ? candidates[0] : string.Empty;
                 IsConfigured = true;
                 SetStatus("AstrBot config loaded");
                 RecordStage("configuration", "ready", "configuration_ready");
@@ -1910,7 +2109,50 @@ namespace QuestMmdPlayer
 
         private string Endpoint(string relative)
         {
-            return settings.base_url + "/" + relative.TrimStart('/');
+            var baseUrl = string.IsNullOrEmpty(activeBaseUrl) ? settings.base_url : activeBaseUrl;
+            return baseUrl + "/" + relative.TrimStart('/');
+        }
+
+        /// <summary>
+        /// Failover trigger: only a network-layer ConnectionError marks the
+        /// active endpoint unreachable. Authentication (401) and protocol
+        /// errors (4xx/5xx) never trigger failover — they indicate a
+        /// configuration problem, and silently switching endpoints would mask
+        /// it (and could be abused as a downgrade path).
+        /// </summary>
+        private void NoteActiveEndpointUnreachable(UnityWebRequest request)
+        {
+            if (request == null || request.result != UnityWebRequest.Result.ConnectionError)
+            {
+                return;
+            }
+            var candidates = GetEndpointCandidates();
+            if (candidates.Count < 2)
+            {
+                return;
+            }
+            var now = Time.unscaledTime;
+            var failed = ActiveBaseUrl;
+            endpointCooldownUntil[failed] = now + EndpointCooldownSeconds;
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                var candidate = candidates[index];
+                if (string.Equals(candidate, failed, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (endpointCooldownUntil.TryGetValue(candidate, out var until) && now < until)
+                {
+                    continue;
+                }
+                activeBaseUrl = candidate;
+                SetStatus("Endpoint unreachable; failing over to " +
+                    BackendPairingProtocol.GetServerEntry(candidate));
+                RecordStage("endpoint", "failover", "connection_error", 0, -1);
+                Debug.Log("[AstrBotBridge] Endpoint failover: " + failed + " -> " + candidate, this);
+                return;
+            }
+            // 所有候选均在冷却期：留在当前入口，由连接循环按既有节奏重试。
         }
 
         private static bool Succeeded(UnityWebRequest request)

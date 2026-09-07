@@ -59,6 +59,10 @@ namespace QuestMmdPlayer
         public const string PairingPair = "pairing.pair";
         public const string PairingReconnect = "pairing.reconnect";
         public const string PairingClearBinding = "pairing.clearBinding";
+        // 端点优先级列表（故障转移候选，有序；同一份凭据对所有入口通用）
+        public const string PairingEndpointAdd = "pairing.endpointAdd";
+        public const string PairingEndpointRemove = "pairing.endpointRemove";
+        public const string PairingEndpointMove = "pairing.endpointMove";
 
         public const string QualityApplyPreset = "quality.applyPreset";
         public const string QualityApplyPhysics = "quality.applyPhysics";
@@ -421,6 +425,9 @@ namespace QuestMmdPlayer
                 FlutterCommands.PairingPair,
                 FlutterCommands.PairingReconnect,
                 FlutterCommands.PairingClearBinding,
+                FlutterCommands.PairingEndpointAdd,
+                FlutterCommands.PairingEndpointRemove,
+                FlutterCommands.PairingEndpointMove,
                 FlutterCommands.QualityApplyPreset,
                 FlutterCommands.QualityApplyPhysics,
                 FlutterCommands.QualityReset,
@@ -492,6 +499,10 @@ namespace QuestMmdPlayer
         public string server = string.Empty;
         public bool privateHttp;
         public int codeLen;
+        /// <summary>Ordered failover candidates (display form, host:port/path).</summary>
+        public string[] endpoints = new string[0];
+        /// <summary>Entry currently carrying traffic; empty when unpaired.</summary>
+        public string activeEndpoint = string.Empty;
     }
 
     [Serializable] public sealed class FlutterConversationStatePayload { public string state = string.Empty; public string transportStatus = string.Empty; public string lastError = string.Empty; }

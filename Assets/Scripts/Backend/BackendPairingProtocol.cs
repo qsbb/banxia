@@ -127,6 +127,78 @@ namespace QuestMmdPlayer
             return true;
         }
 
+        /// <summary>
+        /// Normalize user input into a Bridge plugin base URL (…/api/v1/plugins/
+        /// extensions/&lt;plugin&gt;) for the endpoint failover list. Transport gate
+        /// mirrors AstrBotProtocol.TryValidateSettings: HTTPS everywhere, plain
+        /// HTTP only for literal private-network IPs with the local opt-in.
+        /// </summary>
+        public static bool TryBuildBridgeBaseUrl(string serverOrBaseUrl, out string baseUrl, out string reason, bool allowPrivateHttp = true)
+        {
+            baseUrl = string.Empty;
+            reason = string.Empty;
+            var value = (serverOrBaseUrl ?? string.Empty).Trim();
+            if (value.Length > MaxServerInputLength)
+            {
+                reason = "Endpoint input exceeds the length limit";
+                return false;
+            }
+            if (string.IsNullOrEmpty(value))
+            {
+                reason = "Endpoint is required";
+                return false;
+            }
+            if (!value.Contains("://"))
+            {
+                value = "http://" + value;
+            }
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                string.IsNullOrEmpty(uri.Host) ||
+                !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) ||
+                !string.IsNullOrEmpty(uri.Fragment))
+            {
+                reason = "Endpoint must be an absolute URL without credentials, query, or fragment";
+                return false;
+            }
+
+            var isHttps = uri.Scheme == Uri.UriSchemeHttps;
+            var isPrivateHttp = uri.Scheme == Uri.UriSchemeHttp &&
+                allowPrivateHttp && AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
+            if (!isHttps && !isPrivateHttp)
+            {
+                // 公网主机必须显式 https://；内网字面量 IP 走私有 HTTP 开关。
+                reason = "Public endpoints require an explicit https:// URL; plain HTTP is limited to private-network IPs";
+                return false;
+            }
+
+            var path = uri.AbsolutePath.TrimEnd('/');
+            if (string.IsNullOrEmpty(path) ||
+                string.Equals(path, PluginApiPath, StringComparison.Ordinal) ||
+                string.Equals(path, ExchangePath, StringComparison.Ordinal))
+            {
+                path = PluginApiPath;
+            }
+            else if (string.Equals(path, LegacyPluginApiPath, StringComparison.Ordinal) ||
+                     string.Equals(path, LegacyExchangePath, StringComparison.Ordinal))
+            {
+                path = PluginApiPath;
+            }
+            else
+            {
+                reason = "Endpoint path is not an Embodiment Bridge endpoint";
+                return false;
+            }
+
+            var builder = new UriBuilder(uri)
+            {
+                Path = path,
+                Query = string.Empty,
+                Fragment = string.Empty
+            };
+            baseUrl = builder.Uri.AbsoluteUri.TrimEnd('/');
+            return true;
+        }
+
         public static string GetServerEntry(string endpoint)
         {
             if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ||

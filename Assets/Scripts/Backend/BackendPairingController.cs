@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -259,6 +260,27 @@ namespace QuestMmdPlayer
                 SetStatus("Pairing response is invalid or incompatible");
                 pairingRoutine = null;
                 yield break;
+            }
+            // 跨重新配对保留用户维护的端点优先级列表：服务端下发的 configuration
+            // 不含该字段，把既有列表（去重、剔除新 base_url 后）并入，新配对地址置顶。
+            var preservedEndpoints = bridge == null ? null : bridge.GetEndpointCandidates();
+            if (preservedEndpoints != null && preservedEndpoints.Count > 0)
+            {
+                var merged = new List<string>();
+                var primary = AstrBotProtocol.NormalizeBaseUrl(settings.base_url);
+                if (!string.IsNullOrEmpty(primary))
+                {
+                    merged.Add(primary);
+                }
+                foreach (var entry in preservedEndpoints)
+                {
+                    if (string.IsNullOrWhiteSpace(entry) || merged.Contains(entry))
+                    {
+                        continue;
+                    }
+                    merged.Add(entry);
+                }
+                settings.endpoint_urls = merged;
             }
             if (!BackendPairingProtocol.TryWriteSettingsAtomically(
                 bridge == null ? string.Empty : bridge.ConfigurationPath,

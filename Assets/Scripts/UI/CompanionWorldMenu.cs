@@ -2848,12 +2848,18 @@ namespace QuestMmdPlayer
             }
             if (pairingStatusText != null)
             {
-                const string entryHint = "只需填写域名或 IP:端口";
+                const string entryHint = "内网填 IP:端口；公网必须完整 https:// 地址";
                 var connectionMode = pairing != null && pairing.PrivateHttpAllowed
                     ? "连接模式：仅私网 IP 的 HTTP（测试）"
                     : "连接模式：HTTPS";
                 var bridge = LocalizeBridgeStatus(owner?.AstrBot?.Status ?? "AstrBot configuration not loaded");
-                pairingStatusText.text = "实时连接：" + bridge + "\n配对：" + LocalizePairingStatus(pairing?.Status ?? "Pairing controller offline") + "\n" + entryHint + "   |   " + connectionMode;
+                var activeBaseUrl = owner?.AstrBot?.ActiveBaseUrl ?? string.Empty;
+                var endpointCount = owner?.AstrBot?.GetEndpointCandidates()?.Count ?? 0;
+                var activeLine = string.IsNullOrEmpty(activeBaseUrl)
+                    ? string.Empty
+                    : "\n生效入口：" + BackendPairingProtocol.GetServerEntry(activeBaseUrl) +
+                        "（列表共 " + endpointCount + " 个，故障自动顺延）";
+                pairingStatusText.text = "实时连接：" + bridge + "\n配对：" + LocalizePairingStatus(pairing?.Status ?? "Pairing controller offline") + "\n" + entryHint + "   |   " + connectionMode + activeLine;
             }
         }
 
@@ -2901,6 +2907,11 @@ namespace QuestMmdPlayer
             if (value.StartsWith("Health check failed (HTTP 401)", StringComparison.Ordinal)) return "认证失败";
             if (value.StartsWith("Health check failed", StringComparison.Ordinal)) return "健康检查失败";
             if (value.StartsWith("Connection failed", StringComparison.Ordinal)) return "无法连接服务器";
+            const string failoverPrefix = "Endpoint unreachable; failing over to ";
+            if (value.StartsWith(failoverPrefix, StringComparison.Ordinal))
+            {
+                return "入口不可达，自动切换到 " + value.Substring(failoverPrefix.Length);
+            }
             const string readyPrefix = "AstrBot session ready (";
             if (value.StartsWith(readyPrefix, StringComparison.Ordinal) &&
                 value.EndsWith(")", StringComparison.Ordinal))
