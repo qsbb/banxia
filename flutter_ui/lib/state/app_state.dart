@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../core/bridge/bridge_client.dart';
@@ -8,6 +7,10 @@ import '../core/bridge/bridge_protocol.dart';
 
 /// Root shell top-level mode: menu (tab shell) or scene (full-screen overlay).
 enum UiMode { menu, scene }
+
+/// Global navigator handle so the system-back handler can pop pushed sub-pages
+/// (e.g. 画质设置) without a BuildContext. Wired to MaterialApp in main.dart.
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 /// Bottom tab index (design §2.1).
 enum AppTab { companion, chat, actions, settings }
@@ -457,11 +460,19 @@ class AppState extends ChangeNotifier {
       unawaited(returnToMenu());
       return;
     }
+    // Pushed sub-pages (画质设置等) pop before the tab fallback.
+    final NavigatorState? nav = appNavigatorKey.currentState;
+    if (nav != null && nav.canPop()) {
+      nav.pop();
+      return;
+    }
     if (tab.value != AppTab.companion) {
       switchTab(AppTab.companion);
       return;
     }
-    SystemNavigator.pop();
+    // SystemNavigator.pop no-ops in the panel-hosted engine (no activity
+    // binding), so backgrounding goes through the Unity activity.
+    unawaited(dispatch(Cmd.systemMinimize));
   }
 
   // ── Scene gesture passthrough (2026-09 fix) ───────────────────────────────

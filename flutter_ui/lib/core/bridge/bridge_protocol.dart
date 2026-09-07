@@ -57,6 +57,9 @@ abstract final class Cmd {
   static const String sceneOrbit = 'scene.orbit';
   static const String sceneZoom = 'scene.zoom';
   static const String scenePanAvatar = 'scene.panAvatar';
+  // Background the app: SystemNavigator.pop is a no-op for the panel-hosted
+  // engine, so the Unity activity performs moveTaskToBack on our behalf.
+  static const String systemMinimize = 'system.minimize';
   static const String updateCheck = 'update.check';
   static const String updateInstall = 'update.install';
   static const String logRefresh = 'log.refresh';

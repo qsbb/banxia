@@ -92,6 +92,7 @@ class BanxiaApp extends StatelessWidget {
         splashFactory: InkSparkle.splashFactory,
         fontFamily: 'Roboto',
       ),
+      navigatorKey: appNavigatorKey,
       home: RootShell(appState: appState),
     );
   }

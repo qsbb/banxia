@@ -83,6 +83,9 @@ namespace QuestMmdPlayer
         public const string SceneOrbit = "scene.orbit";
         public const string SceneZoom = "scene.zoom";
         public const string ScenePanAvatar = "scene.panAvatar";
+        // 应用最小化：Flutter SystemNavigator.pop 在面板式宿主（无 Activity
+        // 绑定引擎）里是空操作，只能由 Unity 侧 moveTaskToBack 实现。
+        public const string SystemMinimize = "system.minimize";
 
         public const string UpdateCheck = "update.check";
         public const string UpdateInstall = "update.install";
@@ -147,6 +150,8 @@ namespace QuestMmdPlayer
         public const string RunPerformanceQa = "run_performance_qa";
         /// <summary>蒙皮发散诊断探针：BakeMesh 真实蒙皮 AABB vs 骨骼/包围盒对照（2026-09 站位问题排查）。</summary>
         public const string SkinAudit = "skin_audit";
+        /// <summary>确定性进场景（模型未加载则先加载第一个已安装模型），供 QA 广播驱动。</summary>
+        public const string EnterScene = "enter_scene";
     }
 
     /// <summary>
@@ -432,6 +437,7 @@ namespace QuestMmdPlayer
                 FlutterCommands.SceneOrbit,
                 FlutterCommands.SceneZoom,
                 FlutterCommands.ScenePanAvatar,
+                FlutterCommands.SystemMinimize,
                 FlutterCommands.UpdateCheck,
                 FlutterCommands.UpdateInstall,
                 FlutterCommands.LogRefresh,

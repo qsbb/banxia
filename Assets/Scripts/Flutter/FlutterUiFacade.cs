@@ -190,6 +190,17 @@ namespace QuestMmdPlayer
         /// <summary>Routes a Flutter command to the matching Unity service.</summary>
         public FlutterCommandResult HandleCommand(string name, string payloadJson)
         {
+            var result = DispatchCommand(name, payloadJson);
+            // 失败进 logcat：Flutter 侧只弹 3 秒 toast，QA 自动化无法回溯。
+            if (!result.Ok)
+            {
+                Debug.LogWarning($"[BanxiaCmd] {name} failed: {result.Error}");
+            }
+            return result;
+        }
+
+        private FlutterCommandResult DispatchCommand(string name, string payloadJson)
+        {
             switch (name)
             {
                 case FlutterCommands.ModelDiscover: return DiscoverModels();
@@ -243,6 +254,7 @@ namespace QuestMmdPlayer
                 case FlutterCommands.SceneOrbit: return HandleSceneOrbit(payloadJson);
                 case FlutterCommands.SceneZoom: return HandleSceneZoom(payloadJson);
                 case FlutterCommands.ScenePanAvatar: return HandleScenePanAvatar(payloadJson);
+                case FlutterCommands.SystemMinimize: return HandleSystemMinimize();
 
                 case FlutterCommands.UpdateCheck: return HandleUpdateCheckCommand();
                 case FlutterCommands.UpdateInstall: return HandleUpdateInstallCommand();
@@ -1159,6 +1171,34 @@ namespace QuestMmdPlayer
 #endif
         }
 
+        private FlutterCommandResult HandleSystemMinimize()
+        {
+#if !BANXIA_PHONE
+            return FlutterCommandResult.Failure("最小化仅支持手机端");
+#else
+            // Flutter SystemNavigator.pop 依赖绑定 Activity 的引擎，面板式
+            // 宿主里是空操作——由 Unity 侧 moveTaskToBack 实现"返回桌面"。
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                {
+                    if (activity == null)
+                    {
+                        return FlutterCommandResult.Failure("活动不可用");
+                    }
+                    activity.Call<bool>("moveTaskToBack", true);
+                }
+                return FlutterCommandResult.Success();
+            }
+            catch (Exception exception)
+            {
+                QuestDebugMode.Report(exception, "system.minimize");
+                return FlutterCommandResult.Failure("最小化失败：" + exception.Message);
+            }
+#endif
+        }
+
         // ------------------------------------------------------------------
         // Update / log / QA commands
         // ------------------------------------------------------------------
@@ -1293,6 +1333,37 @@ namespace QuestMmdPlayer
                     }
                     LoadFirstModelForQaAsync().Forget("qa.load-first-model");
                     return FlutterCommandResult.Success();
+                case FlutterQaCommands.EnterScene:
+                {
+                    // 确定性进场景（QA 广播可达，绕过 UI 点击不确定性）：
+                    // 模型未加载则先加载第一个已安装模型，然后复用
+                    // copresence.enter-scene 的免重载路径。
+                    if (CoPresence == null)
+                    {
+                        return FlutterCommandResult.Failure("同框导演不可用");
+                    }
+                    var loader = ModelLoader;
+                    if (loader == null)
+                    {
+                        return FlutterCommandResult.Failure("模型加载器不可用");
+                    }
+                    var models = loader.DiscoverInstalledModels();
+                    if (loader.CurrentAvatar == null)
+                    {
+                        if (models.Count == 0)
+                        {
+                            return FlutterCommandResult.Failure("未发现可用模型");
+                        }
+                        LoadModelThenEnterSceneAsync(models[0].Path).Forget("qa.enter-scene");
+                        return FlutterCommandResult.Success();
+                    }
+                    CoPresence.ApplyOnEnterScene();
+                    PublishCopresenceMode();
+                    PollArPlacement();
+                    PollCallTimer();
+                    PollFraming();
+                    return FlutterCommandResult.Success();
+                }
                 case FlutterQaCommands.OpenImport:
                     return HandleModelImport();
                 case FlutterQaCommands.SendText:
@@ -1564,6 +1635,8 @@ namespace QuestMmdPlayer
 
         private void PublishToast(string message)
         {
+            // 同步进 logcat：toast 是命令失败的唯一用户可见信号，QA 需要可检索。
+            Debug.Log("[BanxiaToast] " + message);
             bridge?.PublishToast(message);
         }
 

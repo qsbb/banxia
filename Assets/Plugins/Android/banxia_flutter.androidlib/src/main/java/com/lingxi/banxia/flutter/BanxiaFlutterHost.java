@@ -731,13 +731,17 @@ public final class BanxiaFlutterHost {
         qaCommandReceiver = null;
     }
 
+    /** Dedicated id space for host-injected QA commands; Dart commands count
+     * from 1, so 1.5e9+ can never collide with a pending MethodChannel id. */
+    private static final AtomicLong qaCommandIds = new AtomicLong(1500000000L);
+
     private void deliverQaCommand(String cmd) {
         try {
             JSONObject payload = new JSONObject();
             payload.put("name", cmd);
             JSONObject envelope = new JSONObject();
             envelope.put("v", 1);
-            envelope.put("id", System.nanoTime() & 0x3fffffffL);
+            envelope.put("id", qaCommandIds.getAndIncrement());
             envelope.put("type", "cmd");
             envelope.put("name", "qa.command");
             envelope.put("payload", payload.toString());
@@ -931,6 +935,7 @@ public final class BanxiaFlutterHost {
             if (id <= 0) {
                 id = nextId();
             }
+            Log.d(TAG, "cmd id=" + id + " name=" + name);
             if (name.trim().isEmpty()) {
                 postResultError(result, "invalid_command", "Flutter command name is empty");
                 return;
