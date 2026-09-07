@@ -1185,6 +1185,8 @@ namespace QuestMmdPlayer
 #else
             // Flutter SystemNavigator.pop 依赖绑定 Activity 的引擎，面板式
             // 宿主里是空操作——由 Unity 侧 moveTaskToBack 实现"返回桌面"。
+            // 必须在 UI 线程调用：从 Unity 主线程直接调会破坏 SurfaceView 的
+            // 事务时序，实测 resume 后 Surface 不再重建（画面全白 fps=0）。
             try
             {
                 using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
@@ -1194,7 +1196,14 @@ namespace QuestMmdPlayer
                     {
                         return FlutterCommandResult.Failure("活动不可用");
                     }
-                    activity.Call<bool>("moveTaskToBack", true);
+                    activity.Call("runOnUiThread", new AndroidJavaRunnable(() =>
+                    {
+                        using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                        using (var act = player.GetStatic<AndroidJavaObject>("currentActivity"))
+                        {
+                            act?.Call<bool>("moveTaskToBack", true);
+                        }
+                    }));
                 }
                 return FlutterCommandResult.Success();
             }
