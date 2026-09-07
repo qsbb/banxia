@@ -53,6 +53,24 @@ namespace QuestMmdPlayer
                     " fov=" + cam.fieldOfView.ToString("F1", CultureInfo.InvariantCulture));
             }
 
+            // 相机全枚举 + 轨道相机内部态 vs 所在变换——定位"求解值与真实位姿不符"。
+            var cams = Object.FindObjectsByType<Camera>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var c in cams)
+            {
+                Debug.Log("[SkinAudit] camlist name=" + c.name + " tag=" + c.tag +
+                    " goActive=" + c.gameObject.activeInHierarchy + " enabled=" + c.enabled +
+                    " depth=" + c.depth.ToString("F1", CultureInfo.InvariantCulture) +
+                    " pos=" + Fmt(c.transform.position) + " euler=" + Fmt(c.transform.eulerAngles));
+            }
+            var orbit = Object.FindFirstObjectByType<PhoneOrbitCamera>(FindObjectsInactive.Include);
+            if (orbit != null)
+            {
+                Debug.Log("[SkinAudit] orbit dist=" + F(orbit.Distance) +
+                    " target=" + Fmt(orbit.OrbitTargetPoint) +
+                    " go=" + orbit.gameObject.name + " goPos=" + Fmt(orbit.transform.position) +
+                    " goActive=" + orbit.gameObject.activeInHierarchy + " enabled=" + orbit.enabled);
+            }
+
             // 1. 骨骼真值：关键骨骼世界坐标 + 全体骨骼 Y 范围。
             var head = avatar.HeadBone;
             Debug.Log("[SkinAudit] headBone=" + (head == null ? "null" : head.name) +

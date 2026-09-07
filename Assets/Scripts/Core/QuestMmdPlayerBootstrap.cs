@@ -544,6 +544,7 @@ namespace QuestMmdPlayer
             var existing = Camera.main;
             if (existing != null)
             {
+                DisableXrPoseDrivers(existing.gameObject);
                 OrbitCamera = existing.GetComponent<PhoneOrbitCamera>()
                     ?? existing.gameObject.AddComponent<PhoneOrbitCamera>();
                 OrbitCamera.SetOrbitTarget(avatarStartPosition);
@@ -577,6 +578,34 @@ namespace QuestMmdPlayer
         }
 
 #if BANXIA_PHONE
+        /// <summary>
+        /// 手机端无 XR 运行时：场景遗留的 XR 姿态驱动（TrackedPoseDriver 等）
+        /// 在无设备时会把相机姿态逐帧重置为默认值，覆盖轨道相机的
+        /// ApplyTransform（"模型站屏幕中间"根因嫌疑）。按类型名禁用，避免
+        /// 编译期依赖具体 XR 包。
+        /// </summary>
+        private static void DisableXrPoseDrivers(GameObject cameraObject)
+        {
+            if (cameraObject == null)
+            {
+                return;
+            }
+            foreach (var behaviour in cameraObject.GetComponents<MonoBehaviour>())
+            {
+                if (behaviour == null)
+                {
+                    continue; // 脚本缺失的占位组件
+                }
+                var typeName = behaviour.GetType().FullName ?? string.Empty;
+                if (typeName.IndexOf("TrackedPoseDriver", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    typeName.IndexOf("PoseDriver", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    behaviour.enabled = false;
+                    Debug.Log("[PhoneBoot] disabled XR pose driver on camera: " + typeName);
+                }
+            }
+        }
+
         private void HandlePhoneAvatarLoaded(AvatarController avatar)
         {
             AttachAvatarToPhonePresentation(avatar);
