@@ -130,6 +130,24 @@ C. 左上角数值区存在（深色小字块）
   反向 swipe 后质心回移 ≥30px（实测 +62/−77）
 ```
 
+## 7.7 端点故障转移回归（2026-09-07，端点优先级列表）
+
+```
+引擎层断言（模拟器可跑，adb root 植入测试配置，免 UI 盲触）：
+  植入 embodiment_bridge.json：endpoint_urls = [不可达IP, 公网域名, 内网IP]
+  冷启 logcat 必现且有序：
+    [AstrBotBridge] Endpoint unreachable; failing over to <次项host:port>
+    [AstrBotBridge] Endpoint failover: <旧完整URL> -> <新完整URL>
+    [AstrBotBridge] AstrBot SSE connected
+  首项冷却 120s 内不再尝试；健康检查成功后冷却清空
+不转移断言（防降级）：401/422/5xx 等 HTTP 层错误禁止出现 failover 日志
+实测记录（0.3.3.20260907 模拟器）：
+  192.168.5.250 超时 15s → failover → lingxiz.cn:8520（公网映射+NAT回流）
+  → health ready → session ready → SSE connected，全链耗时 ~20s
+注意：测试配置含真实密钥，测完必须三处清理（模拟器/宿主机/本地），
+  不得入库、不得截屏外发
+```
+
 ## 8. 边界与诚实声明
 
 - 模拟器无 PMX 模型且 fallback 不生成 → assert-framing 的 A/C 项**只在用户真机截图上有意义**；模拟器只跑 assert-overlay + logcat 求解行断言
