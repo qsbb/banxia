@@ -546,6 +546,9 @@ namespace QuestMmdPlayer
         public bool videoCallActive;
         public bool arAvailable;
         public bool arPlaced;
+        /// <summary>引擎侧场景态真值：ApplyOnEnterScene 后 true / Suspend 后 false。
+        /// Flutter 的 uiMode 以乐观切换为主、以此事件为权威对账（QA 直驱引擎时 UI 才不错位）。</summary>
+        public bool inScene;
     }
 
     [Serializable] public sealed class FlutterCallTimerPayload { public string durationText = string.Empty; }

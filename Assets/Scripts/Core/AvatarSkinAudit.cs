@@ -26,7 +26,7 @@ namespace QuestMmdPlayer
             "全ての親", "センター", "下半身", "上半身", "頭", "左足首", "右足首"
         };
 
-        public static void Run(AvatarController avatar)
+        public static void Run(AvatarController avatar, Camera sceneCamera = null)
         {
             if (avatar == null)
             {
@@ -43,7 +43,8 @@ namespace QuestMmdPlayer
                 " localScale=" + (visualRoot == null ? "-" : Fmt(visualRoot.localScale)) +
                 " lossyScale=" + (visualRoot == null ? "-" : Fmt(visualRoot.lossyScale)));
 
-            var cam = Camera.main;
+            // Camera.main 可能指到菜单态的闲置相机；场景态相机由调用方（导演）传入。
+            var cam = sceneCamera != null ? sceneCamera : Camera.main;
             if (cam != null)
             {
                 Debug.Log("[SkinAudit] camera=" + cam.name +

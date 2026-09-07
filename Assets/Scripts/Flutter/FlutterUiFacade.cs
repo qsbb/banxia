@@ -72,6 +72,8 @@ namespace QuestMmdPlayer
         private bool lastVideoCallActive;
         private string lastCallDurationText = string.Empty;
         private bool lastArPlaced;
+        /// <summary>引擎侧场景态（进/出场景时维护），随 copresence.mode 事件发布。</summary>
+        private bool sceneActive;
         private bool lastFramingValid;
         private string lastFramingSignature = string.Empty;
         private int lastScreenWidth;
@@ -930,6 +932,7 @@ namespace QuestMmdPlayer
                     string.Equals(loader.CurrentModelPath, path, StringComparison.OrdinalIgnoreCase))
                 {
                     CoPresence.ApplyOnEnterScene();
+                    sceneActive = true;
                     PublishCopresenceMode();
                     PollArPlacement();
                     PollCallTimer();
@@ -940,6 +943,7 @@ namespace QuestMmdPlayer
                 return FlutterCommandResult.Success();
             }
             CoPresence.ApplyOnEnterScene();
+            sceneActive = true;
             PublishCopresenceMode();
             PollArPlacement();
             PollCallTimer();
@@ -952,6 +956,8 @@ namespace QuestMmdPlayer
             if (await LoadModelAsync(path))
             {
                 CoPresence?.ApplyOnEnterScene();
+                sceneActive = true;
+                PublishCopresenceMode();
             }
         }
 
@@ -962,6 +968,7 @@ namespace QuestMmdPlayer
                 return FlutterCommandResult.Failure("同框导演不可用");
             }
             CoPresence.Suspend();
+            sceneActive = false;
             PublishCopresenceMode();
             PublishPlacementChanged(false);
             PollCallTimer();
@@ -1358,6 +1365,7 @@ namespace QuestMmdPlayer
                         return FlutterCommandResult.Success();
                     }
                     CoPresence.ApplyOnEnterScene();
+                    sceneActive = true;
                     PublishCopresenceMode();
                     PollArPlacement();
                     PollCallTimer();
@@ -1399,7 +1407,7 @@ namespace QuestMmdPlayer
                     {
                         return FlutterCommandResult.Failure("尚未加载模型");
                     }
-                    AvatarSkinAudit.Run(ModelLoader.CurrentAvatar);
+                    AvatarSkinAudit.Run(ModelLoader.CurrentAvatar, CoPresence?.MainCamera);
                     return FlutterCommandResult.Success();
                 case FlutterQaCommands.ToggleMenu:
                     return FlutterCommandResult.Failure("QA 菜单命令需通过 Quest 硬件菜单入口触发");
@@ -1692,7 +1700,8 @@ namespace QuestMmdPlayer
                 environment = director == null ? string.Empty : ToVirtualEnvironmentWire(director.CurrentEnvironment),
                 videoCallActive = director != null && director.VideoCallActive,
                 arAvailable = director != null && director.ArCameraAvailable,
-                arPlaced = director != null && director.ArPlaced
+                arPlaced = director != null && director.ArPlaced,
+                inScene = sceneActive
             });
         }
 

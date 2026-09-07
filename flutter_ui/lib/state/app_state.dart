@@ -395,6 +395,14 @@ class AppState extends ChangeNotifier {
         if (p?['arPlaced'] is bool) {
           copresence.arPlaced = p!['arPlaced'] as bool;
         }
+        // Engine-side scene truth reconciles the optimistic uiMode (QA drives
+        // the engine directly, bypassing Dart's dispatch path entirely).
+        if (p?['inScene'] is bool) {
+          final bool engineInScene = p!['inScene'] as bool;
+          if (engineInScene != inScene) {
+            uiMode.value = engineInScene ? UiMode.scene : UiMode.menu;
+          }
+        }
         break;
       case Evt.copresenceCallTimer:
         copresence.callDuration = _str(p?['durationText']);
