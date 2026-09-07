@@ -27,7 +27,7 @@
 | 症状 | 根因 | 解法 |
 |---|---|---|
 | 复杂 quoting 的 adb shell 命令行为诡异 | remote.sh→ssh→guest 多层转义 | 写 .sh 脚本 → push 到 guest `/data/local/tmp/` → `sh` 执行；或 `tools/remote.sh qa <cmd>` 直达 QA 广播 |
-| adb 命令打到/可能打到物理机 `2G0YC5ZHBF00R0` | 物理机与 emulator-5554 同在一个 adb server | **一切命令经 `tools/remote.sh adb`**（已锁死 `-s emulator-5554`）；手写 adb 必须带 `-s`；preflight 会警告多余设备 |
+| adb 命令打到/可能打到 `2G0YC5ZHBF00R0` | 那是 **Quest 头显**（用户 2026-09-07 确认），与 emulator-5554 同在一个 adb server；误发 reboot/设置命令 = 违反 Quest 电源纪律 | **一切命令经 `tools/remote.sh adb`**（已锁死 `-s emulator-5554`）；手写 adb 必须带 `-s`；preflight 会警告多余设备 |
 | 杀 qemu 把自己的 ssh 会话也杀了 | `pkill -f qemu` 匹配到自己命令行 | `remote.sh emu-release`（用 `[q]emu` 技巧）；或 `ps -e -o pid=,comm=` 按 PID kill |
 | 模拟器不在线 | qemu 被杀（用完必须杀，内存纪律） | `remote.sh exec emu '~/banxia-emu/start-emu.sh'`（20-35s 开机，自带 ≥1800M 内存护栏） |
 | screencap 的 .rgba 无法用图像工具打开 | 裸 RGBA dump：16 字节头（uint32 w,h）+ RGBA  payload | Node 读 `buf.readUInt32LE(0/4)` 取宽高；本模型无图像输入，用像素统计/ASCII 分析 |

@@ -91,7 +91,7 @@ preflight() {
     local physical
     physical=$(printf '%s\n' "$devices" | grep -v "$EMU_SERIAL" | grep -v '^$' || true)
     if [[ -n "$physical" ]]; then
-      warn "检测到其他 adb 设备在线：$(printf '%s ' $physical)——本工具已锁定 $EMU_SERIAL；手写 adb 命令必须带 -s $EMU_SERIAL"
+      warn "检测到其他 adb 设备在线：$(printf '%s ' $physical)——2G0YC5ZHBF00R0 是 Quest 头显（用户确认），绝不发 reboot/设置命令；本工具已锁定 $EMU_SERIAL"
     fi
   else
     bad "ssh 不通"; fails=$((fails+1))
