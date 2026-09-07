@@ -597,8 +597,8 @@ namespace QuestMmdPlayer
                     continue; // 脚本缺失的占位组件
                 }
                 var typeName = behaviour.GetType().FullName ?? string.Empty;
-                if (typeName.IndexOf("TrackedPoseDriver", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    typeName.IndexOf("PoseDriver", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (typeName.IndexOf("TrackedPoseDriver", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    typeName.IndexOf("PoseDriver", System.StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     behaviour.enabled = false;
                     Debug.Log("[PhoneBoot] disabled XR pose driver on camera: " + typeName);
