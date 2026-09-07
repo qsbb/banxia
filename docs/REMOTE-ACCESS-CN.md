@@ -1,115 +1,102 @@
 # 伴夏远程接入（手机外网连后端）架构与运维手册
 
-> 2026-09-07 落地。**敏感信息纪律**：DDNS 域名、阿里云凭据、端口映射明细
-> 不写入本文与任何入库文件；域名以 `<DDNS域名>` 代指，实际值由用户持有并
-> 仅存于 NAS 运行时配置（`/vol1/@appdata/remote-bridge/`，NAS 本地）。
+> 2026-09-07 落地。**敏感信息纪律**：DDNS 域名、凭据、端口映射明细不写入
+> 本文与任何入库文件；域名以 `<DDNS域名>` 代指，实际值由用户持有。
 
-## 1. 架构
+## 0. 现状定稿（v1，用户决策）
+
+**v1 = 公网明文 HTTP 直连**。用户明确决策：暂不部署 TLS 证书；路由器既有
+`8520→8520` 映射不动；客户端"用户写什么地址端口就走什么"。
+
+> ⚠️ **风险知情记录**：明文 HTTP 公网链路上，配对密钥、聊天内容、语音
+> 音频对中间节点（运营商/骨干网）可见且可篡改。这是对安全基线"加密
+> 加固"项的显式豁免（用户 2026-09-07 决策）。保留的防线见 §4。
+> **升级路径（v2）已备好**：NAS `/vol1/@appdata/remote-bridge/` 存有
+> nginx TLS 反代配置 + acme.sh 运维脚本（`remote-bridge.sh`），补一把
+> 阿里云 DNS RAM key 即可切换 HTTPS，届时公网入口改 8443、8520 收敛内网。
+
+## 1. 架构（v1）
 
 ```
-手机(蜂窝/任意网络)
-   │  https://<DDNS域名>:8443   （Let's Encrypt RSA 2048，系统 CA 信任）
-   ▼
-路由器：WAN 8443 → NAS 192.168.5.88:8443 （v4 端口映射；v6 不用）
-   ▼
-NAS nginx 容器 remote-bridge-nginx（8443，仅 v4 绑定 0.0.0.0）
-   │  · TLS 终止：仅 TLSv1.2/1.3，ECDHE 现代套件，session tickets 关闭
-   │  · 只放行两条路径：pairing/exchange（严限速 10r/m）与插件 API 前缀（30r/s）
-   │  · 其余一律 404；429 统一带 Retry-After
-   │  · SSE：proxy_buffering off、Connection ''、read_timeout 3600s
-   ▼  http://172.17.0.1:8520（docker0 网关，仅 NAS 内部）
-临桥内置监听器（astrbot 容器内，8520）→ AstrBot 6185
+手机(蜂窝) ──http://<DDNS域名>:8520──> 路由器映射 8520→NAS:8520
+                                        │
+                                        ▼
+              临桥内置监听器（astrbot 容器内 0.0.0.0:8520）→ AstrBot 6185
 ```
 
 内网路径不变：Quest/手机在家走 `http://192.168.5.88:8520`（客户端按端点
-优先级列表自动首选内网入口，见 §5）。
+优先级列表自动首选，见 §5）。
 
-### 为什么必须有 TLS 反代（根因记录）
+### 根因记录（为什么之前连不上）
 
-外网连不上不是服务故障，是三层设计性阻塞：①服务端 `pairing_public_url`
-下发的是内网地址；②客户端 `AstrBotProtocol.TryValidateSettings` 对非私网
-主机强制 HTTPS（防 DNS rebinding，域名不走明文）；③服务端
-`allow_insecure_remote_http=false` 拒绝公网明文配对（422 https_required）。
-缺失的唯一组件 = 客户端信任的 HTTPS 入口，本方案补上它，不绕开任何闸门。
+不是服务故障，是三层设计性阻塞叠加：①服务端 `pairing_public_url` 下发的
+是内网地址；②客户端 `AstrBotProtocol.TryValidateSettings` 对非私网主机
+强制 HTTPS（防 DNS rebinding）；③服务端 `allow_insecure_remote_http=false`
+拒绝公网明文配对（422 https_required）。v1 解法 = 服务端开逃生门 +
+客户端加同名本地 opt-in（见 §2），两端闸门都是显式开关、默认关闭。
 
-## 2. 组件与凭据
+## 2. 变更清单（已执行部分与授权记录）
 
-| 组件 | 位置 | 说明 |
-|---|---|---|
-| remote-bridge-nginx | NAS docker，镜像 `nginx:alpine` | TLS 反代，配置 `/vol1/@appdata/remote-bridge/conf/nginx.conf` |
-| remote-bridge-acme | NAS docker，镜像 `neilpang/acme.sh` | DNS-01（阿里云）签发/续期证书，daemon 常驻；凭据存于其数据卷 `account.conf` |
-| 证书 | `/vol1/@appdata/remote-bridge/certs/{cert.pem,key.pem}` | RSA 2048（兼容 Android 7.1+ 系统 CA），90 天期，自动续期 |
-| 运维脚本 | `/vol1/@appdata/remote-bridge/remote-bridge.sh` | issue/start/stop/status/renew/reload/logs |
+**临桥插件代码：零改动**（逃生门是插件既有设计）。banxia 客户端改动见
+git 历史（端点优先级列表 `964d57f`/`1c51a86`、明文 opt-in `2d1a642`）。
 
-阿里云 RAM 子账号 key（仅 AliyunDNSFullAccess，建议锁单域名）是**唯一外部
-凭据**，仅存在于 acme.sh 容器环境/数据卷，不进任何 git 仓库。
+**AstrBot/NAS 侧（须用户当次授权，见开发手册 §1 单次授权制）**：
+临桥配置三项（AstrBot 控制台插件配置页修改，保存热生效）：
+
+| 配置项 | 值 |
+|---|---|
+| `allow_insecure_remote_http` | 开 |
+| `pairing_listener_public_url` | `http://<DDNS域名>:8520` |
+| `pairing_public_url` | `http://<DDNS域名>:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge` |
+
+回滚 = 三项改回原值（`allow_insecure_remote_http` 关、两个 URL 改回
+`http://192.168.5.88:8520` 开头），已配对客户端不受影响。
 
 ## 3. 运维操作
 
-### 首次部署（已执行过一次，重建时参考）
-```sh
-# 域名与 key 仅注入命令环境，不落脚本
-BX_DOMAIN=<DDNS域名> ALI_KEY=<RAMKey> ALI_SECRET=<RAMSecret> \
-  sh /vol1/@appdata/remote-bridge/remote-bridge.sh issue
-sh /vol1/@appdata/remote-bridge/remote-bridge.sh start
-```
-
-### 日常
-- 状态：`sh remote-bridge.sh status`（应见两容器 Up + 本地 TLS 自检 401/404）
-- 手动续期：`sh remote-bridge.sh renew`（acme.sh daemon 本会自动续）
-- 重载证书/配置：`sh remote-bridge.sh reload`
-- 日志：`sh remote-bridge.sh logs`
-
-### 吊销/轮换阿里云 key（修正 #1 定稿流程）
-1. 阿里云 RAM 控制台禁用/删除旧 key；新建同权限 key
-2. NAS 上编辑 `/vol1/@appdata/remote-bridge/acme/account.conf`，
-   替换 `SAVED_Ali_Key` / `SAVED_Ali_Secret` 两行的值
-3. `sh remote-bridge.sh renew` 验证续期链路正常
-
-### 回滚（全程可逆）
-1. `sh remote-bridge.sh stop`（再 `docker rm remote-bridge-nginx remote-bridge-acme` 可彻底删除）
-2. 路由器删除 `8443→192.168.5.88:8443` 映射
-3. 临桥配置 `pairing_listener_public_url` / `pairing_public_url` 改回
-   `http://192.168.5.88:8520`（AstrBot 控制台 → 插件配置）
-4. 手机/Quest 已绑定配置不受影响（内网入口仍在端点列表中）
+- 日常零维护（无新增组件）；AstrBot 容器随既有运维节奏
+- 手机换网络/换入口：设置 → 连接后端 → 入口优先级列表管理，无需重新配对
+- 重新配对：配对页生成 6 位码（TTL 120s），手机端输入后 exchange 完成
+- **吊销某个入口**：从客户端入口列表删除即可；吊销整套绑定：配对页
+  "解除绑定"（删客户端配置）+ 服务端 revoke（控制台）
+- 升级 HTTPS（v2）：`sh /vol1/@appdata/remote-bridge/remote-bridge.sh`（用法
+  见脚本头注释；需 RAM key + 路由器加 8443 映射），随后把 §2 的两个 URL
+  改成 `https://<DDNS域名>:8443` 开头、`allow_insecure_remote_http` 关闭，
+  客户端入口列表加 https 项并置顶
 
 ## 4. 安全属性（对照安全基线逐条）
 
-- **公网面**：唯一入口 8443/TLS；只暴露 pairing/exchange + 桥接会话 API 前缀；
-  dashboard 管理端点（/pairing/create 等）公网 404。8520 不再经路由器映射
-  暴露（原 8520→8520 映射已改指 8443）
-- **鉴权**：配对 6 位码 + 会话双头（Authorization: ApiKey + X-Embodiment-Bridge-Key）
-  全部保留，反代不终结鉴权，只终结 TLS
-- **限速双保险**：nginx（10r/m 严 / 30r/s 宽）+ 插件（12 次/分/IP、120 次/分全局），
-  均带 Retry-After；实测错误码连打 16 次 → 12×401 后 429（2026-09-07）
-- **防枚举**：配对错误统一 401，无"存在与否"差异；非白名单路径统一 404
-- **凭据卫生**：key 只在 NAS 容器环境/数据卷；客户端配置存设备私有目录；
-  不入 git/日志/截屏
-- **TLS 参数**：TLSv1.2/1.3 only、ECDHE 套件白名单、session tickets off、
-  HSTS 7 天、server_tokens off、Host 头守卫（非本域名直接 444）
+- **鉴权**：配对 6 位码（TTL 120s）+ 会话双头（Authorization: ApiKey +
+  X-Embodiment-Bridge-Key ≥32 字符）全部保留，公网访问无任何绕开路径
+- **限速/防枚举**：插件层 exchange 每 IP 12 次/分、全局 120 次/分，429 带
+  Retry-After；配对错误统一 401 无枚举差异——均已实测（2026-09-07，
+  16 连打 = 12×401 后 429；并发 10 连发全 429）
+- **公网面**：8520 单端口；监听器只代理插件 API 路径，其余 404；dashboard
+  管理端点有 dashboard 鉴权兜底（401）
+- **凭据卫生**：密钥只在客户端设备私有目录与插件数据目录；不入 git/日志/
+  截屏；本文不含域名
+- **明文豁免项**：传输层不加密（见 §0 风险记录）；TLS 升级路径已备好
 
 ### IPv6 残余面（已知、记录在案）
 
-家宽有公网 IPv6，NAS 容器端口（含 8520）绑 `[::]`，理论上不经 v4 映射直接
-可达——取决于路由器 IPv6 防火墙。**本期 v4-only 方案不依赖也不新增 v6 路径**。
-建议（用户择机核实）：路由器 IPv6 防火墙保持"默认拒绝入站"；如需彻底收敛，
-可将 astrbot 容器 8520 发布改绑 192.168.5.88（需重建容器，未动）。
+NAS 容器端口绑 `[::]`，家宽有公网 v6，8520 理论可不经 v4 映射直接可达
+（取决于路由器 v6 防火墙）。v1 未收敛此面；建议路由器 v6 防火墙保持
+默认拒绝入站。v2 升级时随 8443 方案一并收敛。
 
 ## 5. 客户端：端点优先级列表（双端）
 
 - 设置 → 连接后端 → 入口优先级列表：有序候选，排最上的优先；配对下发的
-  绑定地址自动置顶；可手动添加内网/公网/兜底（如穿透组网地址）入口
+  绑定地址自动置顶；可手动添加内网/公网/兜底（如组网穿透地址）入口
 - 故障转移：仅网络层不可达（ConnectionError）才冷却当前入口 120s 并顺延；
   401/4xx/5xx 不转移（防掩盖配置错误、防降级攻击）；切网后连接循环自然重选
-- 同一套配对凭据对所有入口通用，换入口无需重新配对
-- 重新配对时保留用户维护的候选列表，新配对地址置顶
-- **公网地址必须输入完整 `https://` 前缀**（引擎对裸输入默认补 http://，
-  公网 HTTP 会被客户端与服务端双重拒绝——这是设计，不是故障）
+- 同一套配对凭据对所有入口通用，换入口无需重新配对；重新配对保留列表
+- 公网明文入口需打开配对页「允许明文 HTTP」开关（即本地 opt-in，
+  置位 `allow_insecure_remote_http`）；引擎对裸输入默认补 `http://` 前缀
 - Quest 端：面板显示生效入口与候选数、自动故障转移同在（共享引擎层）；
-  列表管理 UI 暂以手机端为准（登记 PHONE_PORT_PLAN_CN.md 待同步）
+  列表管理 UI 待同步（登记 PHONE_PORT_PLAN_CN.md §3.4.1）
 
 ## 6. NAT 回流说明
 
-`pairing_public_url` 是全局下发值（所有客户端共享）。若路由器不支持 NAT
-回流，内网设备重新配对后会拿到公网域名地址而内网访问不通——端点优先级列表
-已根治此场景（内网入口作为候选自动兜底）。Quest 存量绑定不受任何影响。
+`pairing_public_url` 全局下发（所有客户端共享）。若路由器不支持 NAT 回流，
+内网设备重新配对后拿到公网地址、内网访问不通——端点优先级列表已根治
+（内网入口作为候选自动兜底，连接错误即顺延）。Quest 存量绑定不受影响。
