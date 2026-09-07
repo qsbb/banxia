@@ -110,6 +110,26 @@ C. 左上角数值区存在（深色小字块）
   修复验收：baked 高度 ≈ 骨骼高度（脚底 y≈0），场景截屏脚底 y≈2027±40px
 ```
 
+## 7.6 相机姿态与最小化回归（2026-09-07 终审补录）
+
+```
+相机姿态保持（根因修复：禁用 XR TrackedPoseDriver）：
+  冷启 logcat 必有 [PhoneBoot] disabled XR pose driver on camera: ...TrackedPoseDriver
+  QA enter_scene → skin_audit 的 camlist/orbit 行：
+    相机 pos.y ≈ CallFraming 求解 h（±0.05），pos.z = target.z − d（±0.05）
+    orbit dist == 求解 d；修复前此处恒为 (0,0,0)（被姿态驱动覆写）
+最小化恢复（moveTaskToBack 必须走 UI 线程）：
+  场景内 input keyevent 4 ×2（场景→菜单→后台）→ am start 回前台
+  → QA enter_scene → 截屏肤色像素占比 >10%（修复前：Surface 不重建，
+    画面全白 fps=0，仅杀进程可恢复）
+确定性模式切换（绕过 UI 卡片坐标）：
+  am broadcast -a com.lingxi.banxia.phone.QA_COMMAND --es cmd set_mode --es mode virtualScene
+  → prefs banxia.phone.copresence.mode=0 且 [CallFraming] reframe reason=virtual-scene-enter
+手势像素断言（virtualScene 模式）：
+  input swipe 540 1100 900 1100 → 肤色质心 x 位移 ≥30px；
+  反向 swipe 后质心回移 ≥30px（实测 +62/−77）
+```
+
 ## 8. 边界与诚实声明
 
 - 模拟器无 PMX 模型且 fallback 不生成 → assert-framing 的 A/C 项**只在用户真机截图上有意义**；模拟器只跑 assert-overlay + logcat 求解行断言
