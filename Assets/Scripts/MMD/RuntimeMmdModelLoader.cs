@@ -1089,7 +1089,7 @@ namespace QuestMmdPlayer
             loadCancellation?.Cancel();
         }
 
-        internal static bool IsLoadGenerationCurrent(long generation, long currentGeneration)
+        public static bool IsLoadGenerationCurrent(long generation, long currentGeneration)
         {
             return generation > 0 && generation == currentGeneration;
         }
