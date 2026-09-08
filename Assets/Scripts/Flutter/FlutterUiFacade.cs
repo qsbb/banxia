@@ -1401,6 +1401,34 @@ namespace QuestMmdPlayer
             Debug.Log("[BanxiaQA] qa.command=" + name);
             switch (name)
             {
+                case FlutterQaCommands.PairingSetServer:
+                {
+                    // am broadcast ... --es cmd pairing_set_server --es args <地址>
+                    // 真机盲测：MIUI 安全设置未开时注入点击不可用，广播直达。
+                    if (payload == null || string.IsNullOrWhiteSpace(payload.args))
+                    {
+                        return FlutterCommandResult.Failure("pairing_set_server 缺少 args 参数");
+                    }
+                    return HandlePairingSetServer(
+                        "{\"server\":\"" + payload.args.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"}");
+                }
+                case FlutterQaCommands.PairingSubmitCode:
+                {
+                    // am broadcast ... --es cmd pairing_submit_code --es args <6位码>
+                    if (payload == null || string.IsNullOrWhiteSpace(payload.args))
+                    {
+                        return FlutterCommandResult.Failure("pairing_submit_code 缺少 args 参数");
+                    }
+                    var digits = payload.args.Trim();
+                    if (digits.Length != PairingCodeLength)
+                    {
+                        return FlutterCommandResult.Failure("配对码必须是 " + PairingCodeLength + " 位");
+                    }
+                    pairingCodeBuffer = digits;
+                    return HandlePairingPair();
+                }
+                case FlutterQaCommands.PairingClearBinding:
+                    return HandlePairingClearBinding();
                 case FlutterQaCommands.SetMode:
                 {
                     // QA 确定性切换同框模式（UI 卡片点按在盲测中坐标不可靠）：

@@ -158,6 +158,12 @@ namespace QuestMmdPlayer
         public const string EnterScene = "enter_scene";
         /// <summary>确定性切换同框模式（--es mode virtualScene|videoCall|arReality），供 QA 广播驱动。</summary>
         public const string SetMode = "set_mode";
+        /// <summary>配对 QA：设置配对服务器（--es args &lt;地址&gt;，引擎侧照常归一化）。</summary>
+        public const string PairingSetServer = "pairing_set_server";
+        /// <summary>配对 QA：直接提交 6 位配对码（--es args &lt;123456&gt;），绕过逐位点按。</summary>
+        public const string PairingSubmitCode = "pairing_submit_code";
+        /// <summary>配对 QA：解除绑定并清除已存配对服务器。</summary>
+        public const string PairingClearBinding = "pairing_clear_binding";
     }
 
     /// <summary>

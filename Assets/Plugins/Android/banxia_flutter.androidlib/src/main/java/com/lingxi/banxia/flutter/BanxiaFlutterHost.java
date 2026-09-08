@@ -745,6 +745,12 @@ public final class BanxiaFlutterHost {
             if (mode != null && !mode.trim().isEmpty()) {
                 payload.put("mode", mode.trim());
             }
+            // Generic single-string passthrough for QA commands that need a
+            // value (e.g. pairing_set_server --es args <server>).
+            String args = intent == null ? null : intent.getStringExtra("args");
+            if (args != null && !args.trim().isEmpty()) {
+                payload.put("args", args.trim());
+            }
             JSONObject envelope = new JSONObject();
             envelope.put("v", 1);
             envelope.put("id", qaCommandIds.getAndIncrement());
