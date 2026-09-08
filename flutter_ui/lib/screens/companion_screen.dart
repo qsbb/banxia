@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import '../core/bridge/bridge_protocol.dart';
 import '../main.dart';
 import '../state/app_state.dart';
+import 'chat_page.dart';
 
 /// Companion / home tab (design §2.2): model library, import/refresh, and
-/// quick-entry tiles for the other surfaces.
+/// quick-entry tiles for the other surfaces. M6：首屏新增「和伴夏聊聊」
+/// 英雄卡，进入微信式二级对话页（对话不再是底部标签）。
 class CompanionScreen extends StatelessWidget {
   const CompanionScreen({super.key, required this.appState});
 
@@ -25,6 +27,7 @@ class CompanionScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 sliver: SliverList(
                   delegate: SliverChildListDelegate(<Widget>[
+                    _ChatHeroCard(appState: appState),
                     _ImportRow(appState: appState),
                     const SizedBox(height: 8),
                     ..._modelCards(),
@@ -74,6 +77,99 @@ class _NavBar extends StatelessWidget {
                 fontSize: 15, color: BanxiaTokens.labelSecondary),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// M6 「和伴夏聊聊」入口英雄卡（设计稿 §2.2）：首屏第一张卡，
+/// 点击 Navigator.push 进微信式二级对话页。
+class _ChatHeroCard extends StatelessWidget {
+  const _ChatHeroCard({required this.appState});
+
+  final AppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    final conv = appState.conversation;
+    String subtitle;
+    if (!appState.connected) {
+      subtitle = '未连接 · 点我去绑定';
+    } else {
+      String last = '';
+      for (int i = conv.bubbles.length - 1; i >= 0; i--) {
+        if (!conv.bubbles[i].fromUser) {
+          last = conv.bubbles[i].text;
+          break;
+        }
+      }
+      subtitle =
+          last.isEmpty ? conv.state : '${conv.state} · $last';
+    }
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (BuildContext _) => ChatPage(appState: appState),
+        ),
+      ),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: BanxiaTokens.bgCard,
+          borderRadius: BorderRadius.circular(BanxiaTokens.radiusCard),
+        ),
+        child: Row(
+          children: <Widget>[
+            Container(
+              width: 36,
+              height: 36,
+              decoration: const BoxDecoration(
+                color: BanxiaTokens.tintFill,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.person, color: Colors.white, size: 22),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text(
+                    '和伴夏聊聊',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
+                      color: BanxiaTokens.label,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: BanxiaTokens.labelSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: appState.connected
+                    ? BanxiaTokens.green
+                    : BanxiaTokens.labelTertiary,
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right,
+                size: 20, color: BanxiaTokens.labelTertiary),
+          ],
+        ),
       ),
     );
   }
@@ -246,15 +342,15 @@ class _QuickTiles extends StatelessWidget {
             children: <Widget>[
               Expanded(
                   child: _Tile(
-                      label: '对话',
-                      sub: '文字与语音',
-                      onTap: () => app.switchTab(AppTab.chat))),
-              const SizedBox(width: 10),
-              Expanded(
-                  child: _Tile(
                       label: '动作',
                       sub: 'VMD 库',
                       onTap: () => app.switchTab(AppTab.actions))),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: _Tile(
+                      label: '设置',
+                      sub: 'Debug · 帧率 · 连接',
+                      onTap: () => app.switchTab(AppTab.settings))),
             ],
           ),
           const SizedBox(height: 10),
@@ -262,15 +358,11 @@ class _QuickTiles extends StatelessWidget {
             children: <Widget>[
               Expanded(
                   child: _Tile(
-                      label: '设置',
-                      sub: 'Debug · 帧率 · 连接',
-                      onTap: () => app.switchTab(AppTab.settings))),
-              const SizedBox(width: 10),
-              Expanded(
-                  child: _Tile(
                       label: '更新',
                       sub: '检查新版本',
                       onTap: () => app.switchTab(AppTab.settings))),
+              const SizedBox(width: 10),
+              const Expanded(child: SizedBox.shrink()),
             ],
           ),
         ],

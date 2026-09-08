@@ -13,14 +13,16 @@ enum UiMode { menu, scene }
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 /// Bottom tab index (design §2.1).
-enum AppTab { companion, chat, actions, settings }
+enum AppTab { companion, actions, settings }
 
-/// One entry in the 24-capped chat transcript.
+/// One entry in the 24-capped chat transcript. `at` 是 UI 侧派生的本地
+/// 到达时刻（M6 时间头用），不走协议。
 class ChatBubble {
-  const ChatBubble(this.fromUser, this.text);
+  ChatBubble(this.fromUser, this.text) : at = DateTime.now();
 
   final bool fromUser;
   final String text;
+  final DateTime at;
 }
 
 class ToastData {

@@ -301,6 +301,12 @@ banxia 现状是「6 位码/二维码一次性交换 → 持久双 API 钥（落
   Unity fallback 与 Flutter 生产壳层均采用消息流 + 输入条；Flutter 侧移除常驻语音面板和静态预设词，接入 `conversation.suggestions` 三条纵向后端建议，语音动作收纳进输入条菜单；长文本输入受多行上限与 flex 约束保护。设置连接页字段去内嵌 label + 配对键盘折叠。
 - [x] **M5 Android 键盘 inset + MMD 最终取景复位**（2026-09-04）：
   Unity fallback 消费 `TouchScreenKeyboard.area.height`，键盘显示时按 panel 比例抬升 content、隐藏底部 tab，LostFocus/切 tab/失焦复位；Flutter 生产路径使用 Scaffold resize/insets。模型加载和虚拟场景最终阶段按 renderer bounds 重取景，并将无头骨 fallback 置为 pitch=0。Quest 世界空间面板由 targetTexture/worldSpace 门控排除。
+- [ ] **M6 对话迁出底部标签 → 微信式二级页（Quest 待跟进）**（2026-09-08）：
+  手机端底部导航 4→3（首页/动作/设置），对话改为首页「和伴夏聊聊」英雄卡
+  `Navigator.push` 进入的全屏二级路由页（`flutter_ui/lib/screens/chat_page.dart`），
+  根治悬浮导航胶囊遮挡输入框的结构性问题（设计稿 `docs/M6-flutter-chat-second-level-page.md`）。
+  flutter_ui 为双端共享壳层，本次导航结构调整对 Quest 端同样生效（Quest 跑同一
+  RootShell）；**Quest 端 VR 世界空间下的二级页交互回归待真机验证**。
 
 
 ### Flutter 共享壳层（双端同一 UI，迁移中 · 2026-09-02）

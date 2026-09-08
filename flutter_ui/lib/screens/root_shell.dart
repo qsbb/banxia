@@ -4,13 +4,13 @@ import '../main.dart';
 import '../scene/scene_overlay.dart';
 import '../state/app_state.dart';
 import 'actions_screen.dart';
-import 'chat_screen.dart';
 import 'companion_screen.dart';
 import 'settings_screen.dart';
 
-/// Root shell (design §2.1): Menu/Scene two-state shell with a 4-tab bottom
+/// Root shell (design §2.1): Menu/Scene two-state shell with a 3-tab bottom
 /// bar and a global toast overlay at the highest z-order. Scene mode replaces
-/// the whole menu shell with the full-screen [SceneOverlay].
+/// the whole menu shell with the full-screen [SceneOverlay]. M6：对话迁为
+/// 首页英雄卡进入的二级路由页（screens/chat_page.dart），不再是标签。
 class RootShell extends StatelessWidget {
   const RootShell({super.key, required this.appState});
 
@@ -82,7 +82,6 @@ class _MenuShellState extends State<_MenuShell> {
             index: appState.tab.value.index,
             children: <Widget>[
               CompanionScreen(appState: appState),
-              ChatScreen(appState: appState),
               ActionsScreen(appState: appState),
               SettingsScreen(appState: appState),
             ],
@@ -103,7 +102,7 @@ class _MenuShellState extends State<_MenuShell> {
   }
 }
 
-/// iOS 26 floating glass capsule tab bar (4 items, tint selected).
+/// iOS 26 floating glass capsule tab bar (3 items after M6, tint selected).
 class _BottomNav extends StatelessWidget {
   const _BottomNav({required this.appState});
 
@@ -112,7 +111,6 @@ class _BottomNav extends StatelessWidget {
   static const List<(AppTab, IconData, String)> _tabs =
       <(AppTab, IconData, String)>[
     (AppTab.companion, Icons.person_outline, '首页'),
-    (AppTab.chat, Icons.chat_bubble_outline, '对话'),
     (AppTab.actions, Icons.auto_awesome_outlined, '动作'),
     (AppTab.settings, Icons.settings_outlined, '设置'),
   ];

@@ -4,12 +4,12 @@ import '../core/bridge/bridge_protocol.dart';
 import '../main.dart';
 import '../state/app_state.dart';
 
-/// Chat tab (design §2.3): connection badge, guided card when disconnected,
-/// status card + bubble list (24-cap) + quick phrases + input bar when
-/// connected. The disconnected/connected branch is derived from
-/// `ConnectionState.connected` (design §3).
-class ChatScreen extends StatelessWidget {
-  const ChatScreen({super.key, required this.appState});
+/// M6 微信式二级对话页（设计稿 docs/M6-flutter-chat-second-level-page.md）。
+/// 由首页英雄卡 Navigator.push 进入；本路由内没有底部导航胶囊，
+/// 输入框被悬浮导航遮挡的问题结构性消除。键盘避让只靠 Scaffold 的
+/// resizeToAvoidBottomInset（严禁手写 viewInsets padding）。
+class ChatPage extends StatelessWidget {
+  const ChatPage({super.key, required this.appState});
 
   final AppState appState;
 
@@ -18,24 +18,52 @@ class ChatScreen extends StatelessWidget {
     return ListenableBuilder(
       listenable: appState,
       builder: (BuildContext context, Widget? _) {
-        return SafeArea(
-          top: true,
-          bottom: false,
-          child: Column(
-            children: <Widget>[
-              _NavBar(appState: appState),
-              if (!appState.connected)
-                _GuideCard(appState: appState)
-              else ...<Widget>[
-                _StatusCard(appState: appState),
-                Expanded(child: _BubbleList(appState: appState)),
-                if (appState.conversation.suggestedReplies.isNotEmpty)
-                  Flexible(
-                    fit: FlexFit.loose,
-                    child: _QuickPhrases(appState: appState),
+        return Scaffold(
+          backgroundColor: BanxiaTokens.bg, // 不透明：RootShell 背景是透明的
+          resizeToAvoidBottomInset: true,
+          appBar: AppBar(
+            backgroundColor: BanxiaTokens.bg,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            leading: const BackButton(color: BanxiaTokens.tint),
+            centerTitle: true,
+            title: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Text(
+                  '伴夏',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                    color: BanxiaTokens.label,
                   ),
-                _ChatInputBar(appState: appState),
+                ),
+                _AppBarSubtitle(appState: appState),
               ],
+            ),
+          ),
+          body: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              Column(
+                children: <Widget>[
+                  if (!appState.connected)
+                    _ConnectionBanner(appState: appState),
+                  Expanded(child: _BubbleList(appState: appState)),
+                  if (appState.conversation.suggestedReplies.isNotEmpty)
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: _QuickPhrases(appState: appState),
+                    ),
+                  SafeArea(
+                    top: false,
+                    child: _ChatInputBar(appState: appState),
+                  ),
+                ],
+              ),
+              // 全局 _ToastOverlay 在 RootShell 内，会被本路由盖住；
+              // 页内叠同款 toast 层（§3.7）。
+              _ChatToastOverlay(appState: appState),
             ],
           ),
         );
@@ -44,54 +72,93 @@ class ChatScreen extends StatelessWidget {
   }
 }
 
-class _NavBar extends StatelessWidget {
-  const _NavBar({required this.appState});
+/// AppBar 副标题：吸收旧 _StatusCard 的三行状态为一行（§3.1）。
+class _AppBarSubtitle extends StatelessWidget {
+  const _AppBarSubtitle({required this.appState});
 
   final AppState appState;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+    final conv = appState.conversation;
+    final String status = conv.transportStatus.isEmpty
+        ? conv.state
+        : '${conv.state} · ${conv.transportStatus}';
+    final Widget? micIcon = conv.recording
+        ? const Padding(
+            padding: EdgeInsets.only(right: 4),
+            child: Icon(Icons.mic, size: 12, color: BanxiaTokens.red),
+          )
+        : conv.monitoring
+            ? const Padding(
+                padding: EdgeInsets.only(right: 4),
+                child: Icon(Icons.hearing, size: 12, color: BanxiaTokens.tint),
+              )
+            : null;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Container(
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: appState.connected
+                ? BanxiaTokens.green
+                : BanxiaTokens.labelTertiary,
+          ),
+        ),
+        const SizedBox(width: 5),
+        if (micIcon != null) micIcon,
+        Flexible(
+          child: Text(
+            status,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 12,
+              color: BanxiaTokens.labelSecondary,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 未连接横幅（替代整页 _GuideCard，§3.5）：消息流与输入条照常可用。
+class _ConnectionBanner extends StatelessWidget {
+  const _ConnectionBanner({required this.appState});
+
+  final AppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: BanxiaTokens.orange.withOpacity(0.12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       child: Row(
         children: <Widget>[
+          const Icon(Icons.cloud_off, size: 18, color: BanxiaTokens.orange),
+          const SizedBox(width: 8),
           const Expanded(
             child: Text(
-              '对话',
+              '未连接后端，消息无法送达',
+              style: TextStyle(fontSize: 13, color: BanxiaTokens.label),
+            ),
+          ),
+          GestureDetector(
+            onTap: () {
+              Navigator.of(context).pop();
+              appState.switchTab(AppTab.settings);
+            },
+            child: const Text(
+              '去绑定',
               style: TextStyle(
-                  fontSize: 34,
-                  fontWeight: FontWeight.bold,
-                  color: BanxiaTokens.label),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: appState.connected
-                  ? BanxiaTokens.green.withOpacity(0.15)
-                  : BanxiaTokens.glass,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Row(
-              children: <Widget>[
-                Icon(
-                  Icons.circle,
-                  size: 8,
-                  color: appState.connected
-                      ? BanxiaTokens.green
-                      : BanxiaTokens.labelTertiary,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  appState.connected ? '已连接' : '未连接',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: appState.connected
-                        ? BanxiaTokens.green
-                        : BanxiaTokens.labelSecondary,
-                  ),
-                ),
-              ],
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: BanxiaTokens.tint,
+              ),
             ),
           ),
         ],
@@ -100,113 +167,7 @@ class _NavBar extends StatelessWidget {
   }
 }
 
-class _GuideCard extends StatelessWidget {
-  const _GuideCard({required this.appState});
-
-  final AppState appState;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.all(20),
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        color: BanxiaTokens.bgCard,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0x14000000)),
-      ),
-      child: Column(
-        children: <Widget>[
-          const Text('还没绑定后端',
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: BanxiaTokens.label)),
-          const SizedBox(height: 8),
-          const Text(
-            '去设置 → 连接 输入服务器地址与 6 位配对码，即可开始对话',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 15, color: BanxiaTokens.labelSecondary),
-          ),
-          const SizedBox(height: 20),
-          _GlassButton(
-            label: '去设置绑定',
-            onTap: () => appState.switchTab(AppTab.settings),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatusCard extends StatelessWidget {
-  const _StatusCard({required this.appState});
-
-  final AppState appState;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: BanxiaTokens.bgCard,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0x14000000)),
-      ),
-      child: Row(
-        children: <Widget>[
-          Container(
-            width: 36,
-            height: 36,
-            decoration: const BoxDecoration(
-              color: BanxiaTokens.tintFill,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.person, color: Colors.white, size: 22),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  '伴夏',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 17,
-                    color: BanxiaTokens.label,
-                  ),
-                ),
-                Text(
-                  appState.conversation.transportStatus.isEmpty
-                      ? appState.conversation.state
-                      : '${appState.conversation.state} · ${appState.conversation.transportStatus}',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: BanxiaTokens.labelSecondary,
-                  ),
-                ),
-                Text(
-                  appState.conversation.recording
-                      ? '正在录音'
-                      : appState.conversation.monitoring
-                          ? '正在监听'
-                          : '麦克风待命',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: BanxiaTokens.labelTertiary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
+/// 消息流（24 条气泡）：微信式不对称圆角 + >5 分钟时间头（§3.6）。
 class _BubbleList extends StatefulWidget {
   const _BubbleList({required this.appState});
 
@@ -226,6 +187,12 @@ class _BubbleListState extends State<_BubbleList> {
     super.dispose();
   }
 
+  static String _formatTime(DateTime at) {
+    final String hh = at.hour.toString().padLeft(2, '0');
+    final String mm = at.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
   @override
   Widget build(BuildContext context) {
     final bubbles = widget.appState.conversation.bubbles;
@@ -241,6 +208,7 @@ class _BubbleListState extends State<_BubbleList> {
         }
       });
     }
+    final double maxBubbleWidth = MediaQuery.sizeOf(context).width * 0.72;
     return ListView.builder(
       controller: _scrollController,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -248,26 +216,60 @@ class _BubbleListState extends State<_BubbleList> {
       itemCount: bubbles.length,
       itemBuilder: (BuildContext context, int index) {
         final ChatBubble bubble = bubbles[index];
-        return Align(
-          alignment:
-              bubble.fromUser ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            constraints: const BoxConstraints(maxWidth: 280),
-            decoration: BoxDecoration(
-              color:
-                  bubble.fromUser ? BanxiaTokens.tintFill : BanxiaTokens.bgCard,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              bubble.text,
-              style: TextStyle(
-                fontSize: 16,
-                color: bubble.fromUser ? Colors.white : BanxiaTokens.label,
+        final bool showTimeHeader = index == 0 ||
+            bubble.at.difference(bubbles[index - 1].at) >
+                const Duration(minutes: 5);
+        final BorderRadius radius = bubble.fromUser
+            ? const BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
+                bottomLeft: Radius.circular(20),
+                bottomRight: Radius.circular(4),
+              )
+            : const BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
+                bottomLeft: Radius.circular(4),
+                bottomRight: Radius.circular(20),
+              );
+        return Column(
+          children: <Widget>[
+            if (showTimeHeader)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  _formatTime(bubble.at),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: BanxiaTokens.labelTertiary,
+                  ),
+                ),
+              ),
+            Align(
+              alignment: bubble.fromUser
+                  ? Alignment.centerRight
+                  : Alignment.centerLeft,
+              child: Container(
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+                decoration: BoxDecoration(
+                  color: bubble.fromUser
+                      ? BanxiaTokens.tintFill
+                      : BanxiaTokens.bgCard,
+                  borderRadius: radius,
+                ),
+                child: Text(
+                  bubble.text,
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: bubble.fromUser ? Colors.white : BanxiaTokens.label,
+                  ),
+                ),
               ),
             ),
-          ),
+          ],
         );
       },
     );
@@ -499,29 +501,45 @@ class _ChatInputBarState extends State<_ChatInputBar> {
   }
 }
 
-class _GlassButton extends StatelessWidget {
-  const _GlassButton({required this.label, required this.onTap});
+/// 页内 toast（样式与 RootShell._ToastOverlay 一致，§3.7）。
+class _ChatToastOverlay extends StatelessWidget {
+  const _ChatToastOverlay({required this.appState});
 
-  final String label;
-  final VoidCallback onTap;
+  final AppState appState;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 48,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: BanxiaTokens.tintFill,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Text(label,
-            style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                color: Colors.white)),
-      ),
+    return ValueListenableBuilder<ToastData?>(
+      valueListenable: appState.toast,
+      builder: (BuildContext context, ToastData? toast, Widget? _) {
+        return IgnorePointer(
+          child: AnimatedOpacity(
+            opacity: toast == null ? 0 : 1,
+            duration: const Duration(milliseconds: 160),
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 96, left: 40, right: 40),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+                decoration: BoxDecoration(
+                  color: BanxiaTokens.glassChrome,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: const Color(0x1F000000), width: 1),
+                ),
+                child: Text(
+                  toast?.message ?? '',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    color: BanxiaTokens.label,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

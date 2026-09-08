@@ -183,9 +183,9 @@ void main() {
     int notifications = 0;
     app.addListener(() => notifications++);
 
-    app.switchTab(AppTab.chat);
+    app.switchTab(AppTab.actions);
 
-    expect(app.tab.value, AppTab.chat);
+    expect(app.tab.value, AppTab.actions);
     expect(notifications, 1);
     app.dispose();
     bridge.dispose();
