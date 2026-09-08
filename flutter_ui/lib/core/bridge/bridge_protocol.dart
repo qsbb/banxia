@@ -49,6 +49,7 @@ abstract final class Cmd {
   static const String settingsVolume = 'settings.volume';
   static const String settingsToggle = 'settings.toggle';
   static const String copresenceEnterScene = 'copresence.enterScene';
+  static const String copresenceCancelEnterScene = 'copresence.cancelEnterScene';
   static const String copresenceReturnToMenu = 'copresence.returnToMenu';
   static const String copresenceSwitchMode = 'copresence.switchMode';
   static const String copresenceSwitchEnvironment =
@@ -80,6 +81,7 @@ abstract final class Evt {
   static const String connectionChanged = 'connection.changed';
   static const String pairingStatus = 'pairing.status';
   static const String pairingEndpointTest = 'pairing.endpointTest';
+  static const String modelLoadProgress = 'model.loadProgress';
   static const String conversationState = 'conversation.state';
   static const String conversationTranscript = 'conversation.transcript';
   static const String conversationReply = 'conversation.reply';
@@ -249,6 +251,45 @@ class BridgeEvent {
 
   final String name;
   final Map<String, dynamic>? payload;
+}
+
+/// Structured progress for one model load. `fraction < 0` means failure or
+/// cancellation; completion is confirmed only by the engine scene truth event.
+class ModelLoadProgress {
+  const ModelLoadProgress({
+    this.requestId = '',
+    this.generation = 0,
+    this.phase = '',
+    this.state = '',
+    this.fraction = -1,
+    this.line = '',
+    this.errorCode = '',
+  });
+
+  final String requestId;
+  final int generation;
+  final String phase;
+  final String state;
+  final double fraction;
+  final String line;
+  final String errorCode;
+
+  factory ModelLoadProgress.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return const ModelLoadProgress();
+    final double raw = _num(json['fraction']);
+    final double fraction = raw.isFinite && raw >= 0
+        ? raw.clamp(0.0, 1.0).toDouble()
+        : -1.0;
+    return ModelLoadProgress(
+      requestId: _str(json['requestId']),
+      generation: _int(json['generation']),
+      phase: _str(json['phase']),
+      state: _str(json['state']),
+      fraction: fraction,
+      line: _str(json['line']),
+      errorCode: _str(json['errorCode']),
+    );
+  }
 }
 
 /// A model in the companion library (design §2.2).

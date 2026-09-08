@@ -127,6 +127,8 @@ class LocalBridgeClient implements BridgeClient {
   VirtualEnvironment _environment = VirtualEnvironment.nightStreet;
   bool _videoCallActive = false;
   bool _arPlaced = false;
+  bool _inScene = false;
+  int _loadGeneration = 0;
   bool _privateHttp = true;
   String _renderPreset = 'balanced';
   String _physicsPreset = 'balanced';
@@ -434,13 +436,44 @@ class LocalBridgeClient implements BridgeClient {
         }
         return _ok(id);
       case Cmd.copresenceEnterScene:
+        final String requestId = (p['requestId'] as String?) ?? 'local-scene-$id';
+        final int generation = ++_loadGeneration;
+        _emit(Evt.modelLoadProgress, <String, dynamic>{
+          'requestId': requestId,
+          'generation': generation,
+          'phase': 'Reading',
+          'state': 'started',
+          'fraction': 0.0,
+          'line': '正在准备模型…',
+        });
+        _emit(Evt.modelLoadProgress, <String, dynamic>{
+          'requestId': requestId,
+          'generation': generation,
+          'phase': 'Ready',
+          'state': 'completed',
+          'fraction': 1.0,
+          'line': '模型已就绪',
+        });
         _videoCallActive = _mode == CoPresenceMode.videoCall;
+        _inScene = true;
         _emit(Evt.copresenceMode, _modeEvent());
         _emit(Evt.framingAnchors, _demoFraming());
+        return _ok(id);
+      case Cmd.copresenceCancelEnterScene:
+        _emit(Evt.modelLoadProgress, <String, dynamic>{
+          'requestId': (p['requestId'] as String?) ?? '',
+          'generation': (p['generation'] as num?)?.toInt() ?? 1,
+          'phase': 'Cancelled',
+          'state': 'cancelled',
+          'fraction': -1.0,
+          'line': '已取消模型加载',
+          'errorCode': 'cancelled',
+        });
         return _ok(id);
       case Cmd.copresenceReturnToMenu:
         _videoCallActive = false;
         _arPlaced = false;
+        _inScene = false;
         _emit(Evt.copresenceMode, _modeEvent());
         _emit(Evt.copresencePlacementChanged,
             <String, dynamic>{'arPlaced': false});
@@ -531,6 +564,7 @@ class LocalBridgeClient implements BridgeClient {
         'videoCallActive': _videoCallActive,
         'arAvailable': false,
         'arPlaced': _arPlaced,
+        'inScene': _inScene,
       };
 
   Map<String, dynamic> _demoFraming() => <String, dynamic>{

@@ -88,6 +88,22 @@ class ModelLibraryState {
   bool loading = false;
 }
 
+class ModelLoadingState {
+  String requestId = '';
+  int generation = 0;
+  String phase = 'idle';
+  String state = 'idle';
+  double fraction = 0;
+  String line = '';
+  String errorCode = '';
+  bool pendingEntry = false;
+
+  bool get active => pendingEntry || state == 'started' || state == 'progress';
+  bool get failed => state == 'failed';
+  bool get cancelled => state == 'cancelled';
+  bool get gateVisible => pendingEntry || active || failed || cancelled || fraction >= 1;
+}
+
 class ActionLibraryState {
   List<VmdActionInfo> actions = <VmdActionInfo>[];
   String? playingId;
@@ -159,6 +175,7 @@ class AppState extends ChangeNotifier {
   final ConnectionState connection = ConnectionState();
   final ConversationState conversation = ConversationState();
   final ModelLibraryState models = ModelLibraryState();
+  final ModelLoadingState modelLoading = ModelLoadingState();
   final ActionLibraryState actions = ActionLibraryState();
   final QualityState quality = QualityState();
   final CoPresenceState copresence = CoPresenceState();
@@ -170,6 +187,7 @@ class AppState extends ChangeNotifier {
 
   Timer? _toastTimer;
   int _suggestionGeneration = 0;
+  int _nextSceneLoadGeneration = 0;
   final Map<String, EndpointTestResult> _earlyEndpointTestResults =
       <String, EndpointTestResult>{};
   final Set<String> _ignoredEndpointTestRequestIds = <String>{};
@@ -177,7 +195,44 @@ class AppState extends ChangeNotifier {
   bool _disposed = false;
 
   bool get inScene => uiMode.value == UiMode.scene;
+  bool get sceneEntryPending => modelLoading.pendingEntry;
+  bool get sceneInputBlocked => modelLoading.gateVisible;
   bool get connected => connection.connected;
+
+  void _clearModelLoading() {
+    modelLoading
+      ..requestId = ''
+      ..generation = 0
+      ..phase = 'idle'
+      ..state = 'idle'
+      ..fraction = 0
+      ..line = ''
+      ..errorCode = ''
+      ..pendingEntry = false;
+  }
+
+  void _applyModelLoadProgress(Map<String, dynamic>? payload) {
+    final ModelLoadProgress progress = ModelLoadProgress.fromJson(payload);
+    if (progress.requestId.isEmpty || progress.generation <= 0) return;
+    // Only the request created by enterScene may own the scene gate. This also
+    // prevents a late terminal event after Return from reopening the gate.
+    if (modelLoading.requestId.isEmpty) return;
+    if (modelLoading.generation > 0 &&
+        progress.generation < modelLoading.generation) return;
+    if (modelLoading.requestId.isNotEmpty &&
+        progress.requestId != modelLoading.requestId) return;
+    modelLoading
+      ..requestId = progress.requestId
+      ..generation = progress.generation
+      ..phase = progress.phase
+      ..state = progress.state
+      ..fraction = progress.fraction
+      ..line = progress.line
+      ..errorCode = progress.errorCode;
+    if (progress.state == 'failed' || progress.state == 'cancelled') {
+      modelLoading.pendingEntry = false;
+    }
+  }
 
   // ── Toast ─────────────────────────────────────────────────────────────────
   void showToast(String message) {
@@ -223,14 +278,34 @@ class AppState extends ChangeNotifier {
     // Menu/Scene ownership is a Flutter-side derivation (design §2.1).
     switch (cmd) {
       case Cmd.copresenceEnterScene:
-        final UiMode previousMode = uiMode.value;
-        final bool previousActive = copresence.videoCallActive;
-        uiMode.value = UiMode.scene;
-        copresence.videoCallActive =
-            copresence.mode == CoPresenceMode.videoCall;
+        if (modelLoading.gateVisible) return null;
+        final int generation = ++_nextSceneLoadGeneration;
+        final String requestId = 'scene-$generation';
+        modelLoading
+          ..requestId = requestId
+          ..generation = generation
+          ..phase = 'loading'
+          ..state = 'started'
+          ..fraction = 0
+          ..line = '正在准备模型…'
+          ..errorCode = ''
+          ..pendingEntry = true;
+        _notify();
         return () {
-          uiMode.value = previousMode;
-          copresence.videoCallActive = previousActive;
+          if (modelLoading.generation != generation) return;
+          _clearModelLoading();
+        };
+      case Cmd.copresenceCancelEnterScene:
+        final String requestId = modelLoading.requestId;
+        return () {
+          if (requestId.isNotEmpty && modelLoading.requestId == requestId) {
+            modelLoading
+              ..state = 'cancelled'
+              ..fraction = -1
+              ..errorCode = 'cancelled'
+              ..line = '已取消模型加载'
+              ..pendingEntry = false;
+          }
         };
       case Cmd.copresenceReturnToMenu:
         final UiMode previousMode = uiMode.value;
@@ -310,6 +385,8 @@ class AppState extends ChangeNotifier {
   }
 
   // ── Engine event routing ──────────────────────────────────────────────────
+  void eventsForTest(BridgeEvent event) => _handleEvent(event);
+
   void _handleEvent(BridgeEvent event) {
     final p = event.payload;
     switch (event.name) {
@@ -413,6 +490,9 @@ class AppState extends ChangeNotifier {
               .where((String value) => value.trim().isNotEmpty)
               .take(3));
         break;
+      case Evt.modelLoadProgress:
+        _applyModelLoadProgress(p);
+        break;
       case Evt.modelUpdated:
         _applyModels(p?['models']);
         if (p?['currentPath'] is String) {
@@ -421,7 +501,11 @@ class AppState extends ChangeNotifier {
         break;
       case Evt.modelImportStatus:
         models.importStatus = _str(p?['status']);
-        if (models.importStatus.isNotEmpty) showToast(models.importStatus);
+        // Structured model.loadProgress owns the loading gate and line display;
+        // do not turn every progress point into a transient toast.
+        if (_str(p?['requestId']).isEmpty && models.importStatus.isNotEmpty) {
+          showToast(models.importStatus);
+        }
         break;
       case Evt.actionUpdated:
         _applyActions(p?['actions']);
@@ -469,12 +553,20 @@ class AppState extends ChangeNotifier {
         if (p?['arPlaced'] is bool) {
           copresence.arPlaced = p!['arPlaced'] as bool;
         }
-        // Engine-side scene truth reconciles the optimistic uiMode (QA drives
-        // the engine directly, bypassing Dart's dispatch path entirely).
+        // Engine-side scene truth is authoritative (QA can drive the engine
+        // directly, bypassing Dart's dispatch path entirely).
         if (p?['inScene'] is bool) {
           final bool engineInScene = p!['inScene'] as bool;
-          if (engineInScene != inScene) {
-            uiMode.value = engineInScene ? UiMode.scene : UiMode.menu;
+          if (engineInScene) {
+            uiMode.value = UiMode.scene;
+            modelLoading.pendingEntry = false;
+            if (modelLoading.state == 'completed' ||
+                modelLoading.fraction >= 1) {
+              _clearModelLoading();
+            }
+          } else {
+            uiMode.value = UiMode.menu;
+            _clearModelLoading();
           }
         }
         break;
@@ -539,6 +631,10 @@ class AppState extends ChangeNotifier {
       closeSheet();
       return;
     }
+    if (sceneEntryPending || modelLoading.gateVisible) {
+      unawaited(cancelSceneLoad());
+      return;
+    }
     if (inScene) {
       unawaited(returnToMenu());
       return;
@@ -568,6 +664,7 @@ class AppState extends ChangeNotifier {
   }
 
   void sceneOrbitBy(Offset logicalDelta) {
+    if (sceneInputBlocked) return;
     unawaited(dispatch(Cmd.sceneOrbit, <String, dynamic>{
       'dx': logicalDelta.dx * _devicePixelRatio,
       'dy': logicalDelta.dy * _devicePixelRatio,
@@ -575,11 +672,12 @@ class AppState extends ChangeNotifier {
   }
 
   void sceneZoomBy(double scaleFactor) {
-    if (!scaleFactor.isFinite || scaleFactor <= 0) return;
+    if (sceneInputBlocked || !scaleFactor.isFinite || scaleFactor <= 0) return;
     unawaited(dispatch(Cmd.sceneZoom, <String, dynamic>{'scale': scaleFactor}));
   }
 
   void scenePanAvatarBy(Offset logicalDelta) {
+    if (sceneInputBlocked) return;
     unawaited(dispatch(Cmd.scenePanAvatar, <String, dynamic>{
       'dx': logicalDelta.dx * _devicePixelRatio,
       'dy': logicalDelta.dy * _devicePixelRatio,
@@ -629,11 +727,30 @@ class AppState extends ChangeNotifier {
 
   // ── High-level UI actions (M2/M3 semantics live here) ─────────────────────
   Future<void> enterScene([String? path]) async {
-    await dispatch(Cmd.copresenceEnterScene,
-        <String, dynamic>{if (path != null) 'path': path});
+    final String requestId = modelLoading.requestId.isEmpty
+        ? 'scene-${_nextSceneLoadGeneration + 1}'
+        : modelLoading.requestId;
+    await dispatch(Cmd.copresenceEnterScene, <String, dynamic>{
+      if (path != null) 'path': path,
+      'requestId': requestId,
+      'generation': modelLoading.generation,
+    });
   }
 
   Future<void> returnToMenu() async {
+    if (sceneEntryPending) {
+      await cancelSceneLoad();
+      return;
+    }
+    await dispatch(Cmd.copresenceReturnToMenu);
+  }
+
+  Future<void> cancelSceneLoad() async {
+    if (!modelLoading.gateVisible) return;
+    await dispatch(Cmd.copresenceCancelEnterScene, <String, dynamic>{
+      'requestId': modelLoading.requestId,
+      'generation': modelLoading.generation,
+    });
     await dispatch(Cmd.copresenceReturnToMenu);
   }
 
@@ -695,6 +812,7 @@ class AppState extends ChangeNotifier {
   /// `copresence.arPlace{x,y}` 交给引擎，与 [updateChromeInsets] 同一坐标
   /// 约定（物理像素、原点在左上）。
   Future<void> arPlaceAt(Offset position) async {
+    if (sceneInputBlocked) return;
     final views = WidgetsBinding.instance.platformDispatcher.views;
     final double ratio = views.isEmpty ? 1.0 : views.first.devicePixelRatio;
     await dispatch(Cmd.copresenceArPlace, <String, dynamic>{
@@ -705,6 +823,7 @@ class AppState extends ChangeNotifier {
 
   // ── M2 modal sheet ownership ──────────────────────────────────────────────
   void openSheet(String kind) {
+    if (sceneInputBlocked) return;
     copresence.sheetKind = kind;
     copresence.sheetOpen = true;
     _notify();

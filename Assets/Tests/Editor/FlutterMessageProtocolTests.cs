@@ -8,6 +8,45 @@ namespace QuestMmdPlayer.Tests
         private const string PayloadJson = "{\"path\":\"/MmdModels/kokona\"}";
 
         [Test]
+        public void P3CommandAndEventNamesAreRecognized()
+        {
+            Assert.That(FlutterMessageProtocol.IsKnownCommand(
+                FlutterCommands.CopresenceCancelEnterScene), Is.True);
+            Assert.That(FlutterMessageProtocol.IsKnownEvent(
+                FlutterEvents.ModelLoadProgress), Is.True);
+        }
+
+        [Test]
+        public void ModelLoadProgressPayloadRoundTripsWithoutPath()
+        {
+            var payload = new FlutterModelLoadProgressPayload
+            {
+                requestId = "scene-1",
+                generation = 3,
+                phase = "Building",
+                state = "progress",
+                fraction = 0.8f,
+                line = "正在构建",
+                errorCode = string.Empty,
+                path = string.Empty
+            };
+            Assert.That(FlutterMessageProtocol.TrySerializePayload(payload, out var json, out var error), Is.True, error);
+            var parsed = FlutterMessageProtocol.DeserializePayload<FlutterModelLoadProgressPayload>(json);
+            Assert.That(parsed.requestId, Is.EqualTo("scene-1"));
+            Assert.That(parsed.generation, Is.EqualTo(3));
+            Assert.That(parsed.fraction, Is.EqualTo(0.8f).Within(0.001f));
+            Assert.That(parsed.path, Is.Empty);
+        }
+
+        [Test]
+        public void LoadGenerationAcceptanceRejectsStaleGeneration()
+        {
+            Assert.That(RuntimeMmdModelLoader.IsLoadGenerationCurrent(4, 4), Is.True);
+            Assert.That(RuntimeMmdModelLoader.IsLoadGenerationCurrent(3, 4), Is.False);
+            Assert.That(RuntimeMmdModelLoader.IsLoadGenerationCurrent(0, 0), Is.False);
+        }
+
+        [Test]
         public void CommandEnvelopeSerializesVersionAndType()
         {
             var json = FlutterMessageProtocol.Serialize(

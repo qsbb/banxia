@@ -28,6 +28,38 @@ class _RejectingBridgeClient implements BridgeClient {
 }
 
 void main() {
+  group('ModelLoadProgress', () {
+    test('parses bounded progress and terminal fraction', () {
+      final progress = ModelLoadProgress.fromJson(<String, dynamic>{
+        'requestId': 'scene-1',
+        'generation': 2,
+        'phase': 'Building',
+        'state': 'progress',
+        'fraction': 0.8,
+        'line': '网格',
+      });
+      expect(progress.requestId, 'scene-1');
+      expect(progress.generation, 2);
+      expect(progress.fraction, 0.8);
+      expect(ModelLoadProgress.fromJson(<String, dynamic>{
+        'fraction': 99,
+      }).fraction, 1.0);
+    });
+  });
+
+  group('Scene loading gate', () {
+    test('local bridge reaches scene only after progress', () async {
+      final bridge = LocalBridgeClient();
+      final app = AppState(bridge);
+      await app.enterScene('kokona');
+      await Future<void>.delayed(Duration.zero);
+      expect(app.inScene, isTrue);
+      expect(app.modelLoading.gateVisible, isFalse);
+      app.dispose();
+    });
+
+  });
+
   group('BridgeEnvelope', () {
     test('cmd round-trips through json', () {
       final env = BridgeEnvelope(

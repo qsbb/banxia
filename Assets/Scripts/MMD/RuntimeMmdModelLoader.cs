@@ -21,6 +21,26 @@ namespace QuestMmdPlayer
         Failed
     }
 
+    /// <summary>
+    /// Bounded, correlation-safe progress snapshot for one model load. The
+    /// request id is caller supplied but normalized by the loader; the monotonic
+    /// generation is the engine-owned ordering guard.
+    /// </summary>
+    [Serializable]
+    public sealed class RuntimeModelLoadProgress
+    {
+        public string requestId = string.Empty;
+        public long generation;
+        public string phase = string.Empty;
+        public string state = string.Empty;
+        public float fraction = -1f;
+        public string line = string.Empty;
+        public string errorCode = string.Empty;
+        // Deliberately never populated with an absolute filesystem path. Flutter
+        // correlates by requestId/generation and must not receive local paths.
+        public string path = string.Empty;
+    }
+
     [Serializable]
     public sealed class RuntimeMmdModelInfo
     {
@@ -55,6 +75,7 @@ namespace QuestMmdPlayer
         private const int ParsedModelCacheCapacity = 2;
         private const float ParsedModelCacheLifetimeSeconds = 180f;
         private const float ParsedModelCacheTrimIntervalSeconds = 30f;
+        private const int MaxLoadRequestIdLength = 64;
         private const string RetiredBundledSampleDirectory = "ForestBerry";
         private static readonly IReadOnlyDictionary<string, string> RetiredBundledSampleFiles =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -74,6 +95,7 @@ namespace QuestMmdPlayer
 
         private CancellationTokenSource loadCancellation;
         private long loadGeneration;
+        private string currentLoadRequestId = string.Empty;
         private PMXImportResult currentResult;
         private AvatarController currentAvatar;
         private readonly List<ParsedModelCacheEntry> parsedModelCache = new List<ParsedModelCacheEntry>();
@@ -106,12 +128,14 @@ namespace QuestMmdPlayer
         public event Action ModelWillUnload;
         public event Action<string> LoadFailed;
         public event Action<string> ProgressChanged;
+        public event Action<RuntimeModelLoadProgress> LoadStatusChanged;
         public event Action<bool> LastModelRestoreCompleted;
 
         public AvatarController CurrentAvatar => currentAvatar;
         public GameObject CurrentModel => currentResult == null ? null : currentResult.root;
         public PMXModel CurrentMmdModel => currentResult == null ? null : currentResult.model;
         public bool IsLoading { get; private set; }
+        public long CurrentLoadGeneration => Interlocked.Read(ref loadGeneration);
         public string CurrentModelPath { get; private set; }
         public string CurrentModelContentSha256 { get; private set; } = string.Empty;
         public RuntimeModelLoadPhase LoadPhase { get; private set; } = RuntimeModelLoadPhase.Idle;
@@ -746,6 +770,20 @@ namespace QuestMmdPlayer
                 System.IO.Path.GetDirectoryName(model.Path));
         }
 
+        public Task<AvatarController> LoadInstalledModelWithRequestAsync(
+            RuntimeMmdModelInfo model,
+            string requestId)
+        {
+            if (model == null || string.IsNullOrWhiteSpace(model.Path))
+            {
+                throw new ArgumentException("An installed model is required.", nameof(model));
+            }
+            return LoadFromFileWithRequestAsync(
+                model.Path,
+                System.IO.Path.GetDirectoryName(model.Path),
+                requestId);
+        }
+
         public bool DeleteInstalledPackage(RuntimeMmdModelInfo model)
         {
             if (model == null || string.IsNullOrWhiteSpace(model.PackageRoot))
@@ -820,7 +858,15 @@ namespace QuestMmdPlayer
         /// Loads a PMX file and its adjacent texture directory. This is the API
         /// that a file picker, network transfer, or AstrBot bridge can call later.
         /// </summary>
-        public async Task<AvatarController> LoadFromFileAsync(string pmxPath, string textureBaseDirectory = null)
+        public Task<AvatarController> LoadFromFileAsync(string pmxPath, string textureBaseDirectory = null)
+        {
+            return LoadFromFileWithRequestAsync(pmxPath, textureBaseDirectory, string.Empty);
+        }
+
+        public async Task<AvatarController> LoadFromFileWithRequestAsync(
+            string pmxPath,
+            string textureBaseDirectory,
+            string requestId)
         {
             if (string.IsNullOrWhiteSpace(pmxPath))
             {
@@ -842,6 +888,7 @@ namespace QuestMmdPlayer
             previousCancellation?.Cancel();
             var token = currentCancellation.Token;
             var generation = Interlocked.Increment(ref loadGeneration);
+            currentLoadRequestId = NormalizeLoadRequestId(requestId, generation);
             IsLoading = true;
             LoadPhase = RuntimeModelLoadPhase.Reading;
             LastFailurePhase = RuntimeModelLoadPhase.Idle;
@@ -860,6 +907,13 @@ namespace QuestMmdPlayer
             Debug.Log("[ModelLoad] start name=" + displayName +
                 " bytes=" + new FileInfo(pmxPath).Length +
                 " textureRoot=" + (Directory.Exists(resolvedTextureRoot) ? "ready" : "missing"));
+            NotifyLoadStatus(
+                generation,
+                RuntimeModelLoadPhase.Reading,
+                "started",
+                0f,
+                "正在准备模型…",
+                string.Empty);
             NotifyProgress("Reading PMX");
             SuspendCurrentModelPhysicsForLoad();
 
@@ -874,9 +928,27 @@ namespace QuestMmdPlayer
                 await new UMTFrameBudget(0d).YieldIfNeeded();
                 token.ThrowIfCancellationRequested();
                 loadMetricsStartFrame = Time.frameCount;
+                NotifyLoadStatus(
+                    generation,
+                    RuntimeModelLoadPhase.Reading,
+                    "progress",
+                    0.2f,
+                    "正在读取模型文件…",
+                    string.Empty);
                 var importedArtifacts = await ImportAsync(pmxPath, textureBaseDirectory, token);
                 importedResult = importedArtifacts.result;
                 token.ThrowIfCancellationRequested();
+                if (!IsCurrentLoad(generation, currentCancellation))
+                {
+                    throw new OperationCanceledException(token);
+                }
+                NotifyLoadStatus(
+                    generation,
+                    RuntimeModelLoadPhase.Building,
+                    "progress",
+                    0.5f,
+                    "正在解析模型数据…",
+                    string.Empty);
 
                 var modelRoot = importedResult.root;
                 importedAvatarHost = new GameObject(modelRoot.name + "_Avatar");
@@ -884,6 +956,17 @@ namespace QuestMmdPlayer
                 modelRoot.transform.SetParent(importedAvatarHost.transform, false);
                 var avatar = importedAvatarHost.AddComponent<AvatarController>();
                 avatar.Initialize(modelRoot.transform);
+                NotifyLoadStatus(
+                    generation,
+                    RuntimeModelLoadPhase.Building,
+                    "progress",
+                    0.8f,
+                    "正在构建网格与物理…",
+                    string.Empty);
+                if (!IsCurrentLoad(generation, currentCancellation))
+                {
+                    throw new OperationCanceledException(token);
+                }
 
                 UnloadCurrentModel();
                 currentResult = importedResult;
@@ -895,8 +978,15 @@ namespace QuestMmdPlayer
                 importedResult = null;
                 importedAvatarHost = null;
                 TrimParsedModelCache();
-                NotifyProgress("Model ready");
                 LoadPhase = RuntimeModelLoadPhase.Ready;
+                NotifyLoadStatus(
+                    generation,
+                    RuntimeModelLoadPhase.Ready,
+                    "completed",
+                    1f,
+                    "模型已就绪",
+                    string.Empty);
+                NotifyProgress("Model ready");
                 LastLoadMilliseconds = ElapsedMilliseconds(loadStartedAt);
                 Debug.Log("[ModelLoad] ready name=" + displayName +
                     " readMs=" + LastReadMilliseconds +
@@ -925,6 +1015,13 @@ namespace QuestMmdPlayer
                     Debug.LogWarning("[ModelLoad] cancelled name=" + displayName +
                         " phase=" + LastFailurePhase +
                         " totalMs=" + LastLoadMilliseconds);
+                    NotifyLoadStatus(
+                        generation,
+                        RuntimeModelLoadPhase.Cancelled,
+                        "cancelled",
+                        -1f,
+                        "已取消模型加载",
+                        "cancelled");
                 }
                 throw;
             }
@@ -944,7 +1041,15 @@ namespace QuestMmdPlayer
                         " totalMs=" + LastLoadMilliseconds +
                         " error=" + exception.GetType().Name);
                     Debug.LogException(exception, this);
-                    NotifyLoadFailed(exception.Message);
+                    var errorCode = ClassifyLoadError(exception);
+                    NotifyLoadStatus(
+                        generation,
+                        RuntimeModelLoadPhase.Failed,
+                        "failed",
+                        -1f,
+                        "模型加载失败",
+                        errorCode);
+                    NotifyLoadFailed("模型加载失败");
                 }
                 throw;
             }
@@ -982,6 +1087,41 @@ namespace QuestMmdPlayer
         public void CancelLoad()
         {
             loadCancellation?.Cancel();
+        }
+
+        internal static bool IsLoadGenerationCurrent(long generation, long currentGeneration)
+        {
+            return generation > 0 && generation == currentGeneration;
+        }
+
+        private bool IsCurrentLoad(long generation, CancellationTokenSource cancellation)
+        {
+            return IsLoadGenerationCurrent(generation, CurrentLoadGeneration) &&
+                ReferenceEquals(loadCancellation, cancellation) &&
+                !cancellation.IsCancellationRequested;
+        }
+
+        private static string NormalizeLoadRequestId(string requestId, long generation)
+        {
+            var normalized = (requestId ?? string.Empty).Trim();
+            if (normalized.Length > MaxLoadRequestIdLength)
+            {
+                normalized = normalized.Substring(0, MaxLoadRequestIdLength);
+            }
+            return normalized.Length == 0 ? "load-" + generation : normalized;
+        }
+
+        private static string ClassifyLoadError(Exception exception)
+        {
+            if (exception is OperationCanceledException) return "cancelled";
+            if (exception is FileNotFoundException || exception is DirectoryNotFoundException)
+                return "notFound";
+            if (exception is InvalidDataException || exception is EndOfStreamException ||
+                exception is FormatException)
+                return "invalidPmx";
+            if (exception is IOException || exception is UnauthorizedAccessException)
+                return "io";
+            return "unknown";
         }
 
         private async Task<ImportedModelArtifacts> ImportAsync(
@@ -1521,6 +1661,30 @@ namespace QuestMmdPlayer
         private void NotifyProgress(string message)
         {
             InvokeSafely(ProgressChanged, message);
+        }
+
+        private void NotifyLoadStatus(
+            long generation,
+            RuntimeModelLoadPhase phase,
+            string state,
+            float fraction,
+            string line,
+            string errorCode)
+        {
+            if (!IsLoadGenerationCurrent(generation, CurrentLoadGeneration))
+            {
+                return;
+            }
+            InvokeSafely(LoadStatusChanged, new RuntimeModelLoadProgress
+            {
+                requestId = currentLoadRequestId,
+                generation = generation,
+                phase = phase.ToString(),
+                state = state ?? string.Empty,
+                fraction = fraction,
+                line = line ?? string.Empty,
+                errorCode = errorCode ?? string.Empty
+            });
         }
 
         private void NotifyAvatarLoaded(AvatarController avatar)

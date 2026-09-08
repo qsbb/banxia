@@ -75,6 +75,10 @@ namespace QuestMmdPlayer
         private bool lastArPlaced;
         /// <summary>引擎侧场景态（进/出场景时维护），随 copresence.mode 事件发布。</summary>
         private bool sceneActive;
+        private long sceneLoadGeneration;
+        private string sceneLoadRequestId = string.Empty;
+        private bool sceneLoadPending;
+        private long lastLoadStatusGeneration;
         private bool lastFramingValid;
         private string lastFramingSignature = string.Empty;
         private int lastScreenWidth;
@@ -249,6 +253,7 @@ namespace QuestMmdPlayer
                 case FlutterCommands.SettingsToggle: return HandleSettingsToggle(payloadJson);
 
                 case FlutterCommands.CopresenceEnterScene: return HandleCopresenceEnterScene(payloadJson);
+                case FlutterCommands.CopresenceCancelEnterScene: return HandleCopresenceCancelEnterScene();
                 case FlutterCommands.CopresenceReturnToMenu: return HandleCopresenceReturnToMenu();
                 case FlutterCommands.CopresenceSwitchMode: return HandleCopresenceSwitchMode(payloadJson);
                 case FlutterCommands.CopresenceSwitchEnvironment: return HandleCopresenceSwitchEnvironment(payloadJson);
@@ -1006,6 +1011,10 @@ namespace QuestMmdPlayer
             }
             var payload = FlutterMessageProtocol.DeserializePayload<CopresenceEnterScenePayload>(payloadJson);
             var path = payload == null ? string.Empty : payload.path;
+            if (sceneLoadPending)
+            {
+                return FlutterCommandResult.Failure("模型仍在加载，请稍候");
+            }
             if (!string.IsNullOrWhiteSpace(path))
             {
                 if (FindModel(path) == null)
@@ -1028,7 +1037,23 @@ namespace QuestMmdPlayer
                     PollFraming();
                     return FlutterCommandResult.Success();
                 }
-                LoadModelThenEnterSceneAsync(path).Forget("copresence.enter-scene");
+                sceneLoadPending = true;
+                sceneLoadGeneration = payload != null && payload.generation > 0
+                    ? payload.generation
+                    : (ModelLoader == null ? 0 : ModelLoader.CurrentLoadGeneration + 1);
+                sceneLoadRequestId = string.IsNullOrWhiteSpace(payload == null ? null : payload.requestId)
+                    ? "scene-" + Guid.NewGuid().ToString("N")
+                    : payload.requestId.Trim();
+                PublishModelLoadProgress(new RuntimeModelLoadProgress
+                {
+                    requestId = sceneLoadRequestId,
+                    generation = sceneLoadGeneration,
+                    phase = RuntimeModelLoadPhase.Reading.ToString(),
+                    state = "started",
+                    fraction = 0f,
+                    line = "正在准备模型…"
+                });
+                LoadModelThenEnterSceneAsync(path, sceneLoadRequestId).Forget("copresence.enter-scene");
                 return FlutterCommandResult.Success();
             }
             CoPresence.ApplyOnEnterScene();
@@ -1040,18 +1065,79 @@ namespace QuestMmdPlayer
             return FlutterCommandResult.Success();
         }
 
-        private async Task LoadModelThenEnterSceneAsync(string path)
+        private async Task LoadModelThenEnterSceneAsync(string path, string requestId)
         {
-            if (await LoadModelAsync(path))
+            try
             {
+                var loader = ModelLoader;
+                if (loader == null)
+                {
+                    PublishSceneLoadFailure(requestId, "unknown", "模型加载器不可用");
+                    return;
+                }
+                var model = FindModel(path);
+                if (model == null)
+                {
+                    PublishSceneLoadFailure(requestId, "notFound", "未找到指定模型");
+                    return;
+                }
+                await loader.LoadInstalledModelWithRequestAsync(model, requestId);
+                if (!sceneLoadPending || !string.Equals(sceneLoadRequestId, requestId, StringComparison.Ordinal))
+                {
+                    return;
+                }
                 CoPresence?.ApplyOnEnterScene();
                 sceneActive = true;
+                sceneLoadPending = false;
                 PublishCopresenceMode();
+                PollArPlacement();
+                PollCallTimer();
+                PollFraming();
             }
+            catch (OperationCanceledException)
+            {
+                if (sceneLoadPending && string.Equals(sceneLoadRequestId, requestId, StringComparison.Ordinal))
+                {
+                    PublishModelLoadProgress(new RuntimeModelLoadProgress
+                    {
+                        requestId = requestId,
+                        generation = sceneLoadGeneration,
+                        phase = RuntimeModelLoadPhase.Cancelled.ToString(),
+                        state = "cancelled",
+                        fraction = -1f,
+                        line = "已取消模型加载",
+                        errorCode = "cancelled"
+                    });
+                }
+            }
+            catch (Exception exception)
+            {
+                QuestDebugMode.Report(exception, "copresence.enter-scene");
+                QuestDebugMode.RethrowIfEnabled(exception, "copresence.enter-scene");
+                if (sceneLoadPending && string.Equals(sceneLoadRequestId, requestId, StringComparison.Ordinal))
+                {
+                    PublishSceneLoadFailure(requestId, "unknown", "模型加载失败");
+                }
+            }
+        }
+
+        private FlutterCommandResult HandleCopresenceCancelEnterScene()
+        {
+            if (!sceneLoadPending)
+            {
+                return FlutterCommandResult.Success();
+            }
+            ModelLoader?.CancelLoad();
+            // The loader emits the terminal cancellation event. Returning to
+            // menu below publishes engine scene truth and clears the gate.
+            return FlutterCommandResult.Success();
         }
 
         private FlutterCommandResult HandleCopresenceReturnToMenu()
         {
+            ModelLoader?.CancelLoad();
+            sceneLoadPending = false;
+            sceneLoadRequestId = string.Empty;
             if (CoPresence == null)
             {
                 return FlutterCommandResult.Failure("同框导演不可用");
@@ -1497,7 +1583,10 @@ namespace QuestMmdPlayer
                         {
                             return FlutterCommandResult.Failure("未发现可用模型");
                         }
-                        LoadModelThenEnterSceneAsync(models[0].Path).Forget("qa.enter-scene");
+                        sceneLoadPending = true;
+                        sceneLoadGeneration = ModelLoader.CurrentLoadGeneration + 1;
+                        sceneLoadRequestId = "qa-scene-" + Guid.NewGuid().ToString("N");
+                        LoadModelThenEnterSceneAsync(models[0].Path, sceneLoadRequestId).Forget("qa.enter-scene");
                         return FlutterCommandResult.Success();
                     }
                     CoPresence.ApplyOnEnterScene();
@@ -1611,6 +1700,8 @@ namespace QuestMmdPlayer
                 ModelLoader.AvatarLoaded += HandleAvatarLoaded;
                 ModelLoader.LoadFailed -= HandleLoadFailed;
                 ModelLoader.LoadFailed += HandleLoadFailed;
+                ModelLoader.LoadStatusChanged -= HandleModelLoadStatusChanged;
+                ModelLoader.LoadStatusChanged += HandleModelLoadStatusChanged;
                 ModelLoader.ProgressChanged -= HandleModelProgress;
                 ModelLoader.ProgressChanged += HandleModelProgress;
             }
@@ -1669,6 +1760,7 @@ namespace QuestMmdPlayer
             {
                 ModelLoader.AvatarLoaded -= HandleAvatarLoaded;
                 ModelLoader.LoadFailed -= HandleLoadFailed;
+                ModelLoader.LoadStatusChanged -= HandleModelLoadStatusChanged;
                 ModelLoader.ProgressChanged -= HandleModelProgress;
             }
             if (VmdActions != null)
@@ -1741,8 +1833,34 @@ namespace QuestMmdPlayer
 
         private void HandleLoadFailed(string message)
         {
+            // The structured status event owns the model-loading UI. Keep this
+            // legacy callback for the old UI subscribers without duplicating a
+            // toast on the Flutter path.
+            if (sceneLoadPending)
+            {
+                return;
+            }
             PublishImportStatus(message ?? "模型加载失败");
             PublishToast(message ?? "模型加载失败");
+        }
+
+        private void HandleModelLoadStatusChanged(RuntimeModelLoadProgress progress)
+        {
+            if (progress == null || progress.generation < lastLoadStatusGeneration)
+            {
+                return;
+            }
+            lastLoadStatusGeneration = progress.generation;
+            PublishModelLoadProgress(progress);
+            if (sceneLoadPending &&
+                string.Equals(sceneLoadRequestId, progress.requestId, StringComparison.Ordinal) &&
+                progress.generation == sceneLoadGeneration &&
+                (progress.state == "failed" || progress.state == "cancelled"))
+            {
+                // Keep the opaque loading gate on screen until the user chooses
+                // Return; only the successful scene truth closes it.
+                return;
+            }
         }
 
         private void HandleModelProgress(string message)
@@ -1903,6 +2021,53 @@ namespace QuestMmdPlayer
             PublishEvent(FlutterEvents.ModelImportStatus, new FlutterImportStatusPayload
             {
                 status = status ?? string.Empty
+            });
+        }
+
+        private void PublishModelLoadProgress(RuntimeModelLoadProgress progress)
+        {
+            if (progress == null)
+            {
+                return;
+            }
+            PublishEvent(FlutterEvents.ModelLoadProgress, new FlutterModelLoadProgressPayload
+            {
+                requestId = progress.requestId ?? string.Empty,
+                generation = progress.generation,
+                phase = progress.phase ?? string.Empty,
+                state = progress.state ?? string.Empty,
+                fraction = progress.fraction,
+                line = progress.line ?? string.Empty,
+                errorCode = progress.errorCode ?? string.Empty,
+                // Keep local filesystem paths out of the bridge event.
+                path = string.Empty
+            });
+            // Preserve the old status channel for existing Flutter/legacy hosts.
+            PublishEvent(FlutterEvents.ModelImportStatus, new FlutterImportStatusPayload
+            {
+                status = progress.line ?? string.Empty,
+                requestId = progress.requestId ?? string.Empty,
+                generation = progress.generation,
+                phase = progress.phase ?? string.Empty,
+                state = progress.state ?? string.Empty,
+                fraction = progress.fraction,
+                line = progress.line ?? string.Empty,
+                errorCode = progress.errorCode ?? string.Empty,
+                path = string.Empty
+            });
+        }
+
+        private void PublishSceneLoadFailure(string requestId, string errorCode, string line)
+        {
+            PublishModelLoadProgress(new RuntimeModelLoadProgress
+            {
+                requestId = requestId ?? string.Empty,
+                generation = sceneLoadGeneration,
+                phase = RuntimeModelLoadPhase.Failed.ToString(),
+                state = "failed",
+                fraction = -1f,
+                line = line ?? "模型加载失败",
+                errorCode = errorCode ?? "unknown"
             });
         }
 
@@ -2457,7 +2622,12 @@ namespace QuestMmdPlayer
     [Serializable] public sealed class SettingsTargetFpsPayload { public int fps; }
     [Serializable] public sealed class SettingsVolumePayload { public float v; }
     [Serializable] public sealed class SettingsTogglePayload { public string key = string.Empty; public bool value; }
-    [Serializable] public sealed class CopresenceEnterScenePayload { public string path = string.Empty; }
+    [Serializable] public sealed class CopresenceEnterScenePayload
+    {
+        public string path = string.Empty;
+        public string requestId = string.Empty;
+        public long generation;
+    }
     [Serializable] public sealed class CopresenceSwitchModePayload { public string mode = string.Empty; }
     [Serializable] public sealed class CopresenceSwitchEnvironmentPayload { public string env = string.Empty; }
     [Serializable] public sealed class CopresenceSetChromeInsetsPayload { public float top; public float bottom; }

@@ -74,6 +74,7 @@ namespace QuestMmdPlayer
         public const string SettingsToggle = "settings.toggle";
 
         public const string CopresenceEnterScene = "copresence.enterScene";
+        public const string CopresenceCancelEnterScene = "copresence.cancelEnterScene";
         public const string CopresenceReturnToMenu = "copresence.returnToMenu";
         public const string CopresenceSwitchMode = "copresence.switchMode";
         public const string CopresenceSwitchEnvironment = "copresence.switchEnvironment";
@@ -107,6 +108,7 @@ namespace QuestMmdPlayer
         public const string ConnectionChanged = "connection.changed";
         public const string PairingStatus = "pairing.status";
         public const string PairingEndpointTest = "pairing.endpointTest";
+        public const string ModelLoadProgress = "model.loadProgress";
         public const string ConversationState = "conversation.state";
         public const string ConversationTranscript = "conversation.transcript";
         public const string ConversationReply = "conversation.reply";
@@ -216,6 +218,16 @@ namespace QuestMmdPlayer
                 payload = payloadJson ?? string.Empty,
                 error = string.Empty
             };
+        }
+
+        public static bool IsKnownCommand(string name)
+        {
+            return !string.IsNullOrEmpty(name) && RecognizedCommands.Contains(name);
+        }
+
+        public static bool IsKnownEvent(string name)
+        {
+            return !string.IsNullOrEmpty(name) && RecognizedEvents.Contains(name);
         }
 
         public static FlutterEnvelope Reply(long id, string name, string dataJson, string error)
@@ -444,6 +456,7 @@ namespace QuestMmdPlayer
                 FlutterCommands.SettingsVolume,
                 FlutterCommands.SettingsToggle,
                 FlutterCommands.CopresenceEnterScene,
+                FlutterCommands.CopresenceCancelEnterScene,
                 FlutterCommands.CopresenceReturnToMenu,
                 FlutterCommands.CopresenceSwitchMode,
                 FlutterCommands.CopresenceSwitchEnvironment,
@@ -471,6 +484,7 @@ namespace QuestMmdPlayer
                 FlutterEvents.ConnectionChanged,
                 FlutterEvents.PairingStatus,
                 FlutterEvents.PairingEndpointTest,
+                FlutterEvents.ModelLoadProgress,
                 FlutterEvents.ConversationState,
                 FlutterEvents.ConversationTranscript,
                 FlutterEvents.ConversationReply,
@@ -566,7 +580,30 @@ namespace QuestMmdPlayer
         public string currentPath = string.Empty;
     }
 
-    [Serializable] public sealed class FlutterImportStatusPayload { public string status = string.Empty; }
+    [Serializable] public sealed class FlutterImportStatusPayload
+    {
+        public string status = string.Empty;
+        public string requestId = string.Empty;
+        public long generation;
+        public string phase = string.Empty;
+        public string state = string.Empty;
+        public float fraction = -1f;
+        public string line = string.Empty;
+        public string errorCode = string.Empty;
+        public string path = string.Empty;
+    }
+
+    [Serializable] public sealed class FlutterModelLoadProgressPayload
+    {
+        public string requestId = string.Empty;
+        public long generation;
+        public string phase = string.Empty;
+        public string state = string.Empty;
+        public float fraction = -1f;
+        public string line = string.Empty;
+        public string errorCode = string.Empty;
+        public string path = string.Empty;
+    }
 
     [Serializable] public sealed class FlutterVmdActionInfoDto { public string id = string.Empty; public string displayName = string.Empty; public long byteLength; public int keyframeCount; public long lastFrame; public float durationSeconds; public bool hasFacialTrack; }
 

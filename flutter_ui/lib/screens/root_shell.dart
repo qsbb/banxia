@@ -35,11 +35,76 @@ class RootShell extends StatelessWidget {
               appState.inScene
                   ? SceneOverlay(appState: appState)
                   : _MenuShell(appState: appState),
+              if (appState.modelLoading.gateVisible)
+                _SceneLoadingGate(appState: appState),
               _ToastOverlay(appState: appState),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+class _SceneLoadingGate extends StatelessWidget {
+  const _SceneLoadingGate({required this.appState});
+
+  final AppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    final ModelLoadingState loading = appState.modelLoading;
+    final bool terminal = loading.failed || loading.cancelled;
+    final double progress = loading.fraction.clamp(0.0, 1.0).toDouble();
+    return Positioned.fill(
+      child: Material(
+        color: const Color(0xF20B1020),
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 360),
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    const Icon(Icons.person, size: 64, color: Colors.white),
+                    const SizedBox(height: 18),
+                    Text(
+                      terminal
+                          ? (loading.cancelled ? '已取消加载' : '模型加载失败')
+                          : '正在进入场景',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 14),
+                    if (!terminal)
+                      LinearProgressIndicator(value: progress),
+                    const SizedBox(height: 14),
+                    Text(
+                      loading.line.isEmpty ? '请稍候…' : loading.line,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                    if (terminal && loading.errorCode.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 8),
+                      Text(loading.errorCode,
+                          style: const TextStyle(color: Colors.white54)),
+                    ],
+                    const SizedBox(height: 22),
+                    FilledButton(
+                      onPressed: () => appState.cancelSceneLoad(),
+                      child: Text(terminal ? '返回首页' : '取消'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
