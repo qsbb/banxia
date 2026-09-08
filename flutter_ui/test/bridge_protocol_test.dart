@@ -191,11 +191,12 @@ void main() {
     bridge.dispose();
   });
 
-  test('local camera send preserves typed text and emits suggestions', () async {
+  test('local camera send preserves typed text and emits suggestions',
+      () async {
     final bridge = LocalBridgeClient();
     final app = AppState(bridge);
-    await bridge.call(Cmd.conversationSendWithCamera,
-        <String, dynamic>{'text': '请描述这张照片'});
+    await bridge.call(
+        Cmd.conversationSendWithCamera, <String, dynamic>{'text': '请描述这张照片'});
     await Future<void>.delayed(Duration.zero);
     expect(app.conversation.bubbles.first.text, '请描述这张照片');
     expect(app.conversation.suggestedReplies, hasLength(3));
@@ -204,7 +205,8 @@ void main() {
     bridge.dispose();
   });
 
-  test('local pairing buffer mirrors append, removal, clear and server', () async {
+  test('local pairing buffer mirrors append, removal, clear and server',
+      () async {
     final bridge = LocalBridgeClient();
     final app = AppState(bridge);
     await bridge.call(Cmd.pairingSetServer,
@@ -243,7 +245,8 @@ void main() {
     bridge.dispose();
   });
 
-  test('clear binding clears the committed server after bridge success', () async {
+  test('clear binding clears the committed server after bridge success',
+      () async {
     final bridge = LocalBridgeClient();
     final app = AppState(bridge);
     await app.commitPairingServer('https://old.example');
@@ -296,7 +299,8 @@ void main() {
     bridge.dispose();
   });
 
-  test('pairing status events do not overwrite an active server draft', () async {
+  test('pairing status events do not overwrite an active server draft',
+      () async {
     final bridge = LocalBridgeClient();
     final app = AppState(bridge);
     await bridge.call(Cmd.pairingSetServer,
@@ -316,10 +320,42 @@ void main() {
     bridge.dispose();
   });
 
+  test('endpoint test uses ack plus asynchronous result event', () async {
+    final bridge = LocalBridgeClient();
+    final app = AppState(bridge);
+    await app.addEndpoint('https://edge.example');
+
+    final bool accepted = await app.testEndpoint('https://edge.example');
+    expect(accepted, isTrue);
+    expect(app.isEndpointTesting('https://edge.example'), isTrue);
+
+    await Future<void>.delayed(Duration.zero);
+    expect(app.isEndpointTesting('https://edge.example'), isFalse);
+    expect(app.endpointTestResult('https://edge.example')!.ok, isTrue);
+    expect(app.endpointTestResult('https://edge.example')!.httpCode, 200);
+
+    app.dispose();
+    bridge.dispose();
+  });
+
+  test('late endpoint result after removal is ignored', () async {
+    final bridge = LocalBridgeClient();
+    final app = AppState(bridge);
+    await app.addEndpoint('https://edge.example');
+    expect(await app.testEndpoint('https://edge.example'), isTrue);
+    await app.removeEndpoint('https://edge.example');
+    await Future<void>.delayed(Duration.zero);
+    expect(app.connection.endpointTestResults, isEmpty);
+    app.dispose();
+    bridge.dispose();
+  });
+
   test('cmd/event names are stable and non-empty', () {
     expect(Cmd.modelDiscover, 'model.discover');
+    expect(Cmd.pairingEndpointTest, 'pairing.endpointTest');
     expect(Cmd.copresenceSwitchMode, 'copresence.switchMode');
     expect(Evt.framingAnchors, 'framing.anchors');
+    expect(Evt.pairingEndpointTest, 'pairing.endpointTest');
     expect(Evt.conversationSuggestions, 'conversation.suggestions');
     expect(Evt.copresencePlacementChanged, 'copresence.placementChanged');
     expect(Evt.toast, 'toast');

@@ -63,6 +63,16 @@ namespace QuestMmdPlayer
         public float CapturedAt { get; }
     }
 
+    [Serializable]
+    public sealed class AstrBotEndpointTestResult
+    {
+        public string requestId = string.Empty;
+        public bool ok;
+        public int httpCode;
+        public int elapsedMs;
+        public string errorKind = string.Empty;
+    }
+
     /// <summary>
     /// AstrBot Embodiment Bridge protocol 1.0 transport. Secrets are loaded from a
     /// JSON file under Application.persistentDataPath and are never serialized
@@ -124,7 +134,11 @@ namespace QuestMmdPlayer
         // 入口并顺延；鉴权/协议错误不转移（防掩盖配置错误 + 防降级攻击）。
         private readonly Dictionary<string, float> endpointCooldownUntil =
             new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Coroutine> endpointTestRoutines =
+            new Dictionary<string, Coroutine>(StringComparer.Ordinal);
         private const float EndpointCooldownSeconds = 120f;
+        private const int EndpointTestTimeoutSeconds = 5;
+        private const int MaxEndpointTestResponseBytes = 64 * 1024;
         private string activeBaseUrl = string.Empty;
         private RuntimeDebugLog diagnostics;
         private long sseConnectStartedAt;
@@ -184,6 +198,7 @@ namespace QuestMmdPlayer
 
         public event Action<AvatarCommand> CommandReceived;
         public event Action<ConversationEvent> EventReceived;
+        public event Action<AstrBotEndpointTestResult> EndpointTestCompleted;
 
         public bool IsConnected => sessionReady && eventStreamReady && activeSseRequest != null && !shuttingDown;
         public bool IsConfigured { get; private set; }
@@ -191,6 +206,96 @@ namespace QuestMmdPlayer
         public string ConfiguredBaseUrl => settings == null ? string.Empty : settings.base_url ?? string.Empty;
         /// <summary>Base URL currently carrying traffic (failover-selected).</summary>
         public string ActiveBaseUrl => string.IsNullOrEmpty(activeBaseUrl) ? ConfiguredBaseUrl : activeBaseUrl;
+
+        /// <summary>
+        /// Starts a bounded health probe without blocking the Unity main thread.
+        /// The result event intentionally carries no endpoint, credentials, or body.
+        /// </summary>
+        public bool TestEndpoint(string input, string requestId, bool allowPrivateHttp, bool allowRemoteHttp)
+        {
+            if (string.IsNullOrWhiteSpace(requestId) || requestId.Length > 64 ||
+                !IsConfigured || settings == null || shuttingDown)
+            {
+                return false;
+            }
+            if (!BackendPairingProtocol.TryBuildHealthEndpoint(
+                    input,
+                    out var endpoint,
+                    out _,
+                    allowPrivateHttp,
+                    allowRemoteHttp))
+            {
+                return false;
+            }
+            if (endpointTestRoutines.ContainsKey(requestId))
+            {
+                return false;
+            }
+            endpointTestRoutines[requestId] = StartCoroutine(RunEndpointTest(endpoint, requestId));
+            return true;
+        }
+
+        private IEnumerator RunEndpointTest(string endpoint, string requestId)
+        {
+            var startedAt = DiagnosticTimestamp();
+            var result = new AstrBotEndpointTestResult { requestId = requestId };
+            var boundedHandler = new BoundedTextDownloadHandler(MaxEndpointTestResponseBytes);
+            using (var request = new UnityWebRequest(endpoint, UnityWebRequest.kHttpVerbGET)
+            {
+                downloadHandler = boundedHandler,
+                timeout = EndpointTestTimeoutSeconds
+            })
+            {
+                var handler = boundedHandler;
+                ConfigureHeaders(request, false);
+                yield return request.SendWebRequest();
+                result.httpCode = (int)request.responseCode;
+                result.elapsedMs = ElapsedMs(startedAt);
+                result.ok = request.result == UnityWebRequest.Result.Success &&
+                    request.responseCode >= 200 && request.responseCode < 300 &&
+                    !handler.Overflowed && IsHealthyResponse(handler.Text);
+                if (!result.ok)
+                {
+                    if (handler.Overflowed)
+                    {
+                        result.errorKind = "response_too_large";
+                    }
+                    else if (request.result == UnityWebRequest.Result.Success &&
+                        request.responseCode >= 200 && request.responseCode < 300)
+                    {
+                        result.errorKind = "protocol";
+                    }
+                    else
+                    {
+                        result.errorKind = AstrBotProtocol.ClassifyEndpointTestError(
+                            request.error,
+                            request.responseCode,
+                            request.result == UnityWebRequest.Result.ConnectionError);
+                    }
+                }
+            }
+            endpointTestRoutines.Remove(requestId);
+            EndpointTestCompleted?.Invoke(result);
+        }
+
+        private static bool IsHealthyResponse(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json) || json.Length > MaxEndpointTestResponseBytes)
+            {
+                return false;
+            }
+            try
+            {
+                var response = JsonUtility.FromJson<HealthResponse>(json);
+                return response != null && response.status == "ok" && response.data != null &&
+                    response.data.protocol_version == AstrBotProtocol.Version &&
+                    response.data.transport == "http+sse";
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
 
         /// <summary>Ordered failover candidates (sanitized snapshot; empty when unpaired).</summary>
         public List<string> GetEndpointCandidates()
@@ -2075,6 +2180,14 @@ namespace QuestMmdPlayer
                 StopCoroutine(actionResultDeliveryRoutine);
                 actionResultDeliveryRoutine = null;
             }
+            foreach (var routine in endpointTestRoutines.Values)
+            {
+                if (routine != null)
+                {
+                    StopCoroutine(routine);
+                }
+            }
+            endpointTestRoutines.Clear();
             if (activeSseRequest != null)
             {
                 activeSseRequest.Abort();
@@ -2564,6 +2677,35 @@ namespace QuestMmdPlayer
         private static bool IsHand(string value)
         {
             return value == "left" || value == "right" || value == "both" || value == "none";
+        }
+
+        private sealed class BoundedTextDownloadHandler : DownloadHandlerScript
+        {
+            private readonly byte[] data;
+            private int length;
+
+            internal BoundedTextDownloadHandler(int maximumBytes)
+                : base(new byte[8192])
+            {
+                data = new byte[Mathf.Max(1, maximumBytes)];
+            }
+
+            internal bool Overflowed { get; private set; }
+
+            internal string Text => Encoding.UTF8.GetString(data, 0, length);
+
+            protected override bool ReceiveData(byte[] incoming, int incomingLength)
+            {
+                if (incoming == null || incomingLength < 0 ||
+                    incomingLength > data.Length - length)
+                {
+                    Overflowed = true;
+                    return false;
+                }
+                Buffer.BlockCopy(incoming, 0, data, length, incomingLength);
+                length += incomingLength;
+                return true;
+            }
         }
 
         private sealed class SseDownloadHandler : DownloadHandlerScript

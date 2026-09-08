@@ -201,6 +201,28 @@ namespace QuestMmdPlayer
             return true;
         }
 
+        public static bool TryBuildHealthEndpoint(
+            string serverOrBaseUrl,
+            out string healthEndpoint,
+            out string reason,
+            bool allowPrivateHttp = true,
+            bool allowRemoteHttp = false)
+        {
+            healthEndpoint = string.Empty;
+            if (!TryBuildBridgeBaseUrl(
+                    serverOrBaseUrl,
+                    out var baseUrl,
+                    out reason,
+                    allowPrivateHttp,
+                    allowRemoteHttp))
+            {
+                return false;
+            }
+
+            healthEndpoint = baseUrl + "/health";
+            return true;
+        }
+
         public static string GetServerEntry(string endpoint)
         {
             if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ||

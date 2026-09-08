@@ -271,6 +271,44 @@ namespace QuestMmdPlayer
             return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().TrimEnd('/');
         }
 
+        public static string ClassifyEndpointTestError(
+            string transportError,
+            long responseCode,
+            bool connectionError)
+        {
+            if (responseCode >= 400)
+            {
+                return "http";
+            }
+
+            var detail = (transportError ?? string.Empty).ToLowerInvariant();
+            if (detail.Contains("timed out") || detail.Contains("timeout") ||
+                detail.Contains("timedout"))
+            {
+                return "timeout";
+            }
+            if (detail.Contains("ssl") || detail.Contains("tls") ||
+                detail.Contains("certificate") || detail.Contains("secure channel"))
+            {
+                return "ssl";
+            }
+            if (detail.Contains("dns") || detail.Contains("resolve") ||
+                detail.Contains("unknown host") || detail.Contains("name or service"))
+            {
+                return "dns";
+            }
+            if (detail.Contains("refused") || detail.Contains("couldn't connect") ||
+                detail.Contains("failed to connect"))
+            {
+                return "refused";
+            }
+            if (connectionError)
+            {
+                return "refused";
+            }
+            return responseCode > 0 ? "http" : "refused";
+        }
+
         public static bool IsPrivateNetworkHost(string host)
         {
             if (!IPAddress.TryParse(host, out var address))

@@ -182,11 +182,13 @@ namespace QuestMmdPlayer.Tests
         public void RecognizedCommandAndEventSetsAreConsistent()
         {
             Assert.That(FlutterMessageProtocol.IsRecognizedCommand(FlutterCommands.ModelLoad), Is.True);
+            Assert.That(FlutterMessageProtocol.IsRecognizedCommand(FlutterCommands.PairingEndpointTest), Is.True);
             Assert.That(FlutterMessageProtocol.IsRecognizedCommand(FlutterCommands.QaCommand), Is.True);
             Assert.That(FlutterMessageProtocol.IsRecognizedCommand("nope"), Is.False);
             Assert.That(FlutterMessageProtocol.IsRecognizedCommand(string.Empty), Is.False);
 
             Assert.That(FlutterMessageProtocol.IsRecognizedEvent(FlutterEvents.Toast), Is.True);
+            Assert.That(FlutterMessageProtocol.IsRecognizedEvent(FlutterEvents.PairingEndpointTest), Is.True);
             Assert.That(FlutterMessageProtocol.IsRecognizedEvent(FlutterEvents.PerformanceSnapshot), Is.True);
             Assert.That(FlutterMessageProtocol.IsRecognizedEvent("nope"), Is.False);
         }

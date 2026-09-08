@@ -365,7 +365,8 @@ class _ConnectionPageState extends State<_ConnectionPage> {
                 _numpadExpanded = !numpadExpanded;
               }),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
                 child: Row(
                   children: <Widget>[
                     const Expanded(
@@ -382,9 +383,7 @@ class _ConnectionPageState extends State<_ConnectionPage> {
                     ),
                     const SizedBox(width: 6),
                     Icon(
-                      numpadExpanded
-                          ? Icons.expand_less
-                          : Icons.expand_more,
+                      numpadExpanded ? Icons.expand_less : Icons.expand_more,
                       color: BanxiaTokens.labelTertiary,
                     ),
                   ],
@@ -643,10 +642,11 @@ class _EndpointSectionState extends State<_EndpointSection> {
                         total: endpoints.length,
                         display: _shortEndpoint(endpoints[i]),
                         isActive: endpoints[i] == active,
-                        onMoveUp: () =>
-                            app.moveEndpoint(endpoints[i], -1),
-                        onMoveDown: () =>
-                            app.moveEndpoint(endpoints[i], 1),
+                        isTesting: app.isEndpointTesting(endpoints[i]),
+                        testResult: app.endpointTestResult(endpoints[i]),
+                        onTest: () => app.testEndpoint(endpoints[i]),
+                        onMoveUp: () => app.moveEndpoint(endpoints[i], -1),
+                        onMoveDown: () => app.moveEndpoint(endpoints[i], 1),
                         onRemove: () => app.removeEndpoint(endpoints[i]),
                       ),
                     ],
@@ -669,8 +669,8 @@ class _EndpointSectionState extends State<_EndpointSection> {
                   focusNode: _addFocus,
                   maxLength: 512,
                   maxLengthEnforcement: MaxLengthEnforcement.enforced,
-                  style: const TextStyle(
-                      fontSize: 14, color: BanxiaTokens.label),
+                  style:
+                      const TextStyle(fontSize: 14, color: BanxiaTokens.label),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
                     hintText: '填 域名:端口 或 IP:端口（默认明文 http）',
@@ -715,6 +715,9 @@ class _EndpointRow extends StatelessWidget {
     required this.total,
     required this.display,
     required this.isActive,
+    required this.isTesting,
+    required this.testResult,
+    required this.onTest,
     required this.onMoveUp,
     required this.onMoveDown,
     required this.onRemove,
@@ -724,6 +727,9 @@ class _EndpointRow extends StatelessWidget {
   final int total;
   final String display;
   final bool isActive;
+  final bool isTesting;
+  final EndpointTestResult? testResult;
+  final VoidCallback onTest;
   final VoidCallback onMoveUp;
   final VoidCallback onMoveDown;
   final VoidCallback onRemove;
@@ -748,6 +754,26 @@ class _EndpointRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         fontSize: 15, color: BanxiaTokens.label)),
+                if (isTesting)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Text('测试中…',
+                        style: TextStyle(
+                            fontSize: 12, color: BanxiaTokens.labelSecondary)),
+                  ),
+                if (!isTesting && testResult != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      _testResultText(testResult!),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: testResult!.ok
+                            ? BanxiaTokens.tint
+                            : BanxiaTokens.labelSecondary,
+                      ),
+                    ),
+                  ),
                 if (isActive)
                   const Padding(
                     padding: EdgeInsets.only(top: 2),
@@ -758,6 +784,14 @@ class _EndpointRow extends StatelessWidget {
                             color: BanxiaTokens.tint)),
                   ),
               ],
+            ),
+          ),
+          Tooltip(
+            message: '测试入口连通性',
+            child: _EndpointAction(
+              icon: Icons.network_check,
+              enabled: !isTesting,
+              onTap: onTest,
             ),
           ),
           _EndpointAction(
@@ -779,6 +813,21 @@ class _EndpointRow extends StatelessWidget {
       ),
     );
   }
+}
+
+String _testResultText(EndpointTestResult result) {
+  if (result.ok) return '✓ ${result.httpCode} · ${result.elapsedMs}ms';
+  final String label = switch (result.errorKind) {
+    'timeout' => '超时',
+    'ssl' => 'SSL',
+    'dns' => '解析失败',
+    'refused' => '拒绝',
+    'http' => 'HTTP ${result.httpCode}',
+    'protocol' => '协议不兼容',
+    'response_too_large' => '响应过大',
+    _ => '连接失败',
+  };
+  return '✗ $label';
 }
 
 class _EndpointAction extends StatelessWidget {

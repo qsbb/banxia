@@ -67,7 +67,8 @@ class ChannelBridgeClient implements BridgeClient {
       final dynamic result =
           await _method.invokeMethod<dynamic>('call', envelope.toJson());
       final reply = BridgeReply.tryParse(result);
-      if (reply == null && _debugMode) throw StateError('malformed bridge reply');
+      if (reply == null && _debugMode)
+        throw StateError('malformed bridge reply');
       if (reply?.ok == true &&
           name == Cmd.settingsToggle &&
           payload?['key'] == 'debugMode' &&
@@ -280,8 +281,7 @@ class LocalBridgeClient implements BridgeClient {
           _pairingCode += digit;
         } else if (op == 'remove') {
           if (_pairingCode.isNotEmpty) {
-            _pairingCode =
-                _pairingCode.substring(0, _pairingCode.length - 1);
+            _pairingCode = _pairingCode.substring(0, _pairingCode.length - 1);
           }
         } else if (op == 'clear') {
           _pairingCode = '';
@@ -377,6 +377,24 @@ class LocalBridgeClient implements BridgeClient {
         _endpoints[target] = tmp;
         _emitEndpointStatus();
         return _ok(id);
+      case Cmd.pairingEndpointTest:
+        final String testUrl = (p['url'] as String? ?? '').trim();
+        if (testUrl.isEmpty) {
+          return BridgeReply.fail(id, '入口地址不能为空');
+        }
+        final String requestId = 'local-${_nextId++}';
+        // Keep the local bridge asynchronous so tests exercise the same ack/event
+        // contract as the Unity host.
+        scheduleMicrotask(() {
+          _emit(Evt.pairingEndpointTest, <String, dynamic>{
+            'requestId': requestId,
+            'ok': true,
+            'httpCode': 200,
+            'elapsedMs': 1,
+            'errorKind': '',
+          });
+        });
+        return _ok(id, <String, dynamic>{'requestId': requestId});
       case Cmd.qualityApplyPreset:
         _renderPreset = p['preset'] as String? ?? _renderPreset;
         _emitQuality('画质已应用');
@@ -400,7 +418,10 @@ class LocalBridgeClient implements BridgeClient {
         return _ok(id);
       case Cmd.settingsVolume:
         final num? rawVolume = p['v'] as num?;
-        if (rawVolume == null || !rawVolume.isFinite || rawVolume < 0 || rawVolume > 1) {
+        if (rawVolume == null ||
+            !rawVolume.isFinite ||
+            rawVolume < 0 ||
+            rawVolume > 1) {
           return BridgeReply.fail(id, '音量必须是 0 到 1 之间的数值');
         }
         _volume = rawVolume.toDouble();

@@ -79,6 +79,60 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
+        public void HealthEndpointUsesBridgeBasePathAndRejectsPublicPlainHttpWithoutOptIn()
+        {
+            Assert.That(
+                BackendPairingProtocol.TryBuildHealthEndpoint(
+                    "https://bot.example.com:7443",
+                    out var health,
+                    out var reason),
+                Is.True,
+                reason);
+            Assert.That(health, Is.EqualTo(
+                "https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/health"));
+
+            Assert.That(
+                BackendPairingProtocol.TryBuildHealthEndpoint(
+                    "http://public.example.com:8520",
+                    out _,
+                    out var disabledReason,
+                    allowPrivateHttp: true,
+                    allowRemoteHttp: false),
+                Is.False);
+            Assert.That(disabledReason, Does.Contain("https"));
+
+            Assert.That(
+                BackendPairingProtocol.TryBuildHealthEndpoint(
+                    "http://public.example.com:8520",
+                    out health,
+                    out reason,
+                    allowPrivateHttp: true,
+                    allowRemoteHttp: true),
+                Is.True,
+                reason);
+            Assert.That(health, Does.EndWith("/health"));
+        }
+
+        [TestCase("request timed out", 0, true, "timeout")]
+        [TestCase("SSL certificate problem", 0, true, "ssl")]
+        [TestCase("Could not resolve host", 0, true, "dns")]
+        [TestCase("connection refused", 0, true, "refused")]
+        [TestCase("HTTP 401", 401, false, "http")]
+        public void EndpointTestErrorsAreClassifiedWithoutLeakingTransportDetails(
+            string transportError,
+            long responseCode,
+            bool connectionError,
+            string expected)
+        {
+            Assert.That(
+                AstrBotProtocol.ClassifyEndpointTestError(
+                    transportError,
+                    responseCode,
+                    connectionError),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
         public void QrPayloadCarriesOnlyOneTimeTokenAndEndpoint()
         {
             var token = new string('x', 43);

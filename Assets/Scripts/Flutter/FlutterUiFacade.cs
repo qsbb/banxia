@@ -238,6 +238,7 @@ namespace QuestMmdPlayer
                 case FlutterCommands.PairingEndpointAdd: return HandlePairingEndpointAdd(payloadJson);
                 case FlutterCommands.PairingEndpointRemove: return HandlePairingEndpointRemove(payloadJson);
                 case FlutterCommands.PairingEndpointMove: return HandlePairingEndpointMove(payloadJson);
+                case FlutterCommands.PairingEndpointTest: return HandlePairingEndpointTest(payloadJson);
 
                 case FlutterCommands.QualityApplyPreset: return HandleQualityApplyPreset(payloadJson);
                 case FlutterCommands.QualityApplyPhysics: return HandleQualityApplyPhysics(payloadJson);
@@ -832,6 +833,31 @@ namespace QuestMmdPlayer
             }
             PublishPairingStatus();
             return FlutterCommandResult.Success();
+        }
+
+        private FlutterCommandResult HandlePairingEndpointTest(string payloadJson)
+        {
+            if (AstrBot == null)
+            {
+                return FlutterCommandResult.Failure("后端桥不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<FlutterPairingEndpointTestPayload>(payloadJson);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.url))
+            {
+                return FlutterCommandResult.Failure("入口地址无效");
+            }
+            var requestId = Guid.NewGuid().ToString("N");
+            var allowPrivateHttp = (Pairing != null && Pairing.PrivateHttpAllowed) ||
+                AstrBot.ConfiguredBaseUrl.StartsWith("http://", StringComparison.Ordinal);
+            var allowRemoteHttp = Pairing != null && Pairing.PrivateHttpAllowed;
+            if (!AstrBot.TestEndpoint(payload.url, requestId, allowPrivateHttp, allowRemoteHttp))
+            {
+                return FlutterCommandResult.Failure("无法启动入口测试");
+            }
+            return FlutterCommandResult.Success(JsonUtility.ToJson(new FlutterPairingEndpointTestStartedPayload
+            {
+                requestId = requestId
+            }));
         }
 
         // ------------------------------------------------------------------
@@ -1569,6 +1595,11 @@ namespace QuestMmdPlayer
                 Pairing.StatusChanged -= HandlePairingStatusChanged;
                 Pairing.StatusChanged += HandlePairingStatusChanged;
             }
+            if (AstrBot != null)
+            {
+                AstrBot.EndpointTestCompleted -= HandleEndpointTestCompleted;
+                AstrBot.EndpointTestCompleted += HandleEndpointTestCompleted;
+            }
             if (Conversation != null)
             {
                 Conversation.StateChanged -= HandleConversationStateChanged;
@@ -1626,6 +1657,10 @@ namespace QuestMmdPlayer
             {
                 Pairing.StatusChanged -= HandlePairingStatusChanged;
             }
+            if (AstrBot != null)
+            {
+                AstrBot.EndpointTestCompleted -= HandleEndpointTestCompleted;
+            }
             if (Conversation != null)
             {
                 Conversation.StateChanged -= HandleConversationStateChanged;
@@ -1661,6 +1696,22 @@ namespace QuestMmdPlayer
         {
             PublishPairingStatus();
             PollConnection();
+        }
+
+        private void HandleEndpointTestCompleted(AstrBotEndpointTestResult result)
+        {
+            if (result == null)
+            {
+                return;
+            }
+            PublishEvent(FlutterEvents.PairingEndpointTest, new FlutterPairingEndpointTestResultPayload
+            {
+                requestId = result.requestId,
+                ok = result.ok,
+                httpCode = result.httpCode,
+                elapsedMs = result.elapsedMs,
+                errorKind = result.errorKind ?? string.Empty
+            });
         }
 
         private void HandleConversationStateChanged(ConversationState state)

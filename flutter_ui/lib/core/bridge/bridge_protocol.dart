@@ -41,6 +41,7 @@ abstract final class Cmd {
   static const String pairingEndpointAdd = 'pairing.endpointAdd';
   static const String pairingEndpointRemove = 'pairing.endpointRemove';
   static const String pairingEndpointMove = 'pairing.endpointMove';
+  static const String pairingEndpointTest = 'pairing.endpointTest';
   static const String qualityApplyPreset = 'quality.applyPreset';
   static const String qualityApplyPhysics = 'quality.applyPhysics';
   static const String qualityReset = 'quality.reset';
@@ -78,6 +79,7 @@ abstract final class Evt {
   Evt._();
   static const String connectionChanged = 'connection.changed';
   static const String pairingStatus = 'pairing.status';
+  static const String pairingEndpointTest = 'pairing.endpointTest';
   static const String conversationState = 'conversation.state';
   static const String conversationTranscript = 'conversation.transcript';
   static const String conversationReply = 'conversation.reply';

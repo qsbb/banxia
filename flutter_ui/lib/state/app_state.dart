@@ -34,6 +34,20 @@ class ToastData {
 /// Mutable domain slices. [AppState] is the single [ChangeNotifier]; the hot
 /// cross-cutting values ([uiMode], [tab], [toast]) are [ValueNotifier]s so the
 /// root shell can listen to them individually without rebuilding everything.
+class EndpointTestResult {
+  const EndpointTestResult({
+    required this.ok,
+    required this.httpCode,
+    required this.elapsedMs,
+    required this.errorKind,
+  });
+
+  final bool ok;
+  final int httpCode;
+  final int elapsedMs;
+  final String errorKind;
+}
+
 class ConnectionState {
   String bridgeStatus = '未连接';
   String pairingStatus = '未连接';
@@ -49,6 +63,9 @@ class ConnectionState {
   List<String> endpoints = const <String>[];
   // 当前实际承载流量的入口完整 URL，未绑定时为空串。
   String activeEndpoint = '';
+  final Map<String, String> endpointTestRequests = <String, String>{};
+  final Map<String, EndpointTestResult> endpointTestResults =
+      <String, EndpointTestResult>{};
 }
 
 class ConversationState {
@@ -153,6 +170,10 @@ class AppState extends ChangeNotifier {
 
   Timer? _toastTimer;
   int _suggestionGeneration = 0;
+  final Map<String, EndpointTestResult> _earlyEndpointTestResults =
+      <String, EndpointTestResult>{};
+  final Set<String> _ignoredEndpointTestRequestIds = <String>{};
+  final Map<String, Timer> _endpointResultTimers = <String, Timer>{};
   bool _disposed = false;
 
   bool get inScene => uiMode.value == UiMode.scene;
@@ -298,6 +319,40 @@ class AppState extends ChangeNotifier {
           connection.bridgeStatus = p!['bridgeStatus'] as String;
         }
         break;
+      case Evt.pairingEndpointTest:
+        final String requestId = _str(p?['requestId']);
+        if (requestId.isEmpty) break;
+        String? endpoint;
+        for (final MapEntry<String, String> entry
+            in connection.endpointTestRequests.entries) {
+          if (entry.value == requestId) {
+            endpoint = entry.key;
+            break;
+          }
+        }
+        if (_ignoredEndpointTestRequestIds.remove(requestId)) break;
+        final EndpointTestResult result = EndpointTestResult(
+          ok: p?['ok'] == true,
+          httpCode: _int(p?['httpCode']),
+          elapsedMs: _int(p?['elapsedMs']),
+          errorKind: _str(p?['errorKind']),
+        );
+        // A real host normally delivers the command reply before the event, but
+        // retain an early result briefly so transport reordering is harmless.
+        if (endpoint == null) {
+          _earlyEndpointTestResults[requestId] = result;
+          Timer(const Duration(seconds: 5), () {
+            if (!_disposed) _earlyEndpointTestResults.remove(requestId);
+          });
+          if (_earlyEndpointTestResults.length > 16) {
+            _earlyEndpointTestResults
+                .remove(_earlyEndpointTestResults.keys.first);
+          }
+          break;
+        }
+        connection.endpointTestRequests.remove(endpoint);
+        _storeEndpointTestResult(endpoint, result);
+        break;
       case Evt.pairingStatus:
         if (p?['status'] is String) {
           connection.pairingStatus = p!['status'] as String;
@@ -314,7 +369,8 @@ class AppState extends ChangeNotifier {
           }
         }
         if (p?['codeLen'] is num) {
-          final int codeLen = (p!['codeLen'] as num).toInt().clamp(0, 6).toInt();
+          final int codeLen =
+              (p!['codeLen'] as num).toInt().clamp(0, 6).toInt();
           if (codeLen == 0) connection.pairingCode = '';
         }
         if (p?['privateHttp'] is bool) {
@@ -350,7 +406,9 @@ class AppState extends ChangeNotifier {
         ++_suggestionGeneration;
         conversation.suggestedReplies
           ..clear()
-          ..addAll((p?['suggestions'] is List ? p!['suggestions'] as List : const <dynamic>[])
+          ..addAll((p?['suggestions'] is List
+                  ? p!['suggestions'] as List
+                  : const <dynamic>[])
               .map(_str)
               .where((String value) => value.trim().isNotEmpty)
               .take(3));
@@ -460,7 +518,8 @@ class AppState extends ChangeNotifier {
           settings.framingGrid = p!['framingGrid'] as bool;
         }
         if (p?['camera'] is bool) settings.camera = p!['camera'] as bool;
-        if (p?['debugMode'] is bool) settings.debugMode = p!['debugMode'] as bool;
+        if (p?['debugMode'] is bool)
+          settings.debugMode = p!['debugMode'] as bool;
         break;
       case Evt.systemBack:
         handleSystemBack();
@@ -791,14 +850,24 @@ class AppState extends ChangeNotifier {
       showToast('请输入入口地址');
       return false;
     }
-    return dispatch(
-        Cmd.pairingEndpointAdd, <String, dynamic>{'url': value});
+    return dispatch(Cmd.pairingEndpointAdd, <String, dynamic>{'url': value});
   }
 
   Future<void> removeEndpoint(String url) async {
-    if (url.trim().isEmpty) return;
-    await dispatch(
-        Cmd.pairingEndpointRemove, <String, dynamic>{'url': url});
+    final String endpoint = url.trim();
+    if (endpoint.isEmpty) return;
+    final String? requestId = connection.endpointTestRequests[endpoint];
+    if (!await dispatch(
+        Cmd.pairingEndpointRemove, <String, dynamic>{'url': endpoint})) {
+      return;
+    }
+    if (requestId != null) {
+      _ignoredEndpointTestRequestIds.add(requestId);
+    }
+    connection.endpointTestRequests.remove(endpoint);
+    connection.endpointTestResults.remove(endpoint);
+    _endpointResultTimers.remove(endpoint)?.cancel();
+    _notify();
   }
 
   /// [offset] 仅允许 -1（上移）/ 1（下移），其余值直接丢弃。
@@ -808,11 +877,61 @@ class AppState extends ChangeNotifier {
         <String, dynamic>{'url': url, 'offset': offset});
   }
 
+  Future<bool> testEndpoint(String url) async {
+    final String endpoint = url.trim();
+    if (endpoint.isEmpty ||
+        connection.endpointTestRequests.containsKey(endpoint)) {
+      return false;
+    }
+    connection.endpointTestResults.remove(endpoint);
+    _notify();
+    final BridgeReply reply = await bridge
+        .call(Cmd.pairingEndpointTest, <String, dynamic>{'url': endpoint});
+    if (_disposed) return false;
+    if (!reply.ok) {
+      showToast(reply.error ?? '无法启动入口测试');
+      _notify();
+      return false;
+    }
+    final String requestId = _str(reply.data?['requestId']);
+    if (requestId.isEmpty) {
+      showToast('入口测试未返回请求编号');
+      _notify();
+      return false;
+    }
+    connection.endpointTestRequests[endpoint] = requestId;
+    final EndpointTestResult? earlyResult =
+        _earlyEndpointTestResults.remove(requestId);
+    if (earlyResult != null) {
+      connection.endpointTestRequests.remove(endpoint);
+      _storeEndpointTestResult(endpoint, earlyResult);
+    }
+    _notify();
+    return true;
+  }
+
+  bool isEndpointTesting(String url) =>
+      connection.endpointTestRequests.containsKey(url);
+
+  EndpointTestResult? endpointTestResult(String url) =>
+      connection.endpointTestResults[url];
+
+  void _storeEndpointTestResult(String endpoint, EndpointTestResult result) {
+    _endpointResultTimers.remove(endpoint)?.cancel();
+    connection.endpointTestResults[endpoint] = result;
+    _endpointResultTimers[endpoint] = Timer(const Duration(seconds: 5), () {
+      if (_disposed) return;
+      connection.endpointTestResults.remove(endpoint);
+      _endpointResultTimers.remove(endpoint);
+      _notify();
+    });
+  }
+
   // ── Settings helpers ──────────────────────────────────────────────────────
   Future<void> toggleSetting(String key, bool value) async {
     if (key == 'debugMode') {
-      if (await dispatch(Cmd.settingsToggle,
-          <String, dynamic>{'key': key, 'value': value})) {
+      if (await dispatch(
+          Cmd.settingsToggle, <String, dynamic>{'key': key, 'value': value})) {
         settings.debugMode = value;
         _notify();
       }
@@ -848,6 +967,12 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _earlyEndpointTestResults.clear();
+    _ignoredEndpointTestRequestIds.clear();
+    for (final Timer timer in _endpointResultTimers.values) {
+      timer.cancel();
+    }
+    _endpointResultTimers.clear();
     _toastTimer?.cancel();
     _sub.cancel();
     uiMode.dispose();
@@ -858,6 +983,12 @@ class AppState extends ChangeNotifier {
 }
 
 String _str(dynamic v) => v == null ? '' : v.toString();
+
+int _int(dynamic v) {
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v) ?? 0;
+  return 0;
+}
 
 double _num(dynamic v) {
   if (v is num) return v.toDouble();

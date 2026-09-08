@@ -63,6 +63,7 @@ namespace QuestMmdPlayer
         public const string PairingEndpointAdd = "pairing.endpointAdd";
         public const string PairingEndpointRemove = "pairing.endpointRemove";
         public const string PairingEndpointMove = "pairing.endpointMove";
+        public const string PairingEndpointTest = "pairing.endpointTest";
 
         public const string QualityApplyPreset = "quality.applyPreset";
         public const string QualityApplyPhysics = "quality.applyPhysics";
@@ -105,6 +106,7 @@ namespace QuestMmdPlayer
     {
         public const string ConnectionChanged = "connection.changed";
         public const string PairingStatus = "pairing.status";
+        public const string PairingEndpointTest = "pairing.endpointTest";
         public const string ConversationState = "conversation.state";
         public const string ConversationTranscript = "conversation.transcript";
         public const string ConversationReply = "conversation.reply";
@@ -434,6 +436,7 @@ namespace QuestMmdPlayer
                 FlutterCommands.PairingEndpointAdd,
                 FlutterCommands.PairingEndpointRemove,
                 FlutterCommands.PairingEndpointMove,
+                FlutterCommands.PairingEndpointTest,
                 FlutterCommands.QualityApplyPreset,
                 FlutterCommands.QualityApplyPhysics,
                 FlutterCommands.QualityReset,
@@ -467,6 +470,7 @@ namespace QuestMmdPlayer
             {
                 FlutterEvents.ConnectionChanged,
                 FlutterEvents.PairingStatus,
+                FlutterEvents.PairingEndpointTest,
                 FlutterEvents.ConversationState,
                 FlutterEvents.ConversationTranscript,
                 FlutterEvents.ConversationReply,
@@ -498,6 +502,28 @@ namespace QuestMmdPlayer
     // ------------------------------------------------------------------
 
     [Serializable] public sealed class FlutterConnectionChangedPayload { public bool connected; public string bridgeStatus = string.Empty; }
+
+    [Serializable]
+    public sealed class FlutterPairingEndpointTestPayload
+    {
+        public string url = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class FlutterPairingEndpointTestStartedPayload
+    {
+        public string requestId = string.Empty;
+    }
+
+    [Serializable]
+    public sealed class FlutterPairingEndpointTestResultPayload
+    {
+        public string requestId = string.Empty;
+        public bool ok;
+        public int httpCode;
+        public int elapsedMs;
+        public string errorKind = string.Empty;
+    }
 
     [Serializable] public sealed class FlutterPairingStatusPayload
     {
