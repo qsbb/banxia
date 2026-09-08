@@ -78,13 +78,21 @@ class _MenuShellState extends State<_MenuShell> {
       child: Stack(
         fit: StackFit.expand,
         children: <Widget>[
-          IndexedStack(
-            index: appState.tab.value.index,
-            children: <Widget>[
-              CompanionScreen(appState: appState),
-              ActionsScreen(appState: appState),
-              SettingsScreen(appState: appState),
-            ],
+          Padding(
+            padding: EdgeInsets.only(
+              bottom: 64 +
+                  20 +
+                  20 +
+                  MediaQuery.viewPaddingOf(context).bottom,
+            ),
+            child: IndexedStack(
+              index: appState.tab.value.index,
+              children: <Widget>[
+                CompanionScreen(appState: appState),
+                ActionsScreen(appState: appState),
+                SettingsScreen(appState: appState),
+              ],
+            ),
           ),
           if (MediaQuery.of(context).viewInsets.bottom <= 0)
             Align(

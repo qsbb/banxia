@@ -31,7 +31,7 @@ class ChatPage extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 const Text(
-                  '伴夏',
+                  'ta',
                   style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.bold,

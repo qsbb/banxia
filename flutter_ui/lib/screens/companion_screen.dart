@@ -36,7 +36,7 @@ class CompanionScreen extends StatelessWidget {
                 ),
               ),
               SliverToBoxAdapter(child: _QuickTiles(appState: appState)),
-              const SliverToBoxAdapter(child: SizedBox(height: 24)),
+              const SliverToBoxAdapter(child: SizedBox(height: 8)),
             ],
           ),
         );
@@ -136,7 +136,7 @@ class _ChatHeroCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   const Text(
-                    '和伴夏聊聊',
+                    '和ta聊聊',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 17,
@@ -353,18 +353,7 @@ class _QuickTiles extends StatelessWidget {
                       onTap: () => app.switchTab(AppTab.settings))),
             ],
           ),
-          const SizedBox(height: 10),
-          Row(
-            children: <Widget>[
-              Expanded(
-                  child: _Tile(
-                      label: '更新',
-                      sub: '检查新版本',
-                      onTap: () => app.switchTab(AppTab.settings))),
-              const SizedBox(width: 10),
-              const Expanded(child: SizedBox.shrink()),
-            ],
-          ),
+
         ],
       ),
     );
