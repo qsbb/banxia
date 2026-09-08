@@ -218,6 +218,9 @@ public final class BanxiaFlutterHost {
     private View phonePanelRoot;
     /** adb-reachable QA command hook (com.lingxi.banxia.phone.QA_COMMAND). */
     private BroadcastReceiver qaCommandReceiver;
+    /** Per-process random QA token; logged at registration, required as
+     *  {@code --es token} on every QA broadcast (see registerQaCommandReceiver). */
+    private String qaCommandToken;
 
     // Quest offscreen path: Flutter renders into an android.view.Surface backed
     // by a *detached* SurfaceTexture. Unity attaches a GL texture on its render
@@ -681,20 +684,33 @@ public final class BanxiaFlutterHost {
 
     /**
      * adb-reachable QA hook: {@code am broadcast -a com.lingxi.banxia.phone.QA_COMMAND
-     * --es cmd <name>} delivers a {@code qa.command} envelope straight to Unity,
-     * which is how the pixel-QA loop triggers diagnostics (e.g. skin_audit)
-     * without any Flutter UI affordance. Registered NOT_EXPORTED (root shell
-     * bypasses the export check); command names stay whitelisted engine-side.
+     * --es cmd <name> --es token &lt;logcat 中的 QA token&gt;} delivers a
+     * {@code qa.command} envelope straight to Unity, which is how the pixel-QA
+     * loop triggers diagnostics (e.g. skin_audit) without any Flutter UI
+     * affordance.
+     *
+     * <p>Retail phones (MIUI etc.) deliver shell broadcasts only to EXPORTED
+     * receivers, while NOT_EXPORTED would silently drop them (2026-09-08 实踩)。
+     * So the receiver is exported but gated by a per-process random token that
+     * is printed to logcat at registration: only adb shell (or root) can read
+     * logcat, so only the tester can drive QA; malicious apps cannot obtain
+     * the token. Command names stay whitelisted engine-side.
      */
     private void registerQaCommandReceiver(Context appContext) {
         if (qaCommandReceiver != null || appContext == null) {
             return;
         }
         try {
+            qaCommandToken = java.util.UUID.randomUUID().toString();
             qaCommandReceiver = new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context context, Intent intent) {
-                    String cmd = intent == null ? null : intent.getStringExtra("cmd");
+                    String token = intent == null ? null : intent.getStringExtra("token");
+                    if (token == null || !token.equals(qaCommandToken)) {
+                        Log.w(TAG, "QA command rejected: missing or wrong token");
+                        return;
+                    }
+                    String cmd = intent.getStringExtra("cmd");
                     if (cmd == null || cmd.trim().isEmpty()) {
                         return;
                     }
@@ -703,13 +719,12 @@ public final class BanxiaFlutterHost {
             };
             IntentFilter filter = new IntentFilter("com.lingxi.banxia.phone.QA_COMMAND");
             if (Build.VERSION.SDK_INT >= 33) {
-                // Context.RECEIVER_NOT_EXPORTED, inlined so the androidlib still
-                // compiles against pre-33 android.jar snapshots.
-                appContext.registerReceiver(qaCommandReceiver, filter, 4);
+                // Context.RECEIVER_EXPORTED (inlined for pre-33 android.jar).
+                appContext.registerReceiver(qaCommandReceiver, filter, 2);
             } else {
                 appContext.registerReceiver(qaCommandReceiver, filter);
             }
-            Log.i(TAG, "QA command receiver registered");
+            Log.i(TAG, "QA command receiver registered; QA token: " + qaCommandToken);
         } catch (Throwable t) {
             Log.w(TAG, "QA command receiver registration failed", t);
             qaCommandReceiver = null;
@@ -729,6 +744,7 @@ public final class BanxiaFlutterHost {
             Log.w(TAG, "QA command receiver unregister failed", t);
         }
         qaCommandReceiver = null;
+        qaCommandToken = null;
     }
 
     /** Dedicated id space for host-injected QA commands; Dart commands count
