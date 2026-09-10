@@ -129,7 +129,8 @@ class LocalBridgeClient implements BridgeClient {
   bool _arPlaced = false;
   bool _inScene = false;
   int _loadGeneration = 0;
-  bool _privateHttp = true;
+  bool _privateHttp = false;
+  bool _remoteHttp = false;
   String _renderPreset = 'balanced';
   String _physicsPreset = 'balanced';
   int _targetFps = 120;
@@ -137,6 +138,7 @@ class LocalBridgeClient implements BridgeClient {
   bool _debugMode = false;
   String _server = '';
   String _pairingCode = '';
+  String _certificatePinSha256 = '';
   // 演示用候选入口列表（完整 URL，首项=最高优先级）与当前生效入口。
   final List<String> _endpoints = <String>[];
   String _activeEndpoint = '';
@@ -169,6 +171,22 @@ class LocalBridgeClient implements BridgeClient {
   void _emitQuality([String status = '']) {
     _emit(Evt.qualityChanged, _qualityPayload(status));
   }
+
+  Map<String, dynamic> _pairingPayload(
+          {String? status, int? codeLen, bool includeEndpoints = false}) =>
+      <String, dynamic>{
+        'status': status ?? (_server.isEmpty ? '未连接' : '配对服务器已设置'),
+        'server': _server,
+        'privateHttp': _privateHttp,
+        'remoteHttp': _remoteHttp,
+        'codeLen': codeLen ?? _pairingCode.length,
+        if (includeEndpoints) 'endpoints': List<String>.from(_endpoints),
+        if (includeEndpoints) 'activeEndpoint': _activeEndpoint,
+        'certificatePinConfigured': _certificatePinSha256.isNotEmpty,
+        'certificatePinSummary': _certificatePinSha256.isEmpty
+            ? ''
+            : '${_certificatePinSha256.substring(0, 8)}…${_certificatePinSha256.substring(56)}',
+      };
 
   @override
   Future<BridgeReply> call(String name, [Map<String, dynamic>? payload]) async {
@@ -254,21 +272,23 @@ class LocalBridgeClient implements BridgeClient {
         return _ok(id);
       case Cmd.pairingSetServer:
         _server = (p['server'] as String? ?? '').trim();
-        _emit(Evt.pairingStatus, <String, dynamic>{
-          'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
-          'server': _server,
-          'privateHttp': _privateHttp,
-          'codeLen': _pairingCode.length,
-        });
+        _emit(Evt.pairingStatus, _pairingPayload());
+        return _ok(id);
+      case Cmd.pairingSetCertificatePin:
+        final String candidate = (p['sha256'] as String? ?? '').trim();
+        if (candidate.isNotEmpty && !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(candidate)) {
+          return BridgeReply.fail(id, '证书指纹必须是 64 位十六进制字符串');
+        }
+        _certificatePinSha256 = candidate.toLowerCase();
+        _emit(Evt.pairingStatus, _pairingPayload(includeEndpoints: true));
         return _ok(id);
       case Cmd.pairingSetPrivateHttp:
         _privateHttp = p['enabled'] == true;
-        _emit(Evt.pairingStatus, <String, dynamic>{
-          'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
-          'server': _server,
-          'privateHttp': _privateHttp,
-          'codeLen': _pairingCode.length,
-        });
+        _emit(Evt.pairingStatus, _pairingPayload());
+        return _ok(id);
+      case Cmd.pairingSetRemoteHttp:
+        _remoteHttp = p['enabled'] == true;
+        _emit(Evt.pairingStatus, _pairingPayload());
         return _ok(id);
       case Cmd.pairingDigit:
         final String op = p['op'] as String? ?? '';
@@ -290,12 +310,7 @@ class LocalBridgeClient implements BridgeClient {
         } else {
           return BridgeReply.fail(id, '未知配对键盘操作');
         }
-        _emit(Evt.pairingStatus, <String, dynamic>{
-          'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
-          'server': _server,
-          'privateHttp': _privateHttp,
-          'codeLen': _pairingCode.length,
-        });
+        _emit(Evt.pairingStatus, _pairingPayload());
         return _ok(id);
       case Cmd.pairingPair:
         _emit(Evt.connectionChanged,
@@ -305,40 +320,40 @@ class LocalBridgeClient implements BridgeClient {
           _endpoints.insert(0, _server);
         }
         _activeEndpoint = _endpoints.isEmpty ? '' : _endpoints.first;
-        _emit(Evt.pairingStatus, <String, dynamic>{
-          'status': '已连接',
-          'server': _server,
-          'privateHttp': p['privateHttp'] ?? _privateHttp,
-          'codeLen': 0,
-          'endpoints': List<String>.from(_endpoints),
-          'activeEndpoint': _activeEndpoint,
-        });
+        _emit(
+          Evt.pairingStatus,
+          _pairingPayload(
+            status: '已连接',
+            codeLen: 0,
+            includeEndpoints: true,
+          ),
+        );
         _pairingCode = '';
         _emit(Evt.toast, <String, dynamic>{'message': '配对成功'});
         return _ok(id);
       case Cmd.pairingReconnect:
-        _emit(Evt.pairingStatus, <String, dynamic>{
-          'status': '重连中…',
-          'server': _server,
-          'privateHttp': _privateHttp,
-          'codeLen': 0,
-        });
+        _emit(
+          Evt.pairingStatus,
+          _pairingPayload(status: '重连中…', codeLen: 0),
+        );
         _emit(Evt.toast, <String, dynamic>{'message': '重新连接后端'});
         return _ok(id);
       case Cmd.pairingClearBinding:
         _emit(Evt.connectionChanged,
             <String, dynamic>{'connected': false, 'bridgeStatus': '未连接'});
         _server = '';
+        _pairingCode = '';
+        _certificatePinSha256 = '';
         _endpoints.clear();
         _activeEndpoint = '';
-        _emit(Evt.pairingStatus, <String, dynamic>{
-          'status': '未连接',
-          'server': '',
-          'privateHttp': _privateHttp,
-          'codeLen': 0,
-          'endpoints': const <String>[],
-          'activeEndpoint': '',
-        });
+        _emit(
+          Evt.pairingStatus,
+          _pairingPayload(
+            status: '未连接',
+            codeLen: 0,
+            includeEndpoints: true,
+          ),
+        );
         _emit(Evt.toast, <String, dynamic>{'message': '已解除后端绑定'});
         return _ok(id);
       case Cmd.pairingEndpointAdd:
@@ -548,14 +563,14 @@ class LocalBridgeClient implements BridgeClient {
 
   /// 演示：入口增删/排序后回放 pairing.status（真实引擎由网络层下发真值）。
   void _emitEndpointStatus() {
-    _emit(Evt.pairingStatus, <String, dynamic>{
-      'status': _server.isEmpty ? '未连接' : '配对服务器已设置',
-      'server': _server,
-      'privateHttp': _privateHttp,
-      'codeLen': _pairingCode.length,
-      'endpoints': List<String>.from(_endpoints),
-      'activeEndpoint': _activeEndpoint,
-    });
+    _emit(
+      Evt.pairingStatus,
+      _pairingPayload(
+        status: _server.isEmpty ? '未连接' : '配对服务器已设置',
+        codeLen: _pairingCode.length,
+        includeEndpoints: true,
+      ),
+    );
   }
 
   Map<String, dynamic> _modeEvent() => <String, dynamic>{

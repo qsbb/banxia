@@ -315,17 +315,20 @@ void main() {
     bridge.dispose();
   });
 
-  test('pairing server commit trims and stores a successful address', () async {
+  test('pairing server rejects surrounding whitespace without mutating state', () async {
     final bridge = LocalBridgeClient();
     final app = AppState(bridge);
+    app.connection.server = 'https://old.example';
+    app.connection.serverDraft = 'https://old.example';
+    app.connection.committedServer = 'https://old.example';
 
     final bool ok = await app.commitPairingServer('  https://new.example  ');
     await Future<void>.delayed(Duration.zero);
 
-    expect(ok, isTrue);
-    expect(app.connection.server, 'https://new.example');
-    expect(app.connection.serverDraft, 'https://new.example');
-    expect(app.connection.committedServer, 'https://new.example');
+    expect(ok, isFalse);
+    expect(app.connection.server, 'https://old.example');
+    expect(app.connection.serverDraft, 'https://old.example');
+    expect(app.connection.committedServer, 'https://old.example');
     expect(app.connection.serverDraftDirty, isFalse);
     app.dispose();
     bridge.dispose();

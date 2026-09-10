@@ -30,7 +30,9 @@ abstract final class Cmd {
   static const String voiceRestart = 'voice.restart';
   static const String voiceCancel = 'voice.cancel';
   static const String pairingSetServer = 'pairing.setServer';
+  static const String pairingSetCertificatePin = 'pairing.setCertificatePin';
   static const String pairingSetPrivateHttp = 'pairing.setPrivateHttp';
+  static const String pairingSetRemoteHttp = 'pairing.setRemoteHttp';
   static const String pairingDigit = 'pairing.digit';
   static const String pairingPair = 'pairing.pair';
   static const String pairingReconnect = 'pairing.reconnect';
@@ -251,6 +253,25 @@ class BridgeEvent {
 
   final String name;
   final Map<String, dynamic>? payload;
+}
+
+/// Payload for [Cmd.pairingSetCertificatePin]. Empty explicitly clears the pin;
+/// otherwise [sha256] is the 64-character hexadecimal leaf-certificate digest.
+class PairingCertificatePinPayload {
+  const PairingCertificatePinPayload(this.sha256);
+
+  final String sha256;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{'sha256': sha256};
+}
+
+/// Payload for the two independent plaintext transport opt-ins.
+class PairingHttpTogglePayload {
+  const PairingHttpTogglePayload(this.enabled);
+
+  final bool enabled;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{'enabled': enabled};
 }
 
 /// Structured progress for one model load. `fraction < 0` means failure or

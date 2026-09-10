@@ -204,6 +204,7 @@ namespace QuestMmdPlayer
         public bool IsConfigured { get; private set; }
         public string ConfigurationPath => Path.Combine(Application.persistentDataPath, configurationFileName);
         public string ConfiguredBaseUrl => settings == null ? string.Empty : settings.base_url ?? string.Empty;
+        public string CertificatePinSha256 => settings == null ? string.Empty : settings.certificate_pin_sha256 ?? string.Empty;
         /// <summary>Base URL currently carrying traffic (failover-selected).</summary>
         public string ActiveBaseUrl => string.IsNullOrEmpty(activeBaseUrl) ? ConfiguredBaseUrl : activeBaseUrl;
 
@@ -227,6 +228,13 @@ namespace QuestMmdPlayer
             {
                 return false;
             }
+            if (!AstrBotProtocol.IsPinnedEndpointAllowed(
+                    settings.base_url,
+                    endpoint,
+                    settings.certificate_pin_sha256))
+            {
+                return false;
+            }
             if (endpointTestRoutines.ContainsKey(requestId))
             {
                 return false;
@@ -243,11 +251,16 @@ namespace QuestMmdPlayer
             using (var request = new UnityWebRequest(endpoint, UnityWebRequest.kHttpVerbGET)
             {
                 downloadHandler = boundedHandler,
-                timeout = EndpointTestTimeoutSeconds
+                timeout = EndpointTestTimeoutSeconds,
+                redirectLimit = 0
             })
             {
                 var handler = boundedHandler;
-                ConfigureHeaders(request, false);
+                var certificateHandler = AttachCertificatePin(request);
+                // Endpoint testing is a connectivity/protocol probe, not an
+                // authenticated operation. Never disclose long-lived keys to
+                // an arbitrary user-entered host.
+                request.redirectLimit = 0;
                 yield return request.SendWebRequest();
                 result.httpCode = (int)request.responseCode;
                 result.elapsedMs = ElapsedMs(startedAt);
@@ -270,7 +283,8 @@ namespace QuestMmdPlayer
                         result.errorKind = AstrBotProtocol.ClassifyEndpointTestError(
                             request.error,
                             request.responseCode,
-                            request.result == UnityWebRequest.Result.ConnectionError);
+                            request.result == UnityWebRequest.Result.ConnectionError,
+                            IsCertificatePinMismatch(certificateHandler));
                     }
                 }
             }
@@ -304,7 +318,9 @@ namespace QuestMmdPlayer
             if (settings == null || settings.endpoint_urls == null)
             {
                 var fallback = settings == null ? string.Empty : AstrBotProtocol.NormalizeBaseUrl(settings.base_url);
-                if (!string.IsNullOrEmpty(fallback))
+                if (!string.IsNullOrEmpty(fallback) &&
+                    (string.IsNullOrEmpty(settings.certificate_pin_sha256) ||
+                     IsPinnedCandidateAllowed(settings, fallback)))
                 {
                     candidates.Add(fallback);
                 }
@@ -313,12 +329,56 @@ namespace QuestMmdPlayer
             foreach (var entry in settings.endpoint_urls)
             {
                 var normalized = AstrBotProtocol.NormalizeBaseUrl(entry);
-                if (!string.IsNullOrEmpty(normalized) && !ContainsEndpoint(candidates, normalized))
+                // Legacy v1 keeps its existing ordered snapshot semantics. A
+                // configured pin adds the strict same-authority filter.
+                if (!string.IsNullOrEmpty(normalized) &&
+                    (string.IsNullOrEmpty(settings.certificate_pin_sha256) ||
+                     IsPinnedCandidateAllowed(settings, normalized)) &&
+                    !ContainsEndpoint(candidates, normalized))
                 {
                     candidates.Add(normalized);
                 }
             }
             return candidates;
+        }
+
+        private bool IsCandidateAllowed(string normalized)
+        {
+            return IsCandidateAllowed(settings, normalized);
+        }
+
+        private static bool IsCandidateAllowed(
+            AstrBotBridgeSettings value,
+            string normalized)
+        {
+            if (value == null || string.IsNullOrEmpty(normalized) ||
+                !IsUsableEndpoint(
+                    normalized,
+                    value.allow_insecure_http,
+                    value.allow_insecure_remote_http))
+            {
+                return false;
+            }
+            return string.IsNullOrEmpty(value.certificate_pin_sha256) ||
+                AstrBotProtocol.IsPinnedEndpointAllowed(
+                    value.base_url,
+                    normalized,
+                    value.certificate_pin_sha256);
+        }
+
+        private static bool IsPinnedCandidateAllowed(
+            AstrBotBridgeSettings value,
+            string normalized)
+        {
+            return value != null && !string.IsNullOrEmpty(normalized) &&
+                IsUsableEndpoint(
+                    normalized,
+                    value.allow_insecure_http,
+                    value.allow_insecure_remote_http) &&
+                AstrBotProtocol.IsPinnedEndpointAllowed(
+                    value.base_url,
+                    normalized,
+                    value.certificate_pin_sha256);
         }
 
         private static bool ContainsEndpoint(List<string> list, string value)
@@ -333,12 +393,25 @@ namespace QuestMmdPlayer
             return false;
         }
 
-        private static bool IsUsableEndpoint(string url, bool allowRemoteHttp)
+        private static bool IsUsableEndpoint(
+            string url,
+            bool allowPrivateHttp,
+            bool allowRemoteHttp)
         {
-            // 与 TryValidateSettings 同一传输策略：公网必须 HTTPS；明文 HTTP
-            // 放行私网 IP 字面量（防 DNS rebinding），或在用户显式 opt-in
-            // （allow_insecure_remote_http）时放行公网主机。
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host))
+            // Candidate URLs are hostile persisted/user-controlled input. Accept
+            // only the canonical plugin base path and an HTTP(S) authority with
+            // no credentials, query, or fragment. Plain HTTP has two separate
+            // opt-ins: private-LAN and public/remote.
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+                string.IsNullOrEmpty(uri.Host) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+                !string.IsNullOrEmpty(uri.UserInfo) ||
+                !string.IsNullOrEmpty(uri.Query) ||
+                !string.IsNullOrEmpty(uri.Fragment) ||
+                !string.Equals(
+                    uri.AbsolutePath.TrimEnd('/'),
+                    BackendPairingProtocol.PluginApiPath,
+                    StringComparison.Ordinal))
             {
                 return false;
             }
@@ -346,30 +419,38 @@ namespace QuestMmdPlayer
             {
                 return true;
             }
-            return uri.Scheme == Uri.UriSchemeHttp &&
-                (AstrBotProtocol.IsPrivateNetworkHost(uri.Host) || allowRemoteHttp);
+            return allowRemoteHttp ||
+                (allowPrivateHttp && AstrBotProtocol.IsPrivateNetworkHost(uri.Host));
         }
 
         private static void SanitizeEndpointUrls(AstrBotBridgeSettings value)
         {
             var result = new List<string>();
-            if (value.endpoint_urls != null)
+            if (value != null && value.endpoint_urls != null)
             {
                 foreach (var entry in value.endpoint_urls)
                 {
                     var normalized = AstrBotProtocol.NormalizeBaseUrl(entry);
                     if (string.IsNullOrEmpty(normalized) || ContainsEndpoint(result, normalized) ||
-                        !IsUsableEndpoint(normalized, value.allow_insecure_remote_http))
+                        !IsCandidateAllowed(value, normalized))
                     {
                         continue;
                     }
                     result.Add(normalized);
                 }
             }
-            var primary = AstrBotProtocol.NormalizeBaseUrl(value.base_url);
-            if (result.Count == 0 && !string.IsNullOrEmpty(primary))
+            var primary = value == null ? string.Empty : AstrBotProtocol.NormalizeBaseUrl(value.base_url);
+            if (!string.IsNullOrEmpty(primary) && IsCandidateAllowed(value, primary) &&
+                (result.Count == 0 || !string.IsNullOrEmpty(value.certificate_pin_sha256)))
             {
-                result.Add(primary);
+                // Preserve v1 ordering for unpinned configurations. Once a pin
+                // is configured, always retain the pinned base as the safe
+                // first candidate even if stale endpoint_urls only contained
+                // rejected authorities.
+                if (!ContainsEndpoint(result, primary))
+                {
+                    result.Insert(0, primary);
+                }
             }
             value.endpoint_urls = result;
         }
@@ -482,7 +563,12 @@ namespace QuestMmdPlayer
 
         private bool PersistEndpoints(out string reason)
         {
-            if (!BackendPairingProtocol.TryWriteSettingsAtomically(ConfigurationPath, settings, out reason, true))
+            if (!BackendPairingProtocol.TryWriteSettingsAtomically(
+                    ConfigurationPath,
+                    settings,
+                    out reason,
+                    settings.allow_insecure_http,
+                    settings.allow_insecure_remote_http))
             {
                 return false;
             }
@@ -1268,6 +1354,7 @@ namespace QuestMmdPlayer
             RecordStage("health", "processing");
             using (var request = UnityWebRequest.Get(Endpoint("health")))
             {
+                var certificateHandler = AttachCertificatePin(request);
                 ConfigureHeaders(request, false);
                 request.timeout = Mathf.Clamp(requestTimeoutSeconds, 2, 60);
                 yield return request.SendWebRequest();
@@ -1307,7 +1394,7 @@ namespace QuestMmdPlayer
                     RecordStage(
                         "health",
                         "failed",
-                        ReadFailureCode(request, "health_failed"),
+                        ReadFailureCode(request, "health_failed", certificateHandler),
                         request.responseCode,
                         ElapsedMs(startedAt));
                     NoteActiveEndpointUnreachable(request);
@@ -1408,6 +1495,7 @@ namespace QuestMmdPlayer
             var generation = Interlocked.Increment(ref sseGeneration);
             ClearIncomingFrames();
             var request = UnityWebRequest.Get(Endpoint("events/" + UnityWebRequest.EscapeURL(sessionId)));
+            AttachCertificatePin(request);
             eventStreamReady = false;
             Interlocked.Exchange(ref receivedStreamHeaders, 0);
             Interlocked.Exchange(ref receivedStreamData, 0);
@@ -1795,7 +1883,7 @@ namespace QuestMmdPlayer
                     {
                         Type = ConversationEventType.Error,
                         TurnId = turnId,
-                        ErrorCode = "audio_http_request_failed",
+                        ErrorCode = ReadFailureCode(request, "audio_http_request_failed"),
                         Text = HttpFailure(endpoint, request)
                     });
                     RecordStage(
@@ -1951,7 +2039,7 @@ namespace QuestMmdPlayer
                     {
                         Type = ConversationEventType.Error,
                         TurnId = turnId,
-                        ErrorCode = "http_request_failed",
+                        ErrorCode = ReadFailureCode(request, "http_request_failed"),
                         Text = HttpFailure(endpoint, request)
                     });
                     RecordStage(
@@ -2025,13 +2113,58 @@ namespace QuestMmdPlayer
                 downloadHandler = new DownloadHandlerBuffer(),
                 timeout = Mathf.Clamp(requestTimeoutSeconds, 2, 60)
             };
+            AttachCertificatePin(request);
             ConfigureHeaders(request, false);
             request.SetRequestHeader("Content-Type", "application/json");
             return request;
         }
 
+        private CertificatePinningHandler AttachCertificatePin(UnityWebRequest request)
+        {
+            if (request == null || settings == null ||
+                string.IsNullOrEmpty(settings.certificate_pin_sha256))
+            {
+                return null;
+            }
+
+            // Configuration validation normally guarantees this. Keep the
+            // request factory fail-closed as a defense against stale/mutated
+            // runtime state: a pin must never be silently skipped for HTTP or
+            // sent to a different authority.
+            if (!AstrBotProtocol.IsPinnedEndpointAllowed(
+                    settings.base_url,
+                    request.url,
+                    settings.certificate_pin_sha256))
+            {
+                throw new InvalidOperationException("Pinned HTTPS request authority is invalid");
+            }
+
+            var handler = new CertificatePinningHandler(settings.certificate_pin_sha256);
+            request.certificateHandler = handler;
+            // Unity redirects can change scheme or authority after the initial
+            // candidate was sanitized. Refuse redirects while pinning so an
+            // HTTPS request can never be downgraded to HTTP.
+            request.redirectLimit = 0;
+            return handler;
+        }
+
+        private static bool IsCertificatePinMismatch(CertificatePinningHandler handler)
+        {
+            return handler != null && handler.IsPinMismatch;
+        }
+
+        private static bool IsCertificatePinMismatch(UnityWebRequest request)
+        {
+            return request != null &&
+                IsCertificatePinMismatch(request.certificateHandler as CertificatePinningHandler);
+        }
+
         private void ConfigureHeaders(UnityWebRequest request, bool eventStream)
         {
+            // Every request configured here carries long-lived credentials.
+            // Refuse redirects even without pinning: a Location header must
+            // never move API keys to another authority or downgrade HTTPS.
+            request.redirectLimit = 0;
             request.SetRequestHeader("Authorization", "ApiKey " + settings.astrbot_api_key);
             request.SetRequestHeader("X-Embodiment-Bridge-Key", settings.bridge_api_key);
             request.SetRequestHeader("Accept", eventStream ? "text/event-stream" : "application/json");
@@ -2061,6 +2194,8 @@ namespace QuestMmdPlayer
         {
             IsConfigured = false;
             settings = null;
+            activeBaseUrl = string.Empty;
+            endpointCooldownUntil.Clear();
             BackendChainStatus = "chain unknown";
             healthPipelineStatus = "unknown";
             healthReady = false;
@@ -2084,7 +2219,8 @@ namespace QuestMmdPlayer
                         ConfigurationPath,
                         settings,
                         out var migrationReason,
-                        settings.allow_insecure_http))
+                        settings.allow_insecure_http,
+                        settings.allow_insecure_remote_http))
                     {
                         Debug.LogWarning("[AstrBotBridge] Legacy endpoint was upgraded in memory but could not be saved: " + migrationReason);
                     }
@@ -2232,8 +2368,12 @@ namespace QuestMmdPlayer
 
         private string Endpoint(string relative)
         {
-            var baseUrl = string.IsNullOrEmpty(activeBaseUrl) ? settings.base_url : activeBaseUrl;
-            return baseUrl + "/" + relative.TrimStart('/');
+            if (settings == null || !IsConfigured || string.IsNullOrEmpty(activeBaseUrl) ||
+                !IsCandidateAllowed(activeBaseUrl))
+            {
+                throw new InvalidOperationException("No validated active AstrBot endpoint is available");
+            }
+            return activeBaseUrl + "/" + (relative ?? string.Empty).TrimStart('/');
         }
 
         /// <summary>
@@ -2245,7 +2385,12 @@ namespace QuestMmdPlayer
         /// </summary>
         private void NoteActiveEndpointUnreachable(UnityWebRequest request)
         {
-            if (request == null || request.result != UnityWebRequest.Result.ConnectionError)
+            // A pin mismatch is a security terminal condition, not endpoint
+            // reachability. Never cool down the configured endpoint or fail
+            // over to another authority after a certificate mismatch.
+            if (request == null || IsCertificatePinMismatch(request) ||
+                request.result != UnityWebRequest.Result.ConnectionError ||
+                AstrBotProtocol.IsTerminalTransportFailure(request.error))
             {
                 return;
             }
@@ -2272,7 +2417,7 @@ namespace QuestMmdPlayer
                 SetStatus("Endpoint unreachable; failing over to " +
                     BackendPairingProtocol.GetServerEntry(candidate));
                 RecordStage("endpoint", "failover", "connection_error", 0, -1);
-                Debug.Log("[AstrBotBridge] Endpoint failover: " + failed + " -> " + candidate, this);
+                Debug.Log("[AstrBotBridge] Endpoint failover selected a validated candidate", this);
                 return;
             }
             // 所有候选均在冷却期：留在当前入口，由连接循环按既有节奏重试。
@@ -2572,6 +2717,18 @@ namespace QuestMmdPlayer
 
         private static string ReadFailureCode(UnityWebRequest request, string fallback)
         {
+            return ReadFailureCode(request, fallback, null);
+        }
+
+        private static string ReadFailureCode(
+            UnityWebRequest request,
+            string fallback,
+            CertificatePinningHandler capturedHandler)
+        {
+            if (IsCertificatePinMismatch(capturedHandler) || IsCertificatePinMismatch(request))
+            {
+                return "certificate_pin_mismatch";
+            }
             if (request != null && TryReadBridgeError(
                     request.downloadHandler == null ? string.Empty : request.downloadHandler.text,
                     out var bridgeCode,
@@ -2651,6 +2808,10 @@ namespace QuestMmdPlayer
 
         private static string HttpFailure(string operation, UnityWebRequest request)
         {
+            if (IsCertificatePinMismatch(request))
+            {
+                return operation + " failed: certificate_pin_mismatch";
+            }
             var detail = request == null ? "request unavailable" : request.error;
             var code = request == null ? 0 : request.responseCode;
             if (request != null && TryReadBridgeError(

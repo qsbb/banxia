@@ -36,6 +36,9 @@ namespace QuestMmdPlayer
         public string version;
         public string exchange_url;
         public string token;
+        public string certificate_pin_sha256;
+        public string certificatePinSha256;
+        public string sha256;
     }
 
     public static class BackendPairingProtocol
@@ -50,11 +53,21 @@ namespace QuestMmdPlayer
         public const string LegacyExchangePath = LegacyPluginApiPath + "/pairing/exchange";
         public const int MaxServerInputLength = 512;
 
-        public static bool TryBuildExchangeEndpoint(string serverOrEndpoint, out string endpoint, out string reason, bool allowPrivateHttp = true)
+        public static bool TryBuildExchangeEndpoint(
+            string serverOrEndpoint,
+            out string endpoint,
+            out string reason,
+            bool allowPrivateHttp = false,
+            bool allowRemoteHttp = false)
         {
             endpoint = string.Empty;
             reason = string.Empty;
-            var value = (serverOrEndpoint ?? string.Empty).Trim();
+            var value = serverOrEndpoint ?? string.Empty;
+            if (AstrBotProtocol.ContainsWhitespace(value))
+            {
+                reason = "Pairing server input must not contain whitespace";
+                return false;
+            }
             if (value.Length > MaxServerInputLength)
             {
                 reason = "Pairing server input exceeds the length limit";
@@ -67,18 +80,14 @@ namespace QuestMmdPlayer
             }
             if (!value.Contains("://"))
             {
-                var probeValue = "http://" + value;
-                var isLiteralPrivateIp = Uri.TryCreate(probeValue, UriKind.Absolute, out var privateProbe) &&
-                    AstrBotProtocol.IsPrivateNetworkHost(privateProbe.Host);
-                if (isLiteralPrivateIp && !allowPrivateHttp)
-                {
-                    reason = "Enable private-LAN HTTP before using a private IP address";
-                    return false;
-                }
-                value = "http://" + value;
+                // Scheme-less input is always upgraded to HTTPS. Callers must
+                // type http:// explicitly to opt into plaintext transport.
+                value = "https://" + value;
             }
             if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
                 string.IsNullOrEmpty(uri.Host) ||
+                !AstrBotProtocol.HasValidAuthorityPortSyntax(value, uri) ||
+                !AstrBotProtocol.HasSafeUrlPathSyntax(value, uri) ||
                 !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) ||
                 !string.IsNullOrEmpty(uri.Fragment))
             {
@@ -87,10 +96,14 @@ namespace QuestMmdPlayer
             }
 
             var isHttps = uri.Scheme == Uri.UriSchemeHttps;
-            // 明文 HTTP：开关打开即放行任意主机（私网 / 公网 / 内网穿透域名）。
-            // 真正的策略闸门在服务端（allow_private_http_pairing /
-            // allow_insecure_remote_http），未授权组合会被 422 https_required 拒绝。
-            var isPlainHttp = uri.Scheme == Uri.UriSchemeHttp && allowPrivateHttp;
+            // A bare host is intentionally HTTPS by default. Plain HTTP is only
+            // selected when the caller explicitly supplies http:// and the
+            // corresponding opt-in is enabled.
+            var isPrivateHttp = uri.Scheme == Uri.UriSchemeHttp &&
+                allowPrivateHttp && AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
+            var isRemoteHttp = uri.Scheme == Uri.UriSchemeHttp &&
+                allowRemoteHttp && !AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
+            var isPlainHttp = isPrivateHttp || isRemoteHttp;
             if (!isHttps && !isPlainHttp)
             {
                 reason = "Pairing requires HTTPS, or enabling plain-HTTP connections";
@@ -133,11 +146,16 @@ namespace QuestMmdPlayer
         /// mirrors AstrBotProtocol.TryValidateSettings: HTTPS everywhere, plain
         /// HTTP only for literal private-network IPs with the local opt-in.
         /// </summary>
-        public static bool TryBuildBridgeBaseUrl(string serverOrBaseUrl, out string baseUrl, out string reason, bool allowPrivateHttp = true, bool allowRemoteHttp = false)
+        public static bool TryBuildBridgeBaseUrl(string serverOrBaseUrl, out string baseUrl, out string reason, bool allowPrivateHttp = false, bool allowRemoteHttp = false)
         {
             baseUrl = string.Empty;
             reason = string.Empty;
-            var value = (serverOrBaseUrl ?? string.Empty).Trim();
+            var value = serverOrBaseUrl ?? string.Empty;
+            if (AstrBotProtocol.ContainsWhitespace(value))
+            {
+                reason = "Endpoint input must not contain whitespace";
+                return false;
+            }
             if (value.Length > MaxServerInputLength)
             {
                 reason = "Endpoint input exceeds the length limit";
@@ -150,10 +168,14 @@ namespace QuestMmdPlayer
             }
             if (!value.Contains("://"))
             {
-                value = "http://" + value;
+                // Keep endpoint-entry semantics identical to manual pairing:
+                // bare authorities are HTTPS; plaintext requires http://.
+                value = "https://" + value;
             }
             if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
                 string.IsNullOrEmpty(uri.Host) ||
+                !AstrBotProtocol.HasValidAuthorityPortSyntax(value, uri) ||
+                !AstrBotProtocol.HasSafeUrlPathSyntax(value, uri) ||
                 !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) ||
                 !string.IsNullOrEmpty(uri.Fragment))
             {
@@ -166,7 +188,8 @@ namespace QuestMmdPlayer
                 allowPrivateHttp && AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
             // 公网明文：仅在用户经明文开关显式 opt-in 时放行（密钥/音频明文传输，
             // 仅限自有服务器）；否则公网主机必须显式 https://。
-            var isRemoteHttp = uri.Scheme == Uri.UriSchemeHttp && allowRemoteHttp;
+            var isRemoteHttp = uri.Scheme == Uri.UriSchemeHttp &&
+                allowRemoteHttp && !AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
             if (!isHttps && !isPrivateHttp && !isRemoteHttp)
             {
                 reason = "Public endpoints require an explicit https:// URL, or enabling the plaintext-HTTP switch";
@@ -205,7 +228,7 @@ namespace QuestMmdPlayer
             string serverOrBaseUrl,
             out string healthEndpoint,
             out string reason,
-            bool allowPrivateHttp = true,
+            bool allowPrivateHttp = false,
             bool allowRemoteHttp = false)
         {
             healthEndpoint = string.Empty;
@@ -235,25 +258,87 @@ namespace QuestMmdPlayer
                 ? "[" + uri.Host + "]"
                 : uri.Host;
             var authority = uri.IsDefaultPort ? host : host + ":" + uri.Port;
-            // https 一律保留 scheme 回显：此前只对私网 https 保留，公网 https
-            // 会被剥成裸 host:port——用户看不出存的是 https，对纯 HTTP
-            // 服务器反复发起 TLS 握手却无从察觉（SSL 报错排查实坑）。
-            if (uri.Scheme == Uri.UriSchemeHttps)
-            {
-                return Uri.UriSchemeHttps + "://" + authority;
-            }
-
-            return authority;
+            // Always retain the explicitly selected scheme in the UI. This
+            // makes a plaintext opt-in visible and prevents a bare host from
+            // being mistaken for an HTTPS authority.
+            return uri.Scheme + "://" + authority;
         }
+        // Legacy v1 shape. Keep this overload's parameter list intact; the
+        // additional remote-HTTP gate is available only to callers that opt in
+        // explicitly through the extended overload below.
         public static bool TryParseQrPayload(
             string json,
             out string exchangeEndpoint,
             out string token,
             out string reason,
-            bool allowPrivateHttp = true)
+            bool allowPrivateHttp = false)
+        {
+            return TryParseQrPayload(
+                json,
+                out exchangeEndpoint,
+                out token,
+                out _,
+                out reason,
+                allowPrivateHttp,
+                false);
+        }
+
+        // Extended legacy overload used by the pairing controller when the
+        // operator has separately enabled public plaintext HTTP.
+        public static bool TryParseQrPayload(
+            string json,
+            out string exchangeEndpoint,
+            out string token,
+            out string reason,
+            bool allowPrivateHttp,
+            bool allowRemoteHttp)
+        {
+            return TryParseQrPayload(
+                json,
+                out exchangeEndpoint,
+                out token,
+                out _,
+                out reason,
+                allowPrivateHttp,
+                allowRemoteHttp);
+        }
+
+        /// <summary>
+        /// Parses the additive v1 QR fingerprint field. Legacy payloads without
+        /// a pin remain valid; a supplied pin is only meaningful for HTTPS and
+        /// is normalized to lower-case bare hexadecimal.
+        /// </summary>
+        public static bool TryParseQrPayload(
+            string json,
+            out string exchangeEndpoint,
+            out string token,
+            out string certificatePinSha256,
+            out string reason,
+            bool allowPrivateHttp = false)
+        {
+            return TryParseQrPayload(
+                json,
+                out exchangeEndpoint,
+                out token,
+                out certificatePinSha256,
+                out reason,
+                allowPrivateHttp,
+                false);
+        }
+
+        // Extended pin-aware overload with an explicit public HTTP gate.
+        public static bool TryParseQrPayload(
+            string json,
+            out string exchangeEndpoint,
+            out string token,
+            out string certificatePinSha256,
+            out string reason,
+            bool allowPrivateHttp,
+            bool allowRemoteHttp)
         {
             exchangeEndpoint = string.Empty;
             token = string.Empty;
+            certificatePinSha256 = string.Empty;
             reason = string.Empty;
             if (string.IsNullOrWhiteSpace(json))
             {
@@ -282,12 +367,132 @@ namespace QuestMmdPlayer
                 reason = "QR pairing token is invalid";
                 return false;
             }
-            if (!TryBuildExchangeEndpoint(payload.exchange_url, out exchangeEndpoint, out reason, allowPrivateHttp))
+            if (!TryBuildExchangeEndpoint(
+                    payload.exchange_url,
+                    out exchangeEndpoint,
+                    out reason,
+                    allowPrivateHttp,
+                    allowRemoteHttp))
             {
                 return false;
             }
+
+            var first = payload.certificate_pin_sha256 ?? string.Empty;
+            var second = payload.certificatePinSha256 ?? string.Empty;
+            var third = payload.sha256 ?? string.Empty;
+            if (!string.IsNullOrEmpty(first) && !string.IsNullOrEmpty(second) &&
+                !string.Equals(first, second, StringComparison.OrdinalIgnoreCase))
+            {
+                reason = "QR certificate pin aliases conflict";
+                return false;
+            }
+            if (!string.IsNullOrEmpty(first) && !string.IsNullOrEmpty(third) &&
+                !string.Equals(first, third, StringComparison.OrdinalIgnoreCase))
+            {
+                reason = "QR certificate pin aliases conflict";
+                return false;
+            }
+            if (!string.IsNullOrEmpty(second) && !string.IsNullOrEmpty(third) &&
+                !string.Equals(second, third, StringComparison.OrdinalIgnoreCase))
+            {
+                reason = "QR certificate pin aliases conflict";
+                return false;
+            }
+            var candidate = !string.IsNullOrEmpty(first) ? first :
+                (!string.IsNullOrEmpty(second) ? second : third);
+            if (!string.IsNullOrEmpty(candidate))
+            {
+                if (!CertificatePinningHandler.IsValidPin(candidate))
+                {
+                    reason = "certificate pin must be exactly 64 hexadecimal characters";
+                    return false;
+                }
+                if (!IsHttpsEndpoint(exchangeEndpoint))
+                {
+                    reason = "certificate pin is only valid for HTTPS";
+                    return false;
+                }
+                certificatePinSha256 = candidate.ToLowerInvariant();
+            }
             token = payload.token;
             return true;
+        }
+
+        public static bool TryGetEffectiveAuthority(
+            string value,
+            out string scheme,
+            out string host,
+            out int port)
+        {
+            scheme = string.Empty;
+            host = string.Empty;
+            port = 0;
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                string.IsNullOrEmpty(uri.Host) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+                !string.IsNullOrEmpty(uri.UserInfo) ||
+                !string.IsNullOrEmpty(uri.Query) ||
+                !string.IsNullOrEmpty(uri.Fragment))
+            {
+                return false;
+            }
+            scheme = uri.Scheme.ToLowerInvariant();
+            host = uri.Host.ToLowerInvariant();
+            port = uri.IsDefaultPort || uri.Port <= 0
+                ? (uri.Scheme == Uri.UriSchemeHttps ? 443 : 80)
+                : uri.Port;
+            return port > 0 && port <= 65535;
+        }
+
+        public static bool HasSameAuthority(string firstUrl, string secondUrl)
+        {
+            return TryGetEffectiveAuthority(firstUrl, out var firstScheme, out var firstHost, out var firstPort) &&
+                TryGetEffectiveAuthority(secondUrl, out var secondScheme, out var secondHost, out var secondPort) &&
+                string.Equals(firstScheme, secondScheme, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(firstHost, secondHost, StringComparison.OrdinalIgnoreCase) &&
+                firstPort == secondPort;
+        }
+
+        public static bool IsPinnedPairingTargetAllowed(
+            string exchangeEndpoint,
+            string targetBaseUrl,
+            string certificatePinSha256)
+        {
+            if (string.IsNullOrEmpty(certificatePinSha256))
+            {
+                return true;
+            }
+            return CertificatePinningHandler.IsValidPin(certificatePinSha256) &&
+                IsHttpsEndpoint(exchangeEndpoint) &&
+                IsHttpsEndpoint(targetBaseUrl) &&
+                HasSameAuthority(exchangeEndpoint, targetBaseUrl);
+        }
+
+        private static bool IsHttpsEndpoint(string value)
+        {
+            return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+                uri.Scheme == Uri.UriSchemeHttps;
+        }
+
+        private static bool IsSafeExchangePath(string path)
+        {
+            if (string.IsNullOrEmpty(path) || path.Length > 256 || path[0] != '/')
+            {
+                return false;
+            }
+            for (var index = 0; index < path.Length; index++)
+            {
+                var value = path[index];
+                if (value < 0x20 || value == '\\' || value == '?'
+                    || value == '#' || value == ':' || value == '%')
+                {
+                    // Percent-encoded separators/dot segments are ambiguous
+                    // across proxy stacks; reject all encoded path bytes here.
+                    return false;
+                }
+            }
+            return path.IndexOf("//", StringComparison.Ordinal) < 0 &&
+                path.IndexOf("..", StringComparison.Ordinal) < 0;
         }
 
         public static bool TryUpgradeLegacyPluginBaseUrl(string value, out string upgraded)
@@ -350,7 +555,8 @@ namespace QuestMmdPlayer
                     currentFullPath,
                     settings,
                     out reason,
-                    settings.allow_insecure_http))
+                    settings.allow_insecure_http,
+                    settings.allow_insecure_remote_http))
                 {
                     return false;
                 }
@@ -395,7 +601,8 @@ namespace QuestMmdPlayer
             string path,
             AstrBotBridgeSettings settings,
             out string reason,
-            bool allowPrivateHttp = true)
+            bool allowPrivateHttp = false,
+            bool allowRemoteHttp = false)
         {
             reason = string.Empty;
             if (string.IsNullOrWhiteSpace(path))
@@ -416,13 +623,13 @@ namespace QuestMmdPlayer
                                      allowPrivateHttp &&
                                      settings.allow_insecure_http &&
                                      AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
-            // 公网明文逃生门：仅当用户在配对页显式开启明文开关、且配对链路
-            // 本身就是 http:// 公网地址时置位（见 BackendPairingController）。
             var remoteHttpAllowed = uri.Scheme == Uri.UriSchemeHttp &&
-                                    settings.allow_insecure_remote_http;
+                                    allowRemoteHttp &&
+                                    settings.allow_insecure_remote_http &&
+                                    !AstrBotProtocol.IsPrivateNetworkHost(uri.Host);
             if (uri.Scheme != Uri.UriSchemeHttps && !privateHttpAllowed && !remoteHttpAllowed)
             {
-                reason = "Paired configuration must use HTTPS unless private-LAN HTTP was explicitly enabled";
+                reason = "Paired configuration must use HTTPS unless the matching HTTP opt-in was explicitly enabled";
                 return false;
             }
 

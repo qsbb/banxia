@@ -2601,10 +2601,11 @@ namespace QuestMmdPlayer
             CreateText("域名或 IP:端口  /  6 位配对码  /  路径自动补全", pairingLayer.transform, new Vector2(0f, 250f), new Vector2(640f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
 
             pairingServerText = CreateText("尚未设置服务器", pairingLayer.transform, new Vector2(0f, 207f), new Vector2(650f, 34f), 13, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
-            CreateButton("输入域名 / IP:端口", -160f, 161f, 300f, 52f, OpenPairingKeyboard, pairingLayer.transform);
-            CreateButton("局域网 HTTP", 160f, 161f, 300f, 52f, TogglePrivateHttp, pairingLayer.transform);
-            CreateText("请输入 6 位配对码", pairingLayer.transform, new Vector2(0f, 114f), new Vector2(620f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
-            pairingCodeText = CreateText("_ _ _   _ _ _", pairingLayer.transform, new Vector2(0f, 72f), new Vector2(620f, 54f), 30, FontStyle.Bold, Color.white);
+            CreateButton("输入域名 / IP:端口", 0f, 184f, 430f, 52f, OpenPairingKeyboard, pairingLayer.transform);
+            CreateButton("内网 HTTP", -120f, 132f, 220f, 42f, TogglePrivateHttp, pairingLayer.transform);
+            CreateButton("公网 HTTP（高风险）", 120f, 132f, 220f, 42f, ToggleRemoteHttp, pairingLayer.transform);
+            CreateText("请输入 6 位配对码", pairingLayer.transform, new Vector2(0f, 88f), new Vector2(620f, 28f), 13, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
+            pairingCodeText = CreateText("_ _ _   _ _ _", pairingLayer.transform, new Vector2(0f, 50f), new Vector2(620f, 48f), 30, FontStyle.Bold, Color.white);
 
             var digits = new[] { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
             for (var index = 0; index < digits.Length; index++)
@@ -2612,17 +2613,17 @@ namespace QuestMmdPlayer
                 var digit = digits[index];
                 var column = index % 3;
                 var row = index / 3;
-                CreateButton(digit, -124f + column * 124f, 18f - row * 58f, 108f, 48f, () => AppendPairingDigit(digit[0]), pairingLayer.transform);
+                CreateButton(digit, -124f + column * 124f, -4f - row * 52f, 108f, 44f, () => AppendPairingDigit(digit[0]), pairingLayer.transform);
             }
-            CreateButton("清空", -124f, -156f, 108f, 48f, ClearPairingCode, pairingLayer.transform);
-            CreateButton("0", 0f, -156f, 108f, 48f, () => AppendPairingDigit('0'), pairingLayer.transform);
-            CreateButton("退格", 124f, -156f, 108f, 48f, RemovePairingDigit, pairingLayer.transform);
+            CreateButton("清空", -124f, -166f, 108f, 44f, ClearPairingCode, pairingLayer.transform);
+            CreateButton("0", 0f, -166f, 108f, 44f, () => AppendPairingDigit('0'), pairingLayer.transform);
+            CreateButton("退格", 124f, -166f, 108f, 44f, RemovePairingDigit, pairingLayer.transform);
 
-            CreateButton("返回", -180f, -226f, 160f, 54f, ShowMainPanel, pairingLayer.transform);
+            CreateButton("返回", -180f, -236f, 160f, 50f, ShowMainPanel, pairingLayer.transform);
 
-            CreateButton("重连", 0f, -226f, 160f, 54f, ReconnectBackend, pairingLayer.transform);
-            CreateButton("连接", 180f, -226f, 160f, 54f, ConnectPairingCode, pairingLayer.transform);
-            pairingStatusText = CreateText("", pairingLayer.transform, new Vector2(0f, -294f), new Vector2(660f, 92f), 13, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
+            CreateButton("重连", 0f, -236f, 160f, 50f, ReconnectBackend, pairingLayer.transform);
+            CreateButton("连接", 180f, -236f, 160f, 50f, ConnectPairingCode, pairingLayer.transform);
+            pairingStatusText = CreateText("", pairingLayer.transform, new Vector2(0f, -304f), new Vector2(660f, 76f), 13, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
             BuildPairingKeyboardLayer();
             pairingLayer.SetActive(false);
         }
@@ -2675,6 +2676,17 @@ namespace QuestMmdPlayer
                 return;
             }
             pairing.SetPrivateHttpAllowed(!pairing.PrivateHttpAllowed);
+            RefreshPairingPanel();
+        }
+
+        private void ToggleRemoteHttp()
+        {
+            var pairing = owner?.Pairing;
+            if (pairing == null || pairing.IsBusy)
+            {
+                return;
+            }
+            pairing.SetRemoteHttpAllowed(!pairing.RemoteHttpAllowed);
             RefreshPairingPanel();
         }
 
@@ -2760,7 +2772,7 @@ namespace QuestMmdPlayer
             CreateButton("\u53d6\u6d88", 75f, -124f, 136f, 48f, HidePairingKeyboard, pairingKeyboardLayer.transform);
             CreateButton("\u786e\u5b9a", 225f, -124f, 136f, 48f, AcceptPairingServerEntry, pairingKeyboardLayer.transform);
             CreateText(
-                "\u8def\u5f84\u4f1a\u81ea\u52a8\u8865\u5168\uff1b\u5c40\u57df\u7f51 IP \u9700\u5148\u5f00\u542f HTTP",
+                "\u8def\u5f84\u4f1a\u81ea\u52a8\u8865\u5168\uff1b\u88f8\u5730\u5740\u9ed8\u8ba4 HTTPS\uff0cHTTP \u5fc5\u987b\u663e\u5f0f\u5199 http://",
                 pairingKeyboardLayer.transform,
                 new Vector2(0f, -184f),
                 new Vector2(640f, 30f),
@@ -2848,10 +2860,11 @@ namespace QuestMmdPlayer
             }
             if (pairingStatusText != null)
             {
-                const string entryHint = "内网填 IP:端口；公网填完整 域名:端口（明文需开明文开关）";
-                var connectionMode = pairing != null && pairing.PrivateHttpAllowed
-                    ? "连接模式：允许明文 HTTP（公网明文有泄漏风险）"
-                    : "连接模式：仅 HTTPS";
+                const string entryHint = "裸地址默认 HTTPS；HTTP 必须显式写 http:// 并打开对应开关";
+                var connectionMode = pairing == null
+                    ? "连接模式：仅 HTTPS"
+                    : "连接模式：" + (pairing.PrivateHttpAllowed ? "内网 HTTP 已允许" : "内网 HTTP 已禁用") +
+                      "；" + (pairing.RemoteHttpAllowed ? "公网 HTTP 已允许" : "公网 HTTP 已禁用");
                 var bridge = LocalizeBridgeStatus(owner?.AstrBot?.Status ?? "AstrBot configuration not loaded");
                 var activeBaseUrl = owner?.AstrBot?.ActiveBaseUrl ?? string.Empty;
                 var endpointCount = owner?.AstrBot?.GetEndpointCandidates()?.Count ?? 0;

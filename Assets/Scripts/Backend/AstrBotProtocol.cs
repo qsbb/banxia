@@ -26,6 +26,7 @@ namespace QuestMmdPlayer
         /// switch. Mirrors the server-side allow_insecure_remote_http gate.
         /// </summary>
         public bool allow_insecure_remote_http;
+        public string certificate_pin_sha256;
         /// <summary>
         /// Ordered failover candidates (plugin base URLs). base_url remains the
         /// primary entry; these are tried in order when the active entry is
@@ -222,6 +223,10 @@ namespace QuestMmdPlayer
             return (string[])ExecutableActions.Clone();
         }
 
+        public const int MaxEndpointCount = 16;
+        public const int MaxEndpointLength = 512;
+        public const int MaxCertificateBytes = 512 * 1024;
+
         public static bool TryValidateSettings(AstrBotBridgeSettings settings, out string reason)
         {
             reason = string.Empty;
@@ -231,16 +236,39 @@ namespace QuestMmdPlayer
                 return false;
             }
             if (!Uri.TryCreate(settings.base_url, UriKind.Absolute, out var uri) ||
-                (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+                string.IsNullOrWhiteSpace(settings.base_url) ||
+                ContainsWhitespace(settings.base_url) ||
+                settings.base_url.Length > MaxEndpointLength ||
+                string.IsNullOrEmpty(uri.Host) ||
+                (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp) ||
+                !string.IsNullOrEmpty(uri.UserInfo) ||
+                !string.IsNullOrEmpty(uri.Query) ||
+                !string.IsNullOrEmpty(uri.Fragment) ||
+                !HasValidAuthorityPortSyntax(settings.base_url, uri) ||
+                !HasSafeUrlPathSyntax(settings.base_url, uri) ||
+                !IsRecognizedPluginBasePath(uri.AbsolutePath))
             {
-                reason = "base_url must be an absolute HTTP or HTTPS URL";
+                reason = "base_url must be an exact Embodiment Bridge HTTP(S) plugin URL";
                 return false;
             }
             if (uri.Scheme == Uri.UriSchemeHttp &&
-                !settings.allow_insecure_remote_http &&
-                (!settings.allow_insecure_http || !IsPrivateNetworkHost(uri.Host)))
+                !IsHttpHostAllowed(uri.Host, settings.allow_insecure_http, settings.allow_insecure_remote_http))
             {
-                reason = "Plain HTTP requires allow_insecure_http=true and a literal private-network IP, or an explicit remote-plaintext opt-in";
+                reason = "Plain HTTP requires the matching explicit private or remote opt-in";
+                return false;
+            }
+            // A configured pin is deliberately strict: no whitespace, prefixes,
+            // separators, base64, or truncated digests. Pinning an HTTP base URL
+            // is nonsensical and is rejected rather than silently ignored.
+            if (!string.IsNullOrEmpty(settings.certificate_pin_sha256) &&
+                !CertificatePinningHandler.IsValidPin(settings.certificate_pin_sha256))
+            {
+                reason = "certificate_pin_sha256 must be exactly 64 hexadecimal characters";
+                return false;
+            }
+            if (uri.Scheme == Uri.UriSchemeHttp && !string.IsNullOrEmpty(settings.certificate_pin_sha256))
+            {
+                reason = "certificate pin is only valid for HTTPS";
                 return false;
             }
             if (string.IsNullOrWhiteSpace(settings.astrbot_api_key))
@@ -263,7 +291,104 @@ namespace QuestMmdPlayer
                 reason = "user_id and bot_id are required and must be at most 128 characters";
                 return false;
             }
+            if (settings.endpoint_urls != null)
+            {
+                if (settings.endpoint_urls.Count > MaxEndpointCount)
+                {
+                    reason = "endpoint_urls exceeds the maximum number of candidates";
+                    return false;
+                }
+                for (var index = 0; index < settings.endpoint_urls.Count; index++)
+                {
+                    var candidate = settings.endpoint_urls[index];
+                    if (string.IsNullOrWhiteSpace(candidate) || ContainsWhitespace(candidate) ||
+                        candidate.Length > MaxEndpointLength ||
+                        !Uri.TryCreate(candidate, UriKind.Absolute, out var candidateUri) ||
+                        !HasValidAuthorityPortSyntax(candidate, candidateUri) ||
+                        !HasSafeUrlPathSyntax(candidate, candidateUri) ||
+                        !IsRecognizedPluginBasePath(candidateUri.AbsolutePath) ||
+                        candidateUri.Scheme != uri.Scheme ||
+                        candidateUri.Scheme == Uri.UriSchemeHttp &&
+                        !IsHttpHostAllowed(candidateUri.Host,
+                            settings.allow_insecure_http,
+                            settings.allow_insecure_remote_http) ||
+                        !string.IsNullOrEmpty(candidateUri.UserInfo) ||
+                        !string.IsNullOrEmpty(candidateUri.Query) ||
+                        !string.IsNullOrEmpty(candidateUri.Fragment))
+                    {
+                        reason = "endpoint_urls contains an invalid candidate";
+                        return false;
+                    }
+                    if (!string.IsNullOrEmpty(settings.certificate_pin_sha256) &&
+                        !IsPinnedEndpointAllowed(settings.base_url, candidate, settings.certificate_pin_sha256))
+                    {
+                        reason = "pinned endpoint authority does not match base_url";
+                        return false;
+                    }
+                }
+            }
             return true;
+        }
+
+        internal static bool ContainsWhitespace(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return false;
+            }
+            for (var index = 0; index < value.Length; index++)
+            {
+                if (char.IsWhiteSpace(value[index]))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsRecognizedPluginBasePath(string path)
+        {
+            var normalized = (path ?? string.Empty).TrimEnd('/');
+            return string.Equals(normalized, BackendPairingProtocol.PluginApiPath, StringComparison.Ordinal) ||
+                string.Equals(normalized, BackendPairingProtocol.LegacyPluginApiPath, StringComparison.Ordinal);
+        }
+
+        internal static bool HasSafeUrlPathSyntax(string value, Uri uri)
+        {
+            if (uri == null || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
+            {
+                return false;
+            }
+            var raw = value ?? string.Empty;
+            var pathStart = raw.IndexOf("://", StringComparison.Ordinal);
+            if (pathStart < 0)
+            {
+                return false;
+            }
+            pathStart = raw.IndexOf('/', pathStart + 3);
+            if (pathStart < 0)
+            {
+                return true;
+            }
+            var rawPath = raw.Substring(pathStart);
+            var query = rawPath.IndexOfAny(new[] { '?', '#' });
+            if (query >= 0)
+            {
+                rawPath = rawPath.Substring(0, query);
+            }
+            return rawPath.IndexOf('\\') < 0 &&
+                rawPath.IndexOf("%2f", StringComparison.OrdinalIgnoreCase) < 0 &&
+                rawPath.IndexOf("%5c", StringComparison.OrdinalIgnoreCase) < 0 &&
+                rawPath.IndexOf("%2e", StringComparison.OrdinalIgnoreCase) < 0 &&
+                rawPath.IndexOf("//", StringComparison.Ordinal) < 0 &&
+                rawPath.IndexOf("..", StringComparison.Ordinal) < 0;
+        }
+
+        private static bool IsHttpHostAllowed(string host, bool allowPrivateHttp, bool allowRemoteHttp)
+        {
+            var isPrivate = IsPrivateNetworkHost(host);
+            return (allowPrivateHttp && isPrivate) ||
+                (allowRemoteHttp && !isPrivate);
         }
 
         public static string NormalizeBaseUrl(string value)
@@ -271,11 +396,168 @@ namespace QuestMmdPlayer
             return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().TrimEnd('/');
         }
 
+        /// <summary>Pure validation helper for pairing/settings surfaces.</summary>
+        public static bool IsValidCertificatePin(string value)
+        {
+            return CertificatePinningHandler.IsValidCertificatePin(value);
+        }
+
+        /// <summary>Checks a raw leaf-certificate DER digest against a bare pin.</summary>
+        public static bool MatchesLeafCertificate(byte[] certificateDer, string pin)
+        {
+            return CertificatePinningHandler.MatchesLeafCertificate(certificateDer, pin);
+        }
+
+        /// <summary>
+        /// Returns true when a request candidate is safe to use with a
+        /// configured certificate pin. Pinning is an HTTPS leaf-authority
+        /// policy, so an invalid pin, HTTP candidate, or authority change all
+        /// fail closed. With no configured pin, v1 endpoint behavior is left
+        /// unchanged and this method returns true.
+        /// </summary>
+        public static bool IsPinnedEndpointAllowed(
+            string baseUrl,
+            string candidateUrl,
+            string certificatePinSha256)
+        {
+            if (string.IsNullOrEmpty(certificatePinSha256))
+            {
+                return true;
+            }
+            if (!CertificatePinningHandler.IsValidPin(certificatePinSha256) ||
+                !TryGetEffectiveAuthority(baseUrl, out var baseScheme, out var baseHost, out var basePort) ||
+                !TryGetEffectiveAuthority(candidateUrl, out var candidateScheme, out var candidateHost, out var candidatePort))
+            {
+                return false;
+            }
+
+            // A configured pin is never applied to HTTP and can never be used
+            // to turn an HTTPS base URL into a plaintext failover.
+            return string.Equals(baseScheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(candidateScheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(baseScheme, candidateScheme, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(baseHost, candidateHost, StringComparison.OrdinalIgnoreCase) &&
+                basePort == candidatePort;
+        }
+
+        /// <summary>Pure authority comparison using effective HTTP(S) ports.</summary>
+        public static bool HasSameEndpointAuthority(string firstUrl, string secondUrl)
+        {
+            return TryGetEffectiveAuthority(firstUrl, out var firstScheme, out var firstHost, out var firstPort) &&
+                TryGetEffectiveAuthority(secondUrl, out var secondScheme, out var secondHost, out var secondPort) &&
+                string.Equals(firstScheme, secondScheme, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(firstHost, secondHost, StringComparison.OrdinalIgnoreCase) &&
+                firstPort == secondPort;
+        }
+
+        internal static bool HasValidAuthorityPortSyntax(string url, Uri uri)
+        {
+            var raw = (url ?? string.Empty).Trim();
+            var schemeSeparator = raw.IndexOf("://", StringComparison.Ordinal);
+            if (schemeSeparator < 0)
+            {
+                return false;
+            }
+            var authorityStart = schemeSeparator + 3;
+            var authorityEnd = raw.IndexOfAny(new[] { '/', '?', '#' }, authorityStart);
+            if (authorityEnd < 0)
+            {
+                authorityEnd = raw.Length;
+            }
+            var authority = raw.Substring(authorityStart, authorityEnd - authorityStart);
+            if (authority.Length == 0 || authority.IndexOf('@') >= 0)
+            {
+                return false;
+            }
+            if (authority[0] == '[')
+            {
+                var close = authority.IndexOf(']');
+                if (close < 0)
+                {
+                    return false;
+                }
+                if (close + 1 == authority.Length)
+                {
+                    return true;
+                }
+                return authority[close + 1] == ':' && close + 2 < authority.Length && uri.Port > 0;
+            }
+            var colon = authority.LastIndexOf(':');
+            if (colon < 0)
+            {
+                return true;
+            }
+            // An unbracketed colon in an IPv6 literal is not a port delimiter.
+            if (authority.IndexOf(':') != colon)
+            {
+                return false;
+            }
+            return colon + 1 < authority.Length && uri.Port > 0;
+        }
+
+        private static bool TryGetEffectiveAuthority(
+            string value,
+            out string scheme,
+            out string host,
+            out int port)
+        {
+            scheme = string.Empty;
+            host = string.Empty;
+            port = 0;
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                string.IsNullOrEmpty(uri.Host) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+                !string.IsNullOrEmpty(uri.UserInfo) ||
+                !string.IsNullOrEmpty(uri.Query) ||
+                !string.IsNullOrEmpty(uri.Fragment))
+            {
+                return false;
+            }
+
+            scheme = uri.Scheme;
+            host = uri.Host;
+            port = uri.IsDefaultPort || uri.Port <= 0
+                ? (uri.Scheme == Uri.UriSchemeHttps ? 443 : 80)
+                : uri.Port;
+            return port > 0 && port <= 65535;
+        }
+
+        /// <summary>
+        /// Returns true when a Unity connection failure is a terminal TLS or
+        /// certificate trust failure. Such errors must never trigger endpoint
+        /// failover because another authority is not an identity-safe fallback.
+        /// </summary>
+        public static bool IsTerminalTransportFailure(string transportError)
+        {
+            var detail = (transportError ?? string.Empty).ToLowerInvariant();
+            return detail.Contains("ssl") || detail.Contains("tls") ||
+                detail.Contains("certificate") || detail.Contains("secure channel") ||
+                detail.Contains("handshake") || detail.Contains("untrusted root") ||
+                detail.Contains("unknown ca") || detail.Contains("remote certificate") ||
+                detail.Contains("hostname mismatch") || detail.Contains("host name mismatch") ||
+                detail.Contains("name mismatch") || detail.Contains("not trusted");
+        }
+
         public static string ClassifyEndpointTestError(
             string transportError,
             long responseCode,
             bool connectionError)
         {
+            return ClassifyEndpointTestError(transportError, responseCode, connectionError, false);
+        }
+
+        public static string ClassifyEndpointTestError(
+            string transportError,
+            long responseCode,
+            bool connectionError,
+            bool certificatePinMismatch)
+        {
+            // The handler's result is authoritative and must win over generic
+            // Unity SSL/connection text or an incidental status code.
+            if (certificatePinMismatch)
+            {
+                return "certificate_pin_mismatch";
+            }
             if (responseCode >= 400)
             {
                 return "http";
@@ -331,7 +613,10 @@ namespace QuestMmdPlayer
                        (bytes[0] == 169 && bytes[1] == 254);
             }
 
-            return address.IsIPv6LinkLocal || address.IsIPv6SiteLocal;
+            // fc00::/7 (including fd00::/8) is the IPv6 Unique Local
+            // Address space and is private LAN scope for the explicit HTTP gate.
+            return address.IsIPv6LinkLocal || address.IsIPv6SiteLocal ||
+                (bytes.Length == 16 && (bytes[0] & 0xFE) == 0xFC);
         }
 
         public static bool TryMapSseEvent(

@@ -54,7 +54,9 @@ namespace QuestMmdPlayer
         public const string VoiceCancel = "voice.cancel";
 
         public const string PairingSetServer = "pairing.setServer";
+        public const string PairingSetCertificatePin = "pairing.setCertificatePin";
         public const string PairingSetPrivateHttp = "pairing.setPrivateHttp";
+        public const string PairingSetRemoteHttp = "pairing.setRemoteHttp";
         public const string PairingDigit = "pairing.digit";
         public const string PairingPair = "pairing.pair";
         public const string PairingReconnect = "pairing.reconnect";
@@ -440,7 +442,9 @@ namespace QuestMmdPlayer
                 FlutterCommands.VoiceRestart,
                 FlutterCommands.VoiceCancel,
                 FlutterCommands.PairingSetServer,
+                FlutterCommands.PairingSetCertificatePin,
                 FlutterCommands.PairingSetPrivateHttp,
+                FlutterCommands.PairingSetRemoteHttp,
                 FlutterCommands.PairingDigit,
                 FlutterCommands.PairingPair,
                 FlutterCommands.PairingReconnect,
@@ -523,6 +527,16 @@ namespace QuestMmdPlayer
         public string url = string.Empty;
     }
 
+    /// <summary>
+    /// Optional SHA-256 leaf certificate fingerprint. Empty explicitly clears
+    /// the pending pin; non-empty values must be exactly 64 hex characters.
+    /// </summary>
+    [Serializable]
+    public sealed class FlutterPairingCertificatePinPayload
+    {
+        public string sha256 = string.Empty;
+    }
+
     [Serializable]
     public sealed class FlutterPairingEndpointTestStartedPayload
     {
@@ -544,11 +558,16 @@ namespace QuestMmdPlayer
         public string status = string.Empty;
         public string server = string.Empty;
         public bool privateHttp;
+        public bool remoteHttp;
         public int codeLen;
         /// <summary>Ordered failover candidates (display form, host:port/path).</summary>
         public string[] endpoints = new string[0];
         /// <summary>Entry currently carrying traffic; empty when unpaired.</summary>
         public string activeEndpoint = string.Empty;
+        /// <summary>True when a certificate pin is active or pending.</summary>
+        public bool certificatePinConfigured;
+        /// <summary>Short non-secret prefix/suffix display; never the full pin.</summary>
+        public string certificatePinSummary = string.Empty;
     }
 
     [Serializable] public sealed class FlutterConversationStatePayload { public string state = string.Empty; public string transportStatus = string.Empty; public string lastError = string.Empty; }

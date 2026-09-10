@@ -234,7 +234,9 @@ namespace QuestMmdPlayer
                 case FlutterCommands.VoiceCancel: return HandleVoiceCancel();
 
                 case FlutterCommands.PairingSetServer: return HandlePairingSetServer(payloadJson);
+                case FlutterCommands.PairingSetCertificatePin: return HandlePairingSetCertificatePin(payloadJson);
                 case FlutterCommands.PairingSetPrivateHttp: return HandlePairingSetPrivateHttp(payloadJson);
+                case FlutterCommands.PairingSetRemoteHttp: return HandlePairingSetRemoteHttp(payloadJson);
                 case FlutterCommands.PairingDigit: return HandlePairingDigit(payloadJson);
                 case FlutterCommands.PairingPair: return HandlePairingPair();
                 case FlutterCommands.PairingReconnect: return HandlePairingReconnect();
@@ -645,6 +647,25 @@ namespace QuestMmdPlayer
             return FlutterCommandResult.Failure(reason);
         }
 
+        private FlutterCommandResult HandlePairingSetCertificatePin(string payloadJson)
+        {
+            if (Pairing == null)
+            {
+                return FlutterCommandResult.Failure("配对控制器不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<FlutterPairingCertificatePinPayload>(payloadJson);
+            if (payload == null)
+            {
+                return FlutterCommandResult.Failure("缺少证书指纹设置值");
+            }
+            if (!Pairing.TrySetCertificatePinSha256(payload.sha256, out var reason))
+            {
+                return FlutterCommandResult.Failure(string.IsNullOrEmpty(reason) ? "证书指纹格式无效" : reason);
+            }
+            PublishPairingStatus();
+            return FlutterCommandResult.Success();
+        }
+
         private FlutterCommandResult HandlePairingSetPrivateHttp(string payloadJson)
         {
             if (Pairing == null)
@@ -657,6 +678,22 @@ namespace QuestMmdPlayer
                 return FlutterCommandResult.Failure("缺少 privateHttp 设置值");
             }
             Pairing.SetPrivateHttpAllowed(payload.enabled);
+            PublishPairingStatus();
+            return FlutterCommandResult.Success();
+        }
+
+        private FlutterCommandResult HandlePairingSetRemoteHttp(string payloadJson)
+        {
+            if (Pairing == null)
+            {
+                return FlutterCommandResult.Failure("配对控制器不可用");
+            }
+            var payload = FlutterMessageProtocol.DeserializePayload<PairingSetRemoteHttpPayload>(payloadJson);
+            if (payload == null)
+            {
+                return FlutterCommandResult.Failure("缺少 remoteHttp 设置值");
+            }
+            Pairing.SetRemoteHttpAllowed(payload.enabled);
             PublishPairingStatus();
             return FlutterCommandResult.Success();
         }
@@ -794,8 +831,7 @@ namespace QuestMmdPlayer
             var payload = FlutterMessageProtocol.DeserializePayload<PairingEndpointUrlPayload>(payloadJson);
             var allowPrivateHttp = (Pairing != null && Pairing.PrivateHttpAllowed) ||
                 (AstrBot.ConfiguredBaseUrl.StartsWith("http://", StringComparison.Ordinal));
-            // 公网明文入口的 opt-in 同样来自配对页明文开关（用户已明确允许）。
-            var allowRemoteHttp = Pairing != null && Pairing.PrivateHttpAllowed;
+            var allowRemoteHttp = Pairing != null && Pairing.RemoteHttpAllowed;
             if (!AstrBot.TryAddEndpoint(payload == null ? string.Empty : payload.url, allowPrivateHttp, allowRemoteHttp, out var reason))
             {
                 return FlutterCommandResult.Failure(string.IsNullOrEmpty(reason) ? "添加入口失败" : reason);
@@ -854,7 +890,7 @@ namespace QuestMmdPlayer
             var requestId = Guid.NewGuid().ToString("N");
             var allowPrivateHttp = (Pairing != null && Pairing.PrivateHttpAllowed) ||
                 AstrBot.ConfiguredBaseUrl.StartsWith("http://", StringComparison.Ordinal);
-            var allowRemoteHttp = Pairing != null && Pairing.PrivateHttpAllowed;
+            var allowRemoteHttp = Pairing != null && Pairing.RemoteHttpAllowed;
             if (!AstrBot.TestEndpoint(payload.url, requestId, allowPrivateHttp, allowRemoteHttp))
             {
                 return FlutterCommandResult.Failure("无法启动入口测试");
@@ -1936,9 +1972,12 @@ namespace QuestMmdPlayer
                 server = Pairing == null ? string.Empty :
                     BackendPairingProtocol.GetServerEntry(Pairing.PairingServerEndpoint),
                 privateHttp = Pairing != null && Pairing.PrivateHttpAllowed,
+                remoteHttp = Pairing != null && Pairing.RemoteHttpAllowed,
                 codeLen = pairingCodeBuffer.Length,
                 endpoints = candidates == null ? new string[0] : candidates.ToArray(),
-                activeEndpoint = AstrBot == null ? string.Empty : AstrBot.ActiveBaseUrl
+                activeEndpoint = AstrBot == null ? string.Empty : AstrBot.ActiveBaseUrl,
+                certificatePinConfigured = Pairing != null && Pairing.CertificatePinConfigured,
+                certificatePinSummary = Pairing == null ? string.Empty : Pairing.CertificatePinSummary
             });
         }
 
@@ -2614,6 +2653,7 @@ namespace QuestMmdPlayer
     [Serializable] public sealed class ConversationSendPayload { public string text = string.Empty; public string attachment = string.Empty; }
     [Serializable] public sealed class PairingSetServerPayload { public string server = string.Empty; }
     [Serializable] public sealed class PairingSetPrivateHttpPayload { public bool enabled; }
+    [Serializable] public sealed class PairingSetRemoteHttpPayload { public bool enabled; }
     [Serializable] public sealed class PairingDigitPayload { public string op = string.Empty; public string digit = string.Empty; }
     [Serializable] public sealed class PairingEndpointUrlPayload { public string url = string.Empty; }
     [Serializable] public sealed class PairingEndpointMovePayload { public string url = string.Empty; public int offset; }

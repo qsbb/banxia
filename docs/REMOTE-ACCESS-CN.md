@@ -1,102 +1,130 @@
-# 伴夏远程接入（手机外网连后端）架构与运维手册
+# 伴夏远程接入（手机/Quest 外网连后端）架构与运维手册
 
-> 2026-09-07 落地。**敏感信息纪律**：DDNS 域名、凭据、端口映射明细不写入
-> 本文与任何入库文件；域名以 `<DDNS域名>` 代指，实际值由用户持有。
+> **敏感信息纪律**：DDNS 域名、凭据、真实端口映射明细不写入本文或任何入库文件；
+> 域名以 `<DDNS域名>` 代指，实际值由部署者持有。
 
-## 0. 现状定稿（v1，用户决策）
+## 0. 现状定稿：可选 HTTP / HTTPS
 
-**v1 = 公网明文 HTTP 直连**。用户明确决策：暂不部署 TLS 证书；路由器既有
-`8520→8520` 映射不动；客户端"用户写什么地址端口就走什么"。
+伴夏与临桥支持用户选择传输方式：**HTTPS 是默认与推荐方案**；受控局域网可以
+显式选择 HTTP；公网 HTTP 仅作为明确的高风险 opt-in。
 
-> ⚠️ **风险知情记录**：明文 HTTP 公网链路上，配对密钥、聊天内容、语音
-> 音频对中间节点（运营商/骨干网）可见且可篡改。这是对安全基线"加密
-> 加固"项的显式豁免（用户 2026-09-07 决策）。保留的防线见 §4。
-> **升级路径（v2）已备好**：NAS `/vol1/@appdata/remote-bridge/` 存有
-> nginx TLS 反代配置 + acme.sh 运维脚本（`remote-bridge.sh`），补一把
-> 阿里云 DNS RAM key 即可切换 HTTPS，届时公网入口改 8443、8520 收敛内网。
+- 裸地址或裸 `host:port` 按 `https://` 解释。
+- 明文必须在地址中显式写 `http://`。
+- HTTPS 失败不会自动降级到 HTTP。
+- 私网 HTTP 与公网 HTTP 使用两个独立开关，默认均关闭。
+- 证书、CA、主机名、TLS 握手或 pin 失败均为终止错误，不会借 endpoint failover
+  绕过信任策略。
 
-## 1. 架构（v1）
+> ⚠️ **公网 HTTP 风险**：明文链路上的配对密钥、API key、Bridge key、聊天内容和
+> 音频可能被中间节点读取或篡改。只有同时打开服务端
+> `allow_remote_http_pairing` 与客户端“允许公网 HTTP（高风险明文）”，且地址明确
+> 使用 `http://` 时，才会接受公网明文。
 
+## 1. 推荐 HTTPS 架构
+
+```text
+手机/Quest ──https://<DDNS域名>:18443──> 路由器 TCP 映射 18443→Bridge:18443
+                                          │
+                                          ▼
+              临桥内置 TLS listener → loopback HTTP → AstrBot 6185
 ```
-手机(蜂窝) ──http://<DDNS域名>:8520──> 路由器映射 8520→NAS:8520
-                                        │
-                                        ▼
-              临桥内置监听器（astrbot 容器内 0.0.0.0:8520）→ AstrBot 6185
+
+HTTPS 可由临桥内置 listener 在任意合适的高端口终止 TLS，也可使用受信任的外部
+HTTPS 反代。路由器只转发 TCP listener 端口；不要把 AstrBot Dashboard、NAS、
+SSH、SMB、Docker socket 或其他管理端口暴露到公网。
+
+自签证书场景应在伴夏端填写叶子证书 DER SHA-256 pin。pin 绑定精确的
+`scheme + host + 有效端口`，不匹配时不会切换 authority 或降级到 HTTP。使用公共
+CA 且不配置 pin 时，伴夏仍使用平台正常的证书链和主机名校验。
+
+## 2. 服务端配置
+
+### 2.1 内置 TLS listener 示例
+
+```json
+{
+  "pairing_listener_enabled": true,
+  "pairing_listener_host": "0.0.0.0",
+  "pairing_listener_port": 18443,
+  "pairing_listener_tls_enabled": true,
+  "pairing_listener_tls_cert_path": "/data/certs/bridge.crt",
+  "pairing_listener_tls_key_path": "/data/certs/bridge.key",
+  "pairing_listener_public_url": "https://<DDNS域名>:18443",
+  "pairing_public_url": "https://<DDNS域名>:18443",
+  "allow_remote_http_pairing": false
+}
 ```
 
-内网路径不变：Quest/手机在家走 `http://192.168.5.88:8520`（客户端按端点
-优先级列表自动首选，见 §5）。
+启用 TLS 时必须提供可读、匹配的 PEM 证书与私钥。证书/私钥缺失、格式错误或配置
+pin 与叶子证书不一致时，TLS listener fail-closed，不会在同一端口回退成 HTTP。
+TLS 最低版本为 1.2。
 
-### 根因记录（为什么之前连不上）
+若另有合法的外部 HTTPS `pairing_exchange_proxy_url`，非 TLS listener 绑定故障可使
+已认证服务保持 degraded 并继续使用该 fallback；active TLS listener 故障不会回退
+到未知 authority。
 
-不是服务故障，是三层设计性阻塞叠加：①服务端 `pairing_public_url` 下发的
-是内网地址；②客户端 `AstrBotProtocol.TryValidateSettings` 对非私网主机
-强制 HTTPS（防 DNS rebinding）；③服务端 `allow_insecure_remote_http=false`
-拒绝公网明文配对（422 https_required）。v1 解法 = 服务端开逃生门 +
-客户端加同名本地 opt-in（见 §2），两端闸门都是显式开关、默认关闭。
+### 2.2 显式私网 HTTP
 
-## 2. 变更清单（已执行部分与授权记录）
+地址必须写 `http://`，并同时打开服务端私网 HTTP 配置和伴夏端“允许内网 HTTP
+（仅私有地址）”。私网判断只接受明确的私网/loopback 地址范围，不以任意公网域名
+冒充私网。
 
-**临桥插件代码：零改动**（逃生门是插件既有设计）。banxia 客户端改动见
-git 历史（端点优先级列表 `964d57f`/`1c51a86`、明文 opt-in `2d1a642`）。
+### 2.3 显式公网 HTTP
 
-**AstrBot/NAS 侧（须用户当次授权，见开发手册 §1 单次授权制）**：
-临桥配置三项（AstrBot 控制台插件配置页修改，保存热生效）：
+地址必须写 `http://`，并同时打开服务端 `allow_remote_http_pairing` 与伴夏端
+“允许公网 HTTP（高风险明文）”。不要为 HTTP 配置证书 pin；pin 只对 HTTPS 生效。
 
-| 配置项 | 值 |
-|---|---|
-| `allow_insecure_remote_http` | 开 |
-| `pairing_listener_public_url` | `http://<DDNS域名>:8520` |
-| `pairing_public_url` | `http://<DDNS域名>:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge` |
+## 3. 配对与证书指纹
 
-回滚 = 三项改回原值（`allow_insecure_remote_http` 关、两个 URL 改回
-`http://192.168.5.88:8520` 开头），已配对客户端不受影响。
+现有 v1 配对协议继续兼容。6 位短码保持短 TTL 和服务端限速；QR 是可选快捷入口，
+不会携带长期 API key。HTTPS 自签场景可由 QR、兑换响应或手动输入携带
+`certificate_pin_sha256`。
 
-## 3. 运维操作
+指纹是**完整叶子证书 DER** 的 SHA-256，不是 PEM 文本、整条证书链或公钥摘要：
 
-- 日常零维护（无新增组件）；AstrBot 容器随既有运维节奏
-- 手机换网络/换入口：设置 → 连接后端 → 入口优先级列表管理，无需重新配对
-- 重新配对：配对页生成 6 位码（TTL 120s），手机端输入后 exchange 完成
-- **吊销某个入口**：从客户端入口列表删除即可；吊销整套绑定：配对页
-  "解除绑定"（删客户端配置）+ 服务端 revoke（控制台）
-- 升级 HTTPS（v2）：`sh /vol1/@appdata/remote-bridge/remote-bridge.sh`（用法
-  见脚本头注释；需 RAM key + 路由器加 8443 映射），随后把 §2 的两个 URL
-  改成 `https://<DDNS域名>:8443` 开头、`allow_insecure_remote_http` 关闭，
-  客户端入口列表加 https 项并置顶
+```bash
+openssl x509 -in bridge.crt -outform DER | sha256sum
+# macOS：
+openssl x509 -in bridge.crt -outform DER | shasum -a 256
+```
 
-## 4. 安全属性（对照安全基线逐条）
+将输出的 64 位十六进制值原样填写；不要加 `sha256:` 前缀、冒号或空白。证书续期
+通常会改变叶子指纹，必须在服务端和伴夏端同步更新。pin-only 不能单独替代域名/CA
+校验和可信的首次指纹核验。
 
-- **鉴权**：配对 6 位码（TTL 120s）+ 会话双头（Authorization: ApiKey +
-  X-Embodiment-Bridge-Key ≥32 字符）全部保留，公网访问无任何绕开路径
-- **限速/防枚举**：插件层 exchange 每 IP 12 次/分、全局 120 次/分，429 带
-  Retry-After；配对错误统一 401 无枚举差异——均已实测（2026-09-07，
-  16 连打 = 12×401 后 429；并发 10 连发全 429）
-- **公网面**：8520 单端口；监听器只代理插件 API 路径，其余 404；dashboard
-  管理端点有 dashboard 鉴权兜底（401）
-- **凭据卫生**：密钥只在客户端设备私有目录与插件数据目录；不入 git/日志/
-  截屏；本文不含域名
-- **明文豁免项**：传输层不加密（见 §0 风险记录）；TLS 升级路径已备好
+## 4. 客户端双端行为
 
-### IPv6 残余面（已知、记录在案）
+Quest 原生设置与手机 Flutter 设置共享同一引擎状态：
 
-NAS 容器端口绑 `[::]`，家宽有公网 v6，8520 理论可不经 v4 映射直接可达
-（取决于路由器 v6 防火墙）。v1 未收敛此面；建议路由器 v6 防火墙保持
-默认拒绝入站。v2 升级时随 8443 方案一并收敛。
+- 分别显示和切换“内网 HTTP”与“公网 HTTP（高风险）”；
+- 可填写、保存、清除 HTTPS 证书指纹，并仅展示脱敏摘要；
+- QR/手动配对严格拒绝带空白、非 64 位或非十六进制 pin；
+- endpoint 改变、解除绑定、配置清空或终止 TLS/pin 错误会清除不再适用的 pin；
+- 所有带凭据请求拒绝重定向；
+- HTTPS 不自动降级，TLS/CA/主机名/pin 错误不触发 failover。
 
-## 5. 客户端：端点优先级列表（双端）
+入口优先级列表只会在普通网络不可达（`ConnectionError`）时冷却当前入口并顺延；
+401、4xx/5xx、TLS 和信任错误均不转移，以免掩盖配置错误或形成降级路径。
 
-- 设置 → 连接后端 → 入口优先级列表：有序候选，排最上的优先；配对下发的
-  绑定地址自动置顶；可手动添加内网/公网/兜底（如组网穿透地址）入口
-- 故障转移：仅网络层不可达（ConnectionError）才冷却当前入口 120s 并顺延；
-  401/4xx/5xx 不转移（防掩盖配置错误、防降级攻击）；切网后连接循环自然重选
-- 同一套配对凭据对所有入口通用，换入口无需重新配对；重新配对保留列表
-- 公网明文入口需打开配对页「允许明文 HTTP」开关（即本地 opt-in，
-  置位 `allow_insecure_remote_http`）；引擎对裸输入默认补 `http://` 前缀
-- Quest 端：面板显示生效入口与候选数、自动故障转移同在（共享引擎层）；
-  列表管理 UI 待同步（登记 PHONE_PORT_PLAN_CN.md §3.4.1）
+## 5. 日常运维
 
-## 6. NAT 回流说明
+- 检查 listener 状态和对外 HTTPS URL 是否一致。
+- 证书轮换后重新计算叶子 DER SHA-256，并同步更新 pin。
+- 手机/Quest 换网络或入口时，在连接设置中更新 endpoint；HTTPS 权威发生变化时重新
+  核验并设置 pin。
+- 重新配对时生成新的 6 位短码；旧的一次性 token 不可复用。
+- 解除绑定会清除绑定、pin、配对码和 endpoint；HTTP 偏好开关保留，它们不是凭据。
+- 需要公网 HTTP 时先确认风险，再显式写 `http://` 并打开服务端和客户端两个公网
+  HTTP 闸门；回到 HTTPS 后关闭公网 HTTP 闸门。
+- 上游固定为 loopback HTTP；公网只转发 TLS listener 或明确选择的 HTTP listener
+  端口，不暴露任何管理面。
 
-`pairing_public_url` 全局下发（所有客户端共享）。若路由器不支持 NAT 回流，
-内网设备重新配对后拿到公网地址、内网访问不通——端点优先级列表已根治
-（内网入口作为候选自动兜底，连接错误即顺延）。Quest 存量绑定不受影响。
+## 6. IPv6 与 NAT 回流
+
+若主机监听 `[::]` 且网络分配公网 IPv6，listener 可能绕过 IPv4 端口映射直接可达；
+应在路由器/主机 IPv6 防火墙中保持默认拒绝，只放行计划中的 listener 端口。
+
+`pairing_public_url` 是服务端下发的公开入口。路由器不支持 NAT 回流时，内网客户端
+可能无法访问公网域名；可为客户端配置经过独立核验的内网 HTTPS endpoint。配置了
+pin 时，候选 endpoint 必须与 pin 的精确 authority 一致，不能把同一 pin 复用于
+不同 host 或端口。

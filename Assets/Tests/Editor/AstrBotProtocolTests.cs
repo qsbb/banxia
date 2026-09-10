@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -19,6 +19,35 @@ namespace QuestMmdPlayer.Tests
         public void SseBecomesReadyFromSuccessfulResponseHeaders(int status, bool expected)
         {
             Assert.That(AstrBotBridge.IsSseHandshakeReady(status), Is.EqualTo(expected));
+        }
+
+        [TestCase("SSL connection failed", true)]
+        [TestCase("remote certificate is not trusted", true)]
+        [TestCase("hostname mismatch", true)]
+        [TestCase("TLS handshake aborted", true)]
+        [TestCase("connection refused", false)]
+        [TestCase("DNS resolution failed", false)]
+        public void TerminalTransportFailuresNeverBecomeUnsafeFailover(
+            string error,
+            bool expected)
+        {
+            Assert.That(AstrBotProtocol.IsTerminalTransportFailure(error), Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void CertificatePinningHashesDerAndPemButRejectsOversizedInput()
+        {
+            var der = Encoding.ASCII.GetBytes("test-leaf-der");
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                var pin = BitConverter.ToString(sha.ComputeHash(der)).Replace("-", string.Empty).ToLowerInvariant();
+                var pem = "-----BEGIN CERTIFICATE-----\n" +
+                    Convert.ToBase64String(der) +
+                    "\n-----END CERTIFICATE-----\n";
+                Assert.That(AstrBotProtocol.MatchesLeafCertificate(der, pin), Is.True);
+                Assert.That(AstrBotProtocol.MatchesLeafCertificate(Encoding.ASCII.GetBytes(pem), pin), Is.True);
+                Assert.That(AstrBotProtocol.MatchesLeafCertificate(new byte[AstrBotProtocol.MaxCertificateBytes + 1], pin), Is.False);
+            }
         }
 
         [Test]
@@ -496,22 +525,26 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void RuntimePolicyAllowsOnlyExplicitPrivateLanHttp()
+        public void RuntimePolicyRequiresMatchingPrivateOrRemoteHttpOptIn()
         {
             var settings = ValidSettings();
             settings.base_url = "http://192.168.1.10:6185/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
 
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out var error), Is.False);
-            Assert.That(error, Does.Contain("allow_insecure_http"));
+            Assert.That(error, Does.Contain("matching explicit private or remote opt-in"));
 
             settings.allow_insecure_http = true;
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out error), Is.True, error);
 
             settings.base_url = "http://api.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out error), Is.False);
-            Assert.That(error, Does.Contain("private-network IP"));
+            Assert.That(error, Does.Contain("matching explicit private or remote opt-in"));
+
+            settings.allow_insecure_remote_http = true;
+            Assert.That(AstrBotProtocol.TryValidateSettings(settings, out error), Is.True, error);
 
             settings.base_url = "http://nas.local/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge";
+            settings.allow_insecure_remote_http = false;
             Assert.That(AstrBotProtocol.TryValidateSettings(settings, out error), Is.False);
         }
 

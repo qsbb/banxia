@@ -117,6 +117,8 @@ namespace QuestMmdPlayer
         private Label connectionBadge;
         private Label pairingStatusLabel;
         private TextField pairingServerField;
+        private TextField pairingCertificatePinField;
+        private Label pairingCertificatePinStatus;
         private Label pairingCodeLabel;
         private VisualElement pairingDots;
         private VisualElement pairingNumpadSection;
@@ -202,9 +204,10 @@ namespace QuestMmdPlayer
             }
 
             EnsureBuilt();
-            if (owner?.Pairing != null && pairingServerField != null)
+            if (owner?.Pairing != null)
             {
-                pairingServerField.SetValueWithoutNotify(owner.Pairing.PairingServerEndpoint ?? string.Empty);
+                pairingServerField?.SetValueWithoutNotify(owner.Pairing.PairingServerEndpoint ?? string.Empty);
+                pairingCertificatePinField?.SetValueWithoutNotify(owner.Pairing.CertificatePinSha256 ?? string.Empty);
             }
             RefreshModels(forceInvalidate: true);
             RefreshConnectionUi();
@@ -1697,6 +1700,39 @@ namespace QuestMmdPlayer
             }
         }
 
+        private void SavePairingCertificatePin()
+        {
+            var pairing = owner?.Pairing;
+            if (pairing == null)
+            {
+                ShowToast("配对控制器不可用");
+                return;
+            }
+            if (!pairing.TrySetCertificatePinSha256(
+                    pairingCertificatePinField?.value ?? string.Empty,
+                    out var reason))
+            {
+                ShowToast(reason);
+                RefreshConnectionUi();
+                return;
+            }
+            ShowToast("HTTPS 证书指纹已保存");
+            RefreshConnectionUi();
+        }
+
+        private void ClearPairingCertificatePin()
+        {
+            var pairing = owner?.Pairing;
+            if (pairing == null)
+            {
+                return;
+            }
+            pairing.TrySetCertificatePinSha256(string.Empty, out _);
+            pairingCertificatePinField?.SetValueWithoutNotify(string.Empty);
+            ShowToast("HTTPS 证书指纹已清除");
+            RefreshConnectionUi();
+        }
+
         private void TryPair()
         {
             var pairing = owner?.Pairing;
@@ -1705,7 +1741,7 @@ namespace QuestMmdPlayer
                 ShowToast("配对控制器不可用");
                 return;
             }
-            var server = pairingServerField?.value?.Trim() ?? string.Empty;
+            var server = pairingServerField?.value ?? string.Empty;
             if (!string.IsNullOrEmpty(server) && !pairing.TrySetPairingServer(server, out var reason))
             {
                 ShowToast(reason);
@@ -1732,6 +1768,7 @@ namespace QuestMmdPlayer
             }
             try
             {
+                owner?.Pairing?.ClearPairingServer();
                 if (File.Exists(bridge.ConfigurationPath))
                 {
                     File.Delete(bridge.ConfigurationPath);
@@ -1797,8 +1834,18 @@ namespace QuestMmdPlayer
             {
                 var bridge = BanxiaUiText.LocalizeBridgeStatus(owner.AstrBot?.Status ?? string.Empty);
                 var pairingText = BanxiaUiText.LocalizePairingStatus(pairing?.Status ?? "Pairing controller offline");
-                var modeText = pairing != null && pairing.PrivateHttpAllowed ? "HTTP 默认（可填写 HTTPS）" : "仅 HTTPS";
-                pairingStatusLabel.text = "实时连接：" + bridge + "\n配对：" + pairingText + "\n" + modeText;
+                var modeText = pairing == null
+                    ? "传输：仅 HTTPS"
+                    : "传输：" + (pairing.PrivateHttpAllowed ? "内网 HTTP 已允许" : "内网 HTTP 已禁用") +
+                      "；" + (pairing.RemoteHttpAllowed ? "公网 HTTP 已允许" : "公网 HTTP 已禁用");
+                var pinSummary = pairing == null || !pairing.CertificatePinConfigured
+                    ? "HTTPS 指纹：未配置"
+                    : "HTTPS 指纹：" + pairing.CertificatePinSummary;
+                if (pairingCertificatePinStatus != null)
+                {
+                    pairingCertificatePinStatus.text = pinSummary;
+                }
+                pairingStatusLabel.text = "实时连接：" + bridge + "\n配对：" + pairingText + "\n" + modeText + "\n" + pinSummary;
             }
         }
 
@@ -2315,11 +2362,30 @@ namespace QuestMmdPlayer
             var serverHint = new Label("域名或 IP:端口，如 192.168.5.55:25520");
             serverHint.AddToClassList("status-line");
             pairingGroup.Add(serverHint);
-            pairingGroup.Add(MakeToggleRow("允许明文 HTTP（私网/远程）", owner?.Pairing?.PrivateHttpAllowed ?? false, value =>
+            pairingGroup.Add(MakeToggleRow("允许内网 HTTP（仅私有地址）", owner?.Pairing?.PrivateHttpAllowed ?? false, value =>
             {
                 owner?.Pairing?.SetPrivateHttpAllowed(value);
                 RefreshConnectionUi();
             }));
+            pairingGroup.Add(MakeToggleRow("允许公网 HTTP（高风险明文）", owner?.Pairing?.RemoteHttpAllowed ?? false, value =>
+            {
+                owner?.Pairing?.SetRemoteHttpAllowed(value);
+                RefreshConnectionUi();
+            }));
+            pairingCertificatePinField = new TextField { multiline = false, maxLength = 64 };
+            pairingCertificatePinField.AddToClassList("ds-input");
+            pairingCertificatePinField.AddToClassList("field");
+            pairingCertificatePinField.style.minWidth = 0f;
+            pairingCertificatePinField.style.flexShrink = 1f;
+            pairingCertificatePinField.style.overflow = Overflow.Hidden;
+            AttachTouchKeyboardFallback(pairingCertificatePinField);
+            pairingGroup.Add(MakeElementRow("HTTPS 指纹", pairingCertificatePinField));
+            pairingCertificatePinStatus = new Label(string.Empty);
+            pairingCertificatePinStatus.AddToClassList("status-line");
+            pairingGroup.Add(pairingCertificatePinStatus);
+            pairingGroup.Add(MakeButtonRow(
+                MakeSmallButton("保存指纹", false, SavePairingCertificatePin),
+                MakeSmallButton("清除指纹", false, ClearPairingCertificatePin)));
 
             // 配对码 + 键盘收进折叠段：配对码录入是低频事件（首次/换绑），
             // 常驻 585px 键盘曾把「解除绑定」推出首屏。首次绑定自动展开。

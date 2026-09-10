@@ -7,7 +7,7 @@ namespace QuestMmdPlayer.Tests
 {
     public sealed class BackendPairingTests
     {
-        [TestCase("bot.example.com", "http://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
+        [TestCase("bot.example.com", "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
         [TestCase("https://bot.example.com:7443", "https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
         [TestCase("https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge", "https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange")]
         public void PairingEndpointNormalizesHostPluginPathAndPort(string input, string expected)
@@ -22,7 +22,7 @@ namespace QuestMmdPlayer.Tests
         // https 一律保留 scheme 回显（公网 https 曾剥成裸 host:port，
         // 用户看不出存的是 https → 对纯 HTTP 服务器反复 TLS 握手失败）。
         [TestCase("https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange", "https://bot.example.com:7443")]
-        [TestCase("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange", "192.168.5.88:8520")]
+        [TestCase("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange", "http://192.168.5.88:8520")]
         public void PairingServerEntryHidesTheGeneratedPluginPath(string endpoint, string expected)
         {
             Assert.That(BackendPairingProtocol.GetServerEntry(endpoint), Is.EqualTo(expected));
@@ -30,6 +30,9 @@ namespace QuestMmdPlayer.Tests
         [TestCase("https://user:pass@bot.example.com")]
         [TestCase("https://bot.example.com/dashboard")]
         [TestCase("https://bot.example.com?secret=value")]
+        [TestCase("https://bot.example.com:bad")]
+        [TestCase("https://bot.example.com/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/%2e%2e/pairing/exchange")]
+        [TestCase(" https://bot.example.com")]
         public void PairingEndpointRejectsUnsafeOrWrongUrls(string input)
         {
             Assert.That(
@@ -48,7 +51,7 @@ namespace QuestMmdPlayer.Tests
         }
 
         [Test]
-        public void DefaultServerEntryUsesPlainHttpAndExplicitHttpsRemainsAvailable()
+        public void BareServerDefaultsToHttpsAndExplicitPlainHttpRequiresOptIn()
         {
             Assert.That(
                 BackendPairingProtocol.TryBuildExchangeEndpoint(
@@ -57,7 +60,7 @@ namespace QuestMmdPlayer.Tests
                     out var privateReason),
                 Is.True,
                 privateReason);
-            Assert.That(privateEndpoint, Is.EqualTo("http://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange"));
+            Assert.That(privateEndpoint, Is.EqualTo("https://192.168.5.88:8520/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange"));
 
             Assert.That(
                 BackendPairingProtocol.TryBuildExchangeEndpoint(
@@ -152,6 +155,25 @@ namespace QuestMmdPlayer.Tests
             Assert.That(parsedToken, Is.EqualTo(token));
             Assert.That(json, Does.Not.Contain("astrbot_api_key"));
             Assert.That(json, Does.Not.Contain("bridge_api_key"));
+        }
+
+        [Test]
+        public void QrCertificatePinRejectsSurroundingWhitespace()
+        {
+            var token = new string('x', 43);
+            var json = "{\"type\":\"astrbot.quest.pair\",\"version\":\"1.0\"," +
+                "\"exchange_url\":\"https://bot.example.com:7443/api/v1/plugins/extensions/astrbot_plugin_embodiment_bridge/pairing/exchange\"," +
+                "\"token\":\"" + token + "\",\"certificate_pin_sha256\":\" " + new string('a', 64) + " \"}";
+
+            Assert.That(
+                BackendPairingProtocol.TryParseQrPayload(
+                    json,
+                    out _,
+                    out _,
+                    out _,
+                    out var reason),
+                Is.False);
+            Assert.That(reason, Does.Contain("64 hexadecimal"));
         }
 
         [Test]

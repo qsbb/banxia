@@ -349,13 +349,19 @@ class _ConnectionPageState extends State<_ConnectionPage> {
             _ServerField(appState: app),
             const SizedBox(height: 8),
             _SwitchRow(
-              // 该开关同时是公网明文 HTTP 的本地 opt-in：开启后允许配对/入口
-              // 使用 http:// 公网地址，密钥与语音将明文传输，仅限自有服务器。
-              label: '允许明文 HTTP（内网/公网直连，公网明文有泄漏风险）',
+              label: '允许内网 HTTP（仅私有地址）',
               value: app.connection.privateHttp,
               onChanged: (bool v) => app.dispatch(
-                  Cmd.pairingSetPrivateHttp, <String, dynamic>{'enabled': v}),
+                  Cmd.pairingSetPrivateHttp, PairingHttpTogglePayload(v).toJson()),
             ),
+            _SwitchRow(
+              label: '允许公网 HTTP（明文传输）',
+              value: app.connection.remoteHttp,
+              onChanged: (bool v) => app.dispatch(
+                  Cmd.pairingSetRemoteHttp, PairingHttpTogglePayload(v).toJson()),
+            ),
+            const SizedBox(height: 8),
+            _CertificatePinEditor(appState: app),
             const SizedBox(height: 16),
             _EndpointSection(appState: app),
             const SizedBox(height: 8),
@@ -480,10 +486,9 @@ class _ServerFieldState extends State<_ServerField> {
         style: const TextStyle(fontSize: 16, color: BanxiaTokens.label),
         decoration: const InputDecoration(
           border: InputBorder.none,
-          // 引擎对裸输入默认补 http:// 前缀；公网明文 HTTP 在明文开关
-          // （默认开）下放行。只有服务器确实配了 TLS 证书时才用 https://，
-          // 否则会报 "Unable to complete SSL connection"。
-          hintText: '填 域名:端口 或 IP:端口（默认明文 http）',
+          // 裸 authority 默认按 HTTPS 解释；明文传输必须显式输入
+          // http:// 并打开对应的内网/公网开关。
+          hintText: '填 https://域名:端口 或显式 http://地址',
           hintStyle:
               TextStyle(fontSize: 16, color: BanxiaTokens.labelSecondary),
           counterText: '',
@@ -498,6 +503,149 @@ class _ServerFieldState extends State<_ServerField> {
           }
         },
       ),
+    );
+  }
+}
+
+class _CertificatePinEditor extends StatefulWidget {
+  const _CertificatePinEditor({required this.appState});
+
+  final AppState appState;
+
+  @override
+  State<_CertificatePinEditor> createState() =>
+      _CertificatePinEditorState();
+}
+
+class _CertificatePinEditorState extends State<_CertificatePinEditor> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.appState.connection.certificatePinDraft,
+  );
+  final FocusNode _focusNode = FocusNode();
+  bool _obscure = true;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final bool ok = await widget.appState.commitCertificatePin();
+    if (ok && mounted) {
+      _controller.clear();
+      _focusNode.unfocus();
+    }
+  }
+
+  Future<void> _clear() async {
+    widget.appState.updateCertificatePinDraft('');
+    final bool ok = await widget.appState.commitCertificatePin();
+    if (ok && mounted) {
+      _controller.clear();
+      _focusNode.unfocus();
+    }
+  }
+
+  Future<void> _copyDraft() async {
+    final String value = _controller.text.trim();
+    if (value.isEmpty) {
+      widget.appState.showToast('没有可复制的待提交指纹');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: value));
+    widget.appState.showToast('已复制待提交指纹');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final AppState app = widget.appState;
+    final String draft = app.connection.certificatePinDraft;
+    if (!_focusNode.hasFocus && _controller.text != draft) {
+      _controller.text = draft;
+    }
+    final String summary = app.connection.certificatePinSummary;
+    final String status = app.connection.certificatePinConfigured
+        ? (summary.isEmpty ? '已配置' : '已配置：$summary')
+        : '未配置（使用系统证书校验）';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+          child: Row(
+            children: <Widget>[
+              const Expanded(
+                child: Text('HTTPS 证书指纹（可选）',
+                    style: TextStyle(fontSize: 16, color: BanxiaTokens.label)),
+              ),
+              Text(status,
+                  style: const TextStyle(
+                      fontSize: 12, color: BanxiaTokens.labelSecondary)),
+            ],
+          ),
+        ),
+        Container(
+          height: 52,
+          padding: const EdgeInsets.only(left: 16),
+          decoration: BoxDecoration(
+            color: BanxiaTokens.glass,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: TextField(
+            key: const Key('certificate-pin-field'),
+            controller: _controller,
+            focusNode: _focusNode,
+            obscureText: _obscure,
+            autocorrect: false,
+            enableSuggestions: false,
+            keyboardType: TextInputType.visiblePassword,
+            maxLength: 64,
+            maxLengthEnforcement: MaxLengthEnforcement.enforced,
+            style: const TextStyle(fontSize: 14, color: BanxiaTokens.label),
+            decoration: InputDecoration(
+              border: InputBorder.none,
+              hintText: '64 位叶证书 DER SHA-256 十六进制',
+              hintStyle: const TextStyle(
+                  fontSize: 14, color: BanxiaTokens.labelSecondary),
+              counterText: '',
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  IconButton(
+                    tooltip: _obscure ? '显示待提交指纹' : '隐藏待提交指纹',
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                    icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
+                  ),
+                  IconButton(
+                    tooltip: '复制待提交指纹',
+                    onPressed: _copyDraft,
+                    icon: const Icon(Icons.copy),
+                  ),
+                ],
+              ),
+            ),
+            onChanged: app.updateCertificatePinDraft,
+            onSubmitted: (_) => _save(),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: <Widget>[
+            Expanded(child: _GlassButton(label: '保存指纹', onTap: _save)),
+            const SizedBox(width: 10),
+            Expanded(child: _GlassButton(label: '清除指纹', onTap: _clear)),
+          ],
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(6, 6, 6, 0),
+          child: Text(
+            '仅用于 HTTPS 且严格绑定协议、主机与有效端口；不匹配时不会降级到 HTTP。',
+            style: TextStyle(fontSize: 12, color: BanxiaTokens.labelSecondary),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -673,7 +821,7 @@ class _EndpointSectionState extends State<_EndpointSection> {
                       const TextStyle(fontSize: 14, color: BanxiaTokens.label),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
-                    hintText: '填 域名:端口 或 IP:端口（默认明文 http）',
+                    hintText: '裸地址默认 HTTPS；HTTP 须显式写协议',
                     hintStyle: TextStyle(
                         fontSize: 14, color: BanxiaTokens.labelSecondary),
                     counterText: '',

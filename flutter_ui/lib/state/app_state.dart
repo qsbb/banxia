@@ -56,7 +56,15 @@ class ConnectionState {
   String serverDraft = '';
   String committedServer = '';
   bool serverDraftDirty = false;
-  bool privateHttp = true;
+  /// Allows plaintext only for literal private-LAN authorities.
+  bool privateHttp = false;
+  /// Explicit opt-in for public/remote plaintext HTTP. Kept separate from
+  /// [privateHttp] so enabling LAN access never silently broadens exposure.
+  bool remoteHttp = false;
+  bool certificatePinConfigured = false;
+  String certificatePinSummary = '';
+  String certificatePinDraft = '';
+  bool certificatePinDraftDirty = false;
   bool connected = false;
   // 有序候选入口列表（完整 URL，首项=最高优先级，通常为配对下发的绑定
   // 地址），由引擎经 pairing.status 下发真值，UI 不做乐观修改。
@@ -338,12 +346,29 @@ class AppState extends ChangeNotifier {
         final bool previousDraftDirty = connection.serverDraftDirty;
         final bool previousConnected = connection.connected;
         final String previousPairingStatus = connection.pairingStatus;
+        final String previousPairingCode = connection.pairingCode;
+        final bool previousPrivateHttp = connection.privateHttp;
+        final bool previousRemoteHttp = connection.remoteHttp;
+        final bool previousPinConfigured = connection.certificatePinConfigured;
+        final String previousPinSummary = connection.certificatePinSummary;
+        final String previousPinDraft = connection.certificatePinDraft;
+        final bool previousPinDraftDirty = connection.certificatePinDraftDirty;
+        final List<String> previousEndpoints =
+            List<String>.from(connection.endpoints);
+        final String previousActiveEndpoint = connection.activeEndpoint;
         connection.server = '';
         connection.serverDraft = '';
         connection.committedServer = '';
         connection.serverDraftDirty = false;
         connection.connected = false;
         connection.pairingStatus = '未连接';
+        connection.pairingCode = '';
+        connection.certificatePinConfigured = false;
+        connection.certificatePinSummary = '';
+        connection.certificatePinDraft = '';
+        connection.certificatePinDraftDirty = false;
+        connection.endpoints = const <String>[];
+        connection.activeEndpoint = '';
         _notify();
         return () {
           connection.server = previousServer;
@@ -352,6 +377,15 @@ class AppState extends ChangeNotifier {
           connection.serverDraftDirty = previousDraftDirty;
           connection.connected = previousConnected;
           connection.pairingStatus = previousPairingStatus;
+          connection.pairingCode = previousPairingCode;
+          connection.privateHttp = previousPrivateHttp;
+          connection.remoteHttp = previousRemoteHttp;
+          connection.certificatePinConfigured = previousPinConfigured;
+          connection.certificatePinSummary = previousPinSummary;
+          connection.certificatePinDraft = previousPinDraft;
+          connection.certificatePinDraftDirty = previousPinDraftDirty;
+          connection.endpoints = previousEndpoints;
+          connection.activeEndpoint = previousActiveEndpoint;
           _notify();
         };
       default:
@@ -452,6 +486,17 @@ class AppState extends ChangeNotifier {
         }
         if (p?['privateHttp'] is bool) {
           connection.privateHttp = p!['privateHttp'] as bool;
+        }
+        if (p?['remoteHttp'] is bool) {
+          connection.remoteHttp = p!['remoteHttp'] as bool;
+        }
+        if (p?['certificatePinConfigured'] is bool) {
+          connection.certificatePinConfigured =
+              p!['certificatePinConfigured'] as bool;
+        }
+        if (p?['certificatePinSummary'] is String) {
+          connection.certificatePinSummary =
+              p!['certificatePinSummary'] as String;
         }
         // 入口优先级列表：引擎下发有序完整 URL（首项=最高优先级）。
         if (p?['endpoints'] is List) {
@@ -916,7 +961,11 @@ class AppState extends ChangeNotifier {
   Future<bool> commitPairingServer(String value) async {
     final String previousServer = connection.committedServer;
     final String previousEngineServer = connection.server;
-    final String server = value.trim();
+    final String server = value;
+    if (server.trim() != server) {
+      showToast('服务器地址前后不能包含空白');
+      return false;
+    }
     if (server.isEmpty) {
       connection.server = previousEngineServer;
       connection.serverDraft = previousServer;
@@ -957,6 +1006,28 @@ class AppState extends ChangeNotifier {
     connection.serverDraft = value;
     connection.serverDraftDirty = value != connection.committedServer;
     _notify();
+  }
+
+  void updateCertificatePinDraft(String value) {
+    connection.certificatePinDraft = value;
+    connection.certificatePinDraftDirty = true;
+    _notify();
+  }
+
+  Future<bool> commitCertificatePin() async {
+    final String value = connection.certificatePinDraft;
+    if (value.isNotEmpty && !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value)) {
+      showToast('证书指纹必须是 64 位十六进制字符串');
+      return false;
+    }
+    if (!await dispatch(Cmd.pairingSetCertificatePin,
+        PairingCertificatePinPayload(value).toJson())) {
+      return false;
+    }
+    connection.certificatePinDraft = '';
+    connection.certificatePinDraftDirty = false;
+    _notify();
+    return true;
   }
 
   // ── 入口优先级列表（pairing.endpoint*）─────────────────────────────────
