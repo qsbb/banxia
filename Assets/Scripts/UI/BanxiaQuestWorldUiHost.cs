@@ -37,20 +37,51 @@ namespace QuestMmdPlayer
         private Material panelMaterial;
         private Material pointerMaterial;
         private Transform trackingSpace;
+        private const float InitializationTimeoutSeconds = 8f;
+
+        private bool initializationFailed;
+        private bool initializationFailureLogged;
+        private bool showWhenReady;
+        private float initializationStartedAt;
+        private string initializationDiagnostic = "未初始化";
 
         public bool IsOpen => panelRoot != null && panelRoot.activeSelf;
+        public bool RenderTextureCreated => renderTexture != null && renderTexture.IsCreated();
+        public bool HasTargetTexture => panelSettings != null && panelSettings.targetTexture == renderTexture;
+        public bool HasRootVisualElement => document != null && document.rootVisualElement != null;
+        public bool ShellBuilt => shell != null && shell.IsBuilt;
+        public bool InitializationFailed => initializationFailed || (shell != null && shell.BuildFailed);
+        public bool IsPending => !InitializationFailed && panelRoot != null && !IsHealthy;
+        public bool IsHealthy => !InitializationFailed &&
+                                  RenderTextureCreated &&
+                                  HasTargetTexture &&
+                                  HasRootVisualElement &&
+                                  ShellBuilt && panelRoot != null &&
+                                  panelSurface != null && panelCollider != null &&
+                                  panelMaterial != null && panelMaterial.shader != null &&
+                                  pointerMaterial != null && pointerMaterial.shader != null &&
+                                  leftPointer.Line != null && rightPointer.Line != null;
+        public string Diagnostic => BuildDiagnostic();
 
-        public void Initialize(QuestMmdPlayerBootstrap bootstrap)
+        public bool Initialize(QuestMmdPlayerBootstrap bootstrap)
         {
             owner = bootstrap;
-            EnsurePanel();
-            Hide();
-            Debug.Log("[BanxiaWorldUi] Ready; open from Companion menu -> 新界面.", this);
+            initializationStartedAt = Time.realtimeSinceStartup;
+            showWhenReady = true;
+            if (!EnsurePanel())
+            {
+                return false;
+            }
+
+            Hide(cancelPendingOpen: false);
+            initializationDiagnostic = IsHealthy ? "healthy/ready" : "waiting-for-ui-shell";
+            Debug.Log("[BanxiaWorldUi] Created; waiting for the shared UiShell before opening the Quest default entry.", this);
+            return !InitializationFailed;
         }
 
         private void Update()
         {
-            // QA/无控制器自动化：F2 可直接开关新 UI；正常用户仍从旧菜单进入。
+            // QA/无控制器自动化：F2 可直接开关新 UI。
             // 当前项目使用 Input System 包，必须走 Keyboard API，否则每帧抛异常。
             var keyboard = Keyboard.current;
             if (keyboard != null && keyboard.f2Key.wasPressedThisFrame)
@@ -61,6 +92,40 @@ namespace QuestMmdPlayer
             {
                 CapturePanelToPngForQa();
             }
+
+            if (InitializationFailed)
+            {
+                if (!initializationFailed)
+                {
+                    FailInitialization("UiShell build failed: " + (shell?.BuildFailureDiagnostic ?? "unknown"));
+                    owner?.HandleWorldUiFailure("Quest WorldUi 构建失败：" + Diagnostic);
+                }
+                return;
+            }
+
+            if (!IsHealthy)
+            {
+                if (showWhenReady && Time.realtimeSinceStartup - initializationStartedAt >= InitializationTimeoutSeconds)
+                {
+                    FailInitialization("UiShell readiness timed out after " + InitializationTimeoutSeconds + "s");
+                    owner?.HandleWorldUiFailure("Quest WorldUi 初始化超时：" + Diagnostic);
+                }
+                return;
+            }
+
+            if (showWhenReady)
+            {
+                showWhenReady = false;
+                if (owner != null)
+                {
+                    owner.OpenWorldUi();
+                }
+                else
+                {
+                    ShowInFront();
+                }
+            }
+
             if (!IsOpen)
             {
                 return;
@@ -72,27 +137,27 @@ namespace QuestMmdPlayer
 
         private void OnDestroy()
         {
-            if (renderTexture != null)
+            DisposePartial();
+        }
+
+        public void RequestCloseFromUser()
+        {
+            if (shell != null && shell.IsBuilt)
             {
-                renderTexture.Release();
-                Destroy(renderTexture);
+                shell.RequestWorldSpaceClose();
+                return;
             }
-            if (panelSettings != null)
-            {
-                Destroy(panelSettings);
-            }
-            if (panelMaterial != null)
-            {
-                Destroy(panelMaterial);
-            }
-            if (pointerMaterial != null)
-            {
-                Destroy(pointerMaterial);
-            }
+            Hide();
         }
 
         public void Toggle()
         {
+            if (owner != null)
+            {
+                owner.ToggleWorldUi();
+                return;
+            }
+
             if (IsOpen)
             {
                 Hide();
@@ -105,24 +170,68 @@ namespace QuestMmdPlayer
 
         public void ShowInFront()
         {
-            EnsurePanel();
-            PositionInFrontOfHead();
-            panelRoot.SetActive(true);
+            try
+            {
+                if (!EnsurePanel())
+                {
+                    return;
+                }
+                if (InitializationFailed)
+                {
+                    FailInitialization("ShowInFront rejected after initialization failure");
+                    return;
+                }
+                if (!IsHealthy)
+                {
+                    showWhenReady = true;
+                    initializationDiagnostic = "show-requested/waiting-for-ui-shell";
+                    return;
+                }
+
+                showWhenReady = false;
+                owner?.HideLegacyMenuForWorldUi();
+                PositionInFrontOfHead();
+                panelRoot.SetActive(true);
+                initializationDiagnostic = "healthy/open";
+            }
+            catch (Exception exception)
+            {
+                FailInitialization("ShowInFront exception: " + exception.GetType().Name + ": " + exception.Message, exception);
+            }
         }
 
         public void Hide()
         {
+            Hide(cancelPendingOpen: true);
+        }
+
+        private void Hide(bool cancelPendingOpen)
+        {
+            if (cancelPendingOpen)
+            {
+                showWhenReady = false;
+            }
             if (panelRoot != null)
             {
                 panelRoot.SetActive(false);
             }
+            if (leftPointer.Line != null)
+            {
+                leftPointer.Line.enabled = false;
+            }
+            if (rightPointer.Line != null)
+            {
+                rightPointer.Line.enabled = false;
+            }
+            leftPointer.PreviousSelect = false;
+            rightPointer.PreviousSelect = false;
         }
 
         public string CapturePanelToPngForQa()
         {
-            if (renderTexture == null || panelRoot == null || !panelRoot.activeSelf)
+            if (!IsHealthy || !IsOpen)
             {
-                WriteQaMarker("NULL:not-open");
+                WriteQaMarker("NULL:not-healthy|" + Diagnostic);
                 return null;
             }
 
@@ -165,55 +274,80 @@ namespace QuestMmdPlayer
             }
         }
 
-        private void EnsurePanel()
+        private bool EnsurePanel()
         {
             if (panelRoot != null)
             {
-                return;
+                return !InitializationFailed;
+            }
+            if (initializationFailed)
+            {
+                return false;
             }
 
-            renderTexture = new RenderTexture(textureWidth, textureHeight, 24, RenderTextureFormat.ARGB32)
+            try
             {
-                name = "BanxiaWorldUiTexture",
-                antiAliasing = 1,
-                useMipMap = false,
-                autoGenerateMips = false,
-            };
-            renderTexture.Create();
+                renderTexture = new RenderTexture(textureWidth, textureHeight, 24, RenderTextureFormat.ARGB32)
+                {
+                    name = "BanxiaWorldUiTexture",
+                    antiAliasing = 1,
+                    useMipMap = false,
+                    autoGenerateMips = false,
+                };
+                renderTexture.Create();
+                if (!renderTexture.IsCreated())
+                {
+                    throw new InvalidOperationException("RenderTexture.Create returned without a created texture.");
+                }
 
-            panelRoot = new GameObject("Banxia World UI Toolkit Panel");
-            panelRoot.transform.SetParent(transform, false);
+                panelRoot = new GameObject("Banxia World UI Toolkit Panel");
+                panelRoot.transform.SetParent(transform, false);
 
-            var documentObject = new GameObject("UIDocument");
-            documentObject.transform.SetParent(panelRoot.transform, false);
-            document = documentObject.AddComponent<UIDocument>();
-            panelSettings = CreatePanelSettings(renderTexture);
-            document.panelSettings = panelSettings;
-            shell = documentObject.AddComponent<BanxiaUiShell>();
-            shell.ConfigureWorldSpace(Hide);
-            shell.Bind(owner, owner?.ModelLoader, owner?.FileImport, owner?.DebugLog);
+                var documentObject = new GameObject("UIDocument");
+                documentObject.transform.SetParent(panelRoot.transform, false);
+                document = documentObject.AddComponent<UIDocument>();
+                panelSettings = CreatePanelSettings(renderTexture);
+                document.panelSettings = panelSettings;
+                shell = documentObject.AddComponent<BanxiaUiShell>();
+                shell.ConfigureWorldSpace(
+                    owner == null ? (Action)Hide : owner.HandleWorldUiClosed,
+                    owner == null ? (Action)Hide : owner.HandleWorldUiSceneEntered);
+                shell.Bind(owner, owner?.ModelLoader, owner?.FileImport, owner?.DebugLog);
 
-            var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            quad.name = "PanelSurface";
-            quad.transform.SetParent(panelRoot.transform, false);
-            panelSurface = quad.transform;
-            var widthMeters = panelHeightMeters * textureWidth / textureHeight;
-            panelSurface.localScale = new Vector3(widthMeters, panelHeightMeters, 1f);
-            panelSurface.localPosition = Vector3.zero;
-            panelSurface.localRotation = Quaternion.identity;
-            panelMaterial = CreatePanelMaterial(renderTexture);
-            var renderer = quad.GetComponent<MeshRenderer>();
-            renderer.sharedMaterial = panelMaterial;
-            panelCollider = quad.GetComponent<Collider>();
-            if (panelCollider == null)
-            {
-                panelCollider = quad.AddComponent<BoxCollider>();
+                var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                quad.name = "PanelSurface";
+                quad.transform.SetParent(panelRoot.transform, false);
+                panelSurface = quad.transform;
+                var widthMeters = panelHeightMeters * textureWidth / textureHeight;
+                panelSurface.localScale = new Vector3(widthMeters, panelHeightMeters, 1f);
+                panelSurface.localPosition = Vector3.zero;
+                panelSurface.localRotation = Quaternion.identity;
+                panelMaterial = CreatePanelMaterial(renderTexture);
+                var renderer = quad.GetComponent<MeshRenderer>();
+                renderer.sharedMaterial = panelMaterial;
+                panelCollider = quad.GetComponent<Collider>();
+                if (panelCollider == null)
+                {
+                    panelCollider = quad.AddComponent<BoxCollider>();
+                }
+
+                var pointerShader = Shader.Find("Sprites/Default");
+                if (pointerShader == null)
+                {
+                    throw new InvalidOperationException("Sprites/Default shader is unavailable for the Quest pointer.");
+                }
+                pointerMaterial = new Material(pointerShader);
+                pointerMaterial.color = new Color(0.43f, 0.76f, 1f, 0.9f);
+                CreatePointerLine(leftPointer, "LeftPointer");
+                CreatePointerLine(rightPointer, "RightPointer");
+                initializationDiagnostic = IsHealthy ? "healthy/created" : "waiting-for-ui-shell";
+                return true;
             }
-
-            pointerMaterial = new Material(Shader.Find("Sprites/Default"));
-            pointerMaterial.color = new Color(0.43f, 0.76f, 1f, 0.9f);
-            CreatePointerLine(leftPointer, "LeftPointer");
-            CreatePointerLine(rightPointer, "RightPointer");
+            catch (Exception exception)
+            {
+                FailInitialization("EnsurePanel exception: " + exception.GetType().Name + ": " + exception.Message, exception);
+                return false;
+            }
         }
 
         private static PanelSettings CreatePanelSettings(RenderTexture texture)
@@ -233,6 +367,83 @@ namespace QuestMmdPlayer
             return settings;
         }
 
+        private string BuildDiagnostic()
+        {
+            var shellFailure = shell == null ? string.Empty : shell.BuildFailureDiagnostic;
+            return "failed=" + InitializationFailed +
+                   " pending=" + IsPending +
+                   " rt=" + RenderTextureCreated +
+                   " target=" + HasTargetTexture +
+                   " root=" + HasRootVisualElement +
+                   " shell=" + ShellBuilt +
+                   " panel=" + (panelRoot != null) +
+                   " surface=" + (panelSurface != null) +
+                   " collider=" + (panelCollider != null) +
+                   " state=" + initializationDiagnostic +
+                   (string.IsNullOrEmpty(shellFailure) ? string.Empty : " shellFailure=" + shellFailure);
+        }
+
+        private void FailInitialization(string reason, Exception exception = null)
+        {
+            initializationFailed = true;
+            initializationDiagnostic = reason;
+            var diagnostic = BuildDiagnostic();
+            if (exception != null)
+            {
+                QuestDebugMode.Report(exception, "world-ui.initialize");
+            }
+            if (!initializationFailureLogged)
+            {
+                initializationFailureLogged = true;
+                Debug.LogWarning("[BanxiaWorldUi] " + reason + " | " + diagnostic, this);
+                WriteQaMarker("NULL:" + reason + "|" + diagnostic);
+            }
+            DisposePartial();
+            if (exception != null)
+            {
+                QuestDebugMode.RethrowIfEnabled(exception, "world-ui.initialize");
+            }
+        }
+
+        private void DisposePartial()
+        {
+            if (panelRoot != null)
+            {
+                Destroy(panelRoot);
+            }
+            panelRoot = null;
+            panelSurface = null;
+            panelCollider = null;
+            document = null;
+            shell = null;
+
+            if (renderTexture != null)
+            {
+                renderTexture.Release();
+                Destroy(renderTexture);
+            }
+            renderTexture = null;
+            if (panelSettings != null)
+            {
+                Destroy(panelSettings);
+            }
+            panelSettings = null;
+            if (panelMaterial != null)
+            {
+                Destroy(panelMaterial);
+            }
+            panelMaterial = null;
+            if (pointerMaterial != null)
+            {
+                Destroy(pointerMaterial);
+            }
+            pointerMaterial = null;
+            leftPointer.Line = null;
+            rightPointer.Line = null;
+            leftPointer.PreviousSelect = false;
+            rightPointer.PreviousSelect = false;
+        }
+
         private static Material CreatePanelMaterial(Texture texture)
         {
             // 优先用常驻材质资源，避免 build stripping 掉运行时 Shader.Find 的 Shader。
@@ -241,7 +452,15 @@ namespace QuestMmdPlayer
             if (material == null)
             {
                 var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Texture");
+                if (shader == null)
+                {
+                    throw new InvalidOperationException("No supported shader is available for the Quest UI surface.");
+                }
                 material = new Material(shader);
+            }
+            if (material.shader == null)
+            {
+                throw new InvalidOperationException("Quest UI surface material has no shader.");
             }
             if (material.HasProperty("_BaseMap"))
             {

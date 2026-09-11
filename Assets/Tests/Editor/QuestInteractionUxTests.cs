@@ -1,13 +1,156 @@
-﻿using System.Linq;
+using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.UIElements;
 
 namespace QuestMmdPlayer.Tests
 {
     public sealed class QuestInteractionUxTests
     {
+        [TestCase(true, true, true, true, QuestUiEntry.WorldUi)]
+        [TestCase(true, false, false, true, QuestUiEntry.LegacyMenu)]
+        [TestCase(false, false, false, true, QuestUiEntry.LegacyMenu)]
+        [TestCase(false, false, false, false, QuestUiEntry.None)]
+        [TestCase(true, false, false, false, QuestUiEntry.None)]
+        public void QuestDefaultEntryRequiresHealthyWorldUi(
+            bool worldUiEnabled,
+            bool initializationSucceeded,
+            bool worldUiHealthy,
+            bool allowLegacyFallback,
+            QuestUiEntry expected)
+        {
+            Assert.That(
+                QuestMmdPlayerBootstrap.ResolveQuestUiEntry(
+                    worldUiEnabled,
+                    initializationSucceeded,
+                    worldUiHealthy,
+                    allowLegacyFallback),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(false, false, true)]
+        [TestCase(true, false, true)]
+        [TestCase(false, true, true)]
+        [TestCase(true, true, false)]
+        public void QuestUiSurfacesAreMutuallyExclusive(
+            bool legacyMenuVisible,
+            bool worldUiVisible,
+            bool expected)
+        {
+            Assert.That(
+                QuestMmdPlayerBootstrap.QuestUiLayersAreMutuallyExclusive(
+                    legacyMenuVisible,
+                    worldUiVisible),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void WorldUiHostExposesUnhealthyStartupDiagnostics()
+        {
+            var hostObject = new GameObject("Quest World UI health test");
+            try
+            {
+                var host = hostObject.AddComponent<BanxiaQuestWorldUiHost>();
+                Assert.That(host.IsOpen, Is.False);
+                Assert.That(host.IsHealthy, Is.False);
+                Assert.That(host.RenderTextureCreated, Is.False);
+                Assert.That(host.HasTargetTexture, Is.False);
+                Assert.That(host.HasRootVisualElement, Is.False);
+                Assert.That(host.ShellBuilt, Is.False);
+                Assert.That(host.Diagnostic, Does.Contain("rt=False"));
+                Assert.That(host.Diagnostic, Does.Contain("target=False"));
+                Assert.That(host.Diagnostic, Does.Contain("root=False"));
+                Assert.That(host.Diagnostic, Does.Contain("shell=False"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(hostObject);
+            }
+        }
+
+        [Test]
+        public void UiShellBuildStartsUnbuiltAndFailureLatchIsExposed()
+        {
+            var shellObject = new GameObject("Banxia UiShell build state test");
+            try
+            {
+                var shell = shellObject.AddComponent<BanxiaUiShell>();
+                Assert.That(shell.IsBuilt, Is.False);
+                Assert.That(shell.BuildFailed, Is.False);
+                Assert.That(shell.BuildFailureDiagnostic, Is.Empty);
+                Assert.That(typeof(BanxiaUiShell).GetMethod(
+                    "EnsureBuilt",
+                    BindingFlags.Instance | BindingFlags.NonPublic), Is.Not.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(shellObject);
+            }
+        }
+
+        [Test]
+        public void WorldUiPanelSettingsTargetTheRuntimeTexture()
+        {
+            var texture = new RenderTexture(320, 480, 0);
+            PanelSettings settings = null;
+            try
+            {
+                var createSettings = typeof(BanxiaQuestWorldUiHost).GetMethod(
+                    "CreatePanelSettings",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                Assert.That(createSettings, Is.Not.Null);
+                settings = (PanelSettings)createSettings.Invoke(null, new object[] { texture });
+                Assert.That(settings, Is.Not.Null);
+                Assert.That(settings.targetTexture, Is.SameAs(texture));
+                Assert.That(settings.referenceResolution, Is.EqualTo(new Vector2Int(320, 480)));
+                Assert.That(settings.scaleMode, Is.EqualTo(PanelScaleMode.ScaleWithScreenSize));
+                Assert.That(settings.screenMatchMode, Is.EqualTo(PanelScreenMatchMode.MatchWidthOrHeight));
+                Assert.That(settings.clearColor, Is.True);
+                Assert.That(settings.colorClearValue.a, Is.EqualTo(1f));
+            }
+            finally
+            {
+                if (settings != null)
+                {
+                    Object.DestroyImmediate(settings);
+                }
+                texture.Release();
+                Object.DestroyImmediate(texture);
+            }
+        }
+
+        [Test]
+        public void UiShellFailureLatchPreventsPerFrameBuildRetry()
+        {
+            var shellObject = new GameObject("Banxia UiShell failure latch test");
+            try
+            {
+                var shell = shellObject.AddComponent<BanxiaUiShell>();
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var failed = typeof(BanxiaUiShell).GetField("buildFailed", flags);
+                var attempts = typeof(BanxiaUiShell).GetField("buildAttempt", flags);
+                var ensureBuilt = typeof(BanxiaUiShell).GetMethod("EnsureBuilt", flags);
+                Assert.That(failed, Is.Not.Null);
+                Assert.That(attempts, Is.Not.Null);
+                Assert.That(ensureBuilt, Is.Not.Null);
+
+                failed.SetValue(shell, true);
+                attempts.SetValue(shell, 1);
+                ensureBuilt.Invoke(shell, null);
+                ensureBuilt.Invoke(shell, null);
+
+                Assert.That(shell.IsBuilt, Is.False);
+                Assert.That(shell.BuildFailed, Is.True);
+                Assert.That((int)attempts.GetValue(shell), Is.EqualTo(1));
+            }
+            finally
+            {
+                Object.DestroyImmediate(shellObject);
+            }
+        }
+
         [TestCase(-10, 5, 0)]
         [TestCase(3, 5, 3)]
         [TestCase(99, 5, 4)]

@@ -57,6 +57,7 @@ namespace QuestMmdPlayer
         private PhoneDiagnosticsHud hud;
         private BanxiaUpdateChecker updateChecker;
         private bool worldSpaceHost;
+        private UIDocument document;
         private VisualElement coPresenceSheet;
         private VisualElement coPresenceBackdrop;
         private VisualElement videoCallChrome;
@@ -75,8 +76,7 @@ namespace QuestMmdPlayer
         private readonly List<VisualElement> settingsDetailPages = new List<VisualElement>();
         private CoPresenceMode lastCoPresenceMode;
         private Action closeRequested;
-
-        private UIDocument document;
+        private Action sceneEntered;
         private VisualElement panelRoot;
         private VisualElement shellRoot;
         private VisualElement mainUi;
@@ -97,10 +97,17 @@ namespace QuestMmdPlayer
         private float nextPollAt;
         private float toastHideAt = float.NegativeInfinity;
         private bool built;
+        private bool buildInProgress;
+        private bool buildFailed;
+        private int buildAttempt;
+        private string buildFailureDiagnostic = string.Empty;
+        private int sceneGeneration;
         private bool enteringScene;
         private bool refreshingActions;
 
         public bool IsBuilt => built;
+        public bool BuildFailed => buildFailed;
+        public string BuildFailureDiagnostic => buildFailureDiagnostic;
 
         // Dynamic UI handles.
         private VisualElement modelsListContainer;
@@ -152,10 +159,26 @@ namespace QuestMmdPlayer
         private bool voiceHoldCancelArmed;
         private bool pairingNumpadExpanded;
 
-        public void ConfigureWorldSpace(Action onCloseRequested)
+        public void RequestWorldSpaceClose()
+        {
+            if (mode == UiMode.Scene)
+            {
+                ReturnToMenu();
+            }
+            else
+            {
+                // Closing while a model is still loading must invalidate the
+                // continuation so it cannot reopen Scene mode after the close.
+                sceneGeneration++;
+            }
+            closeRequested?.Invoke();
+        }
+
+        public void ConfigureWorldSpace(Action onCloseRequested, Action onSceneEntered = null)
         {
             worldSpaceHost = true;
             closeRequested = onCloseRequested;
+            sceneEntered = onSceneEntered;
             if (built)
             {
                 EnsureWorldCloseButton();
@@ -453,6 +476,7 @@ namespace QuestMmdPlayer
 
         private void OnDestroy()
         {
+            sceneGeneration++;
             if (fileImport != null)
             {
                 fileImport.StatusChanged -= HandleImportStatus;
@@ -477,8 +501,8 @@ namespace QuestMmdPlayer
 
         private void Update()
         {
-            // World-space/动态 UIDocument 有时会在首帧才拿到 rootVisualElement；
-            // 这里做幂等重试，避免“一次性构建失败后永远黑屏”。
+            // World-space/动态 UIDocument 首帧可能尚未拿到 rootVisualElement；
+            // 允许短暂重试，但一次构建异常会锁存并交给宿主回退，避免每帧刷屏。
             if (!built)
             {
                 EnsureBuilt();
@@ -534,10 +558,50 @@ namespace QuestMmdPlayer
 
         private void EnsureBuilt()
         {
-            if (built || document == null)
+            if (built || buildInProgress || buildFailed || document == null)
             {
                 return;
             }
+
+            var root = document.rootVisualElement;
+            if (root == null)
+            {
+                return;
+            }
+
+            buildInProgress = true;
+            buildAttempt++;
+            try
+            {
+                BuildShell();
+                built = true;
+                SelectTab(Tab.Companion);
+                ApplyMode(UiMode.Menu);
+                buildFailureDiagnostic = string.Empty;
+            }
+            catch (Exception exception)
+            {
+                built = false;
+                buildFailureDiagnostic = "attempt=" + buildAttempt + " " +
+                    exception.GetType().Name + ": " + exception.Message;
+                ResetBuildState(root);
+                if (!buildFailed)
+                {
+                    buildFailed = true;
+                    QuestDebugMode.Report(exception, "ui.shell.build");
+                    QuestDebugMode.RethrowIfEnabled(exception, "ui.shell.build");
+                    Debug.LogError("[BanxiaUi] EnsureBuilt failed; UI build is latched off: " +
+                                   buildFailureDiagnostic + "\n" + exception, this);
+                }
+            }
+            finally
+            {
+                buildInProgress = false;
+            }
+        }
+
+        private void BuildShell()
+        {
             panelRoot = document.rootVisualElement;
             if (panelRoot == null)
             {
@@ -613,8 +677,7 @@ namespace QuestMmdPlayer
                 toastLabel = shellRoot.Q<Label>("toast-label");
                 if (content == null || tabBar == null || sceneToolbar == null)
                 {
-                    Debug.LogError("[BanxiaUi] Fallback shell is incomplete.", this);
-                    return;
+                    throw new InvalidOperationException("Fallback shell is incomplete.");
                 }
             }
 
@@ -636,9 +699,33 @@ namespace QuestMmdPlayer
             {
                 EnsureWorldCloseButton();
             }
-            built = true;
-            SelectTab(Tab.Companion);
-            ApplyMode(UiMode.Menu);
+        }
+
+        private void ResetBuildState(VisualElement root)
+        {
+            try
+            {
+                root?.Clear();
+            }
+            catch (Exception cleanupException)
+            {
+                QuestDebugMode.Report(cleanupException, "ui.shell.build-cleanup");
+                Debug.LogWarning("[BanxiaUi] Shell cleanup after build failure failed: " +
+                                 cleanupException.Message, this);
+            }
+
+            panelRoot = null;
+            shellRoot = null;
+            mainUi = null;
+            content = null;
+            tabBar = null;
+            sceneToolbar = null;
+            movePill = null;
+            toast = null;
+            toastLabel = null;
+            tabPages.Clear();
+            segmentRefreshers.Clear();
+            models.Clear();
         }
 
         private static void SanitizeLabels(VisualElement panelRoot)
@@ -789,7 +876,7 @@ namespace QuestMmdPlayer
             var label = new Label("关闭");
             label.AddToClassList("pill-label");
             close.Add(label);
-            close.RegisterCallback<ClickEvent>(_ => closeRequested?.Invoke());
+            close.RegisterCallback<ClickEvent>(_ => RequestWorldSpaceClose());
             shellRoot.Add(close);
         }
 
@@ -2712,10 +2799,11 @@ namespace QuestMmdPlayer
                 return;
             }
             enteringScene = true;
-            EnterSceneAsync(target).Forget("ui.enter-scene");
+            var generation = ++sceneGeneration;
+            EnterSceneAsync(target, generation).Forget("ui.enter-scene");
         }
 
-        private async Task EnterSceneAsync(RuntimeMmdModelInfo target)
+        private async Task EnterSceneAsync(RuntimeMmdModelInfo target, int generation)
         {
             try
             {
@@ -2746,25 +2834,26 @@ namespace QuestMmdPlayer
                     RefreshLogPreview();
                     return;
                 }
+                if (generation != sceneGeneration || this == null || !isActiveAndEnabled)
+                {
+                    return;
+                }
+                ApplyMode(UiMode.Scene);
+                var director = owner?.CoPresence;
+                if (director != null)
+                {
+                    director.SetAvatar(owner.Avatar != null ? owner.Avatar.transform : null);
+                    director.ApplyOnEnterScene();
+                }
+                arPlacedOnce = false;
+                UpdateCoPresenceChrome();
+                if (hud != null)
+                {
+                    hud.SetVisible(PlayerPrefs.GetInt(PrefsPrefix + "hud", 0) == 1);
+                }
                 if (worldSpaceHost)
                 {
-                    closeRequested?.Invoke();
-                }
-                else
-                {
-                    ApplyMode(UiMode.Scene);
-                    var director = owner?.CoPresence;
-                    if (director != null)
-                    {
-                        director.SetAvatar(owner.Avatar != null ? owner.Avatar.transform : null);
-                        director.ApplyOnEnterScene();
-                    }
-                    arPlacedOnce = false;
-                    UpdateCoPresenceChrome();
-                    if (hud != null)
-                    {
-                        hud.SetVisible(PlayerPrefs.GetInt(PrefsPrefix + "hud", 0) == 1);
-                    }
+                    sceneEntered?.Invoke();
                 }
                 RefreshModels(forceInvalidate: false);
             }
@@ -3275,6 +3364,7 @@ namespace QuestMmdPlayer
 
         private void ReturnToMenu()
         {
+            sceneGeneration++;
             owner?.CoPresence?.Suspend();
             HideCoPresenceSheets();
             ApplyMode(UiMode.Menu);

@@ -2,6 +2,13 @@
 
 namespace QuestMmdPlayer
 {
+    public enum QuestUiEntry
+    {
+        None,
+        LegacyMenu,
+        WorldUi,
+    }
+
     /// <summary>
     /// Add this component to one empty GameObject in a scene. It creates enough
     /// runtime content for an editor preview and for the first Quest smoke test.
@@ -58,6 +65,9 @@ namespace QuestMmdPlayer
         public QuestFlutterTextureHost QuestFlutterTexture { get; private set; }
         public bool FlutterUiActive { get; private set; }
         public string FlutterUiStatus { get; private set; } = "未初始化";
+        public QuestUiEntry EffectiveQuestUiEntry { get; private set; } = QuestUiEntry.None;
+        public bool QuestUiAvailable => EffectiveQuestUiEntry != QuestUiEntry.None;
+        public bool QuestUiDegraded => EffectiveQuestUiEntry == QuestUiEntry.LegacyMenu;
 
         /// <summary>Phone-form orbit camera (BANXIA_PHONE builds only).</summary>
         public PhoneOrbitCamera OrbitCamera { get; private set; }
@@ -185,24 +195,230 @@ namespace QuestMmdPlayer
                 PhoneHud.Bind(Performance, DiagnosticsReporter);
                 PhoneHud.BindFraming(CoPresence);
 #elif UNITY_EDITOR
-                // Editor has no Android Flutter engine. The legacy surface remains
-                // an editor preview only; device builds use the shared Flutter shell.
-                Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
-                Menu.Initialize(this);
+                // Editor keeps the legacy surface available as an explicit preview
+                // and hardware-menu fallback; Quest runtime opens WorldUi below.
+                EnsureLegacyQuestMenu();
                 var hud = gameObject.GetComponent<PrototypeHud>() ?? gameObject.AddComponent<PrototypeHud>();
                 hud.Initialize(this);
 #else
-                // Quest's hardware-only menu remains available for device-exclusive
-                // entries. The shared common-workflow panel is created in
-                // InitializeFlutterUi so it also exists when this prototype HUD
-                // toggle is disabled.
-                Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
-                Menu.Initialize(this);
+                // Quest's legacy surface is created hidden so its hardware menu key
+                // remains available, but it is never the normal default entry.
+                EnsureLegacyQuestMenu();
 #endif
                 BindInteractions();
             }
+#if !BANXIA_PHONE
+            // The hardware-only menu must remain able to receive the menu button
+            // even when the prototype HUD toggle is disabled. It starts hidden.
+            EnsureLegacyQuestMenu();
+#endif
 
             InitializeFlutterUi();
+        }
+
+        public static QuestUiEntry ResolveQuestUiEntry(
+            bool worldUiEnabled,
+            bool worldUiInitializationSucceeded,
+            bool worldUiHealthy,
+            bool allowLegacyFallback)
+        {
+            if (worldUiEnabled && worldUiInitializationSucceeded && worldUiHealthy)
+            {
+                return QuestUiEntry.WorldUi;
+            }
+            return allowLegacyFallback ? QuestUiEntry.LegacyMenu : QuestUiEntry.None;
+        }
+
+        public static bool QuestUiLayersAreMutuallyExclusive(bool legacyMenuVisible, bool worldUiVisible)
+        {
+            return !(legacyMenuVisible && worldUiVisible);
+        }
+
+        public void OpenWorldUi()
+        {
+#if !BANXIA_PHONE
+            if (WorldUi == null)
+            {
+                HandleWorldUiFailure("Quest WorldUi 未初始化");
+                return;
+            }
+            if (!WorldUi.IsHealthy)
+            {
+                if (WorldUi.IsPending)
+                {
+                    WorldUi.ShowInFront();
+                    return;
+                }
+                HandleWorldUiFailure("Quest WorldUi 不健康：" + WorldUi.Diagnostic);
+                return;
+            }
+
+            ApplyQuestUiEntry(QuestUiEntry.WorldUi);
+            if (!WorldUi.IsOpen || !QuestUiLayersAreMutuallyExclusive(Menu?.IsOpen == true, WorldUi.IsOpen))
+            {
+                HandleWorldUiFailure("Quest WorldUi 打开后入口仍不互斥：" + WorldUi.Diagnostic);
+            }
+#endif
+        }
+
+        public void OpenLegacyMenu()
+        {
+#if !BANXIA_PHONE
+            try
+            {
+                ApplyQuestUiEntry(QuestUiEntry.LegacyMenu);
+                if (Menu == null || !Menu.IsOpen || (WorldUi != null && WorldUi.IsOpen))
+                {
+                    FlutterUiStatus = "旧菜单打开失败";
+                    ApplyQuestUiEntry(QuestUiEntry.None);
+                    Debug.LogWarning("[BanxiaUi] Legacy Quest menu did not open or remained non-exclusive.", this);
+                }
+            }
+            catch (System.Exception exception)
+            {
+                QuestDebugMode.Report(exception, "quest-ui.legacy-open");
+                QuestDebugMode.RethrowIfEnabled(exception, "quest-ui.legacy-open");
+                FlutterUiStatus = "旧菜单打开失败";
+                ApplyQuestUiEntry(QuestUiEntry.None);
+                Debug.LogWarning("[BanxiaUi] Legacy Quest menu failed to open: " + exception.Message, this);
+            }
+#endif
+        }
+
+        public void ToggleWorldUi()
+        {
+#if !BANXIA_PHONE
+            if (WorldUi != null && WorldUi.IsOpen)
+            {
+                WorldUi.RequestCloseFromUser();
+            }
+            else if (WorldUi != null && WorldUi.IsPending)
+            {
+                WorldUi.ShowInFront();
+            }
+            else
+            {
+                OpenWorldUi();
+            }
+#endif
+        }
+
+        public void HandleWorldUiFailure(string reason)
+        {
+#if !BANXIA_PHONE
+            CreateLegacyUiFallback(string.IsNullOrEmpty(reason) ? "Quest WorldUi 不可用" : reason);
+#endif
+        }
+
+        internal void HandleLegacyMenuClosed()
+        {
+#if !BANXIA_PHONE
+            ApplyQuestUiEntry(QuestUiEntry.None);
+#endif
+        }
+
+        internal void HandleWorldUiClosed()
+        {
+#if !BANXIA_PHONE
+            WorldUi?.Hide();
+            if (allowLegacyUiFallback)
+            {
+                ApplyQuestUiEntry(QuestUiEntry.LegacyMenu);
+            }
+            else
+            {
+                ApplyQuestUiEntry(QuestUiEntry.None);
+            }
+#endif
+        }
+
+        internal void HandleWorldUiSceneEntered()
+        {
+#if !BANXIA_PHONE
+            // The shared shell owns the Scene-mode transition; this callback only
+            // records the visible entry and guarantees the legacy surface stays hidden.
+            Menu?.Hide();
+            if (WorldUi != null && WorldUi.IsOpen)
+            {
+                EffectiveQuestUiEntry = QuestUiEntry.WorldUi;
+            }
+            else
+            {
+                HandleWorldUiFailure("Quest WorldUi 在进入场景后不可见：" + (WorldUi == null ? "null" : WorldUi.Diagnostic));
+            }
+#endif
+        }
+
+        internal void HideLegacyMenuForWorldUi()
+        {
+            Menu?.Hide();
+        }
+
+        internal void HideWorldUiForLegacyMenu()
+        {
+            WorldUi?.Hide();
+        }
+
+        private void ApplyQuestUiEntry(QuestUiEntry entry)
+        {
+#if !BANXIA_PHONE
+            try
+            {
+                switch (entry)
+                {
+                    case QuestUiEntry.WorldUi:
+                        if (WorldUi == null || WorldUi.InitializationFailed)
+                        {
+                            Debug.LogWarning("[BanxiaUi] Quest WorldUi is not healthy; keeping legacy surface available.", this);
+                            return;
+                        }
+                        // Validate first, then deactivate the old surface before
+                        // activating WorldUi. OpenWorldUi rolls back to legacy if
+                        // the target fails after this point.
+                        Menu?.Hide();
+                        WorldUi.ShowInFront();
+                        if (WorldUi.IsOpen)
+                        {
+                            EffectiveQuestUiEntry = QuestUiEntry.WorldUi;
+                        }
+                        break;
+                    case QuestUiEntry.LegacyMenu:
+                        EnsureLegacyQuestMenu();
+                        WorldUi?.Hide();
+                        Menu?.ShowInFront();
+                        if (Menu != null && Menu.IsOpen)
+                        {
+                            EffectiveQuestUiEntry = QuestUiEntry.LegacyMenu;
+                        }
+                        break;
+                    default:
+                        WorldUi?.Hide();
+                        Menu?.Hide();
+                        EffectiveQuestUiEntry = QuestUiEntry.None;
+                        break;
+                }
+            }
+            catch (System.Exception exception)
+            {
+                QuestDebugMode.Report(exception, "quest-ui.transition");
+                QuestDebugMode.RethrowIfEnabled(exception, "quest-ui.transition");
+                Debug.LogWarning("[BanxiaUi] Quest UI transition failed: " + exception.Message, this);
+                WorldUi?.Hide();
+                Menu?.Hide();
+                EffectiveQuestUiEntry = QuestUiEntry.None;
+            }
+#endif
+        }
+
+        private void EnsureLegacyQuestMenu()
+        {
+#if !BANXIA_PHONE
+            if (Menu == null)
+            {
+                Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
+                Menu.Initialize(this);
+            }
+#endif
         }
 
         private void InitializeFlutterUi()
@@ -211,15 +427,36 @@ namespace QuestMmdPlayer
             FlutterUiActive = false;
             if (!enableFlutterUi)
             {
-                CreateLegacyUiFallback("Flutter UI 已在 Bootstrap 中禁用");
+                CreateLegacyUiFallback("Flutter/WorldUi 已在 Bootstrap 中禁用");
                 return;
             }
 
 #if !BANXIA_PHONE
-            // The common Quest panel is the explicit fallback until the Flutter
-            // offscreen compositor has a verified texture and input path.
+            // This is the Quest default shell. It is independent from the
+            // unsupported Flutter offscreen compositor and is opened only after
+            // its RenderTexture, panel and UiShell have all been verified.
             WorldUi = gameObject.GetComponent<BanxiaQuestWorldUiHost>() ?? gameObject.AddComponent<BanxiaQuestWorldUiHost>();
-            WorldUi.Initialize(this);
+
+            try
+            {
+                WorldUi.Initialize(this);
+            }
+            catch (System.Exception exception)
+            {
+                QuestDebugMode.Report(exception, "quest-ui.initialize");
+                QuestDebugMode.RethrowIfEnabled(exception, "quest-ui.initialize");
+                Debug.LogWarning("[BanxiaUi] Quest WorldUi initialization threw: " + exception.Message, this);
+            }
+            if (WorldUi.InitializationFailed)
+            {
+                CreateLegacyUiFallback("Quest WorldUi 初始化失败：" + WorldUi.Diagnostic);
+            }
+            else
+            {
+                // WorldUi may still be waiting for UIDocument/UiShell on its first
+                // frame; its own Update opens the panel once it becomes healthy.
+                OpenWorldUi();
+            }
 #endif
 
             FlutterBridge = gameObject.GetComponent<BanxiaFlutterBridge>() ?? gameObject.AddComponent<BanxiaFlutterBridge>();
@@ -231,7 +468,16 @@ namespace QuestMmdPlayer
             flutterInitializationRoutine = StartCoroutine(InitializeFlutterNativeHost());
 #elif UNITY_EDITOR
             FlutterUiStatus = "编辑器预览（无 Android Flutter host）";
+#if BANXIA_PHONE
             CreateLegacyUiFallback(FlutterUiStatus);
+#else
+            if (WorldUi == null || WorldUi.InitializationFailed)
+            {
+                CreateLegacyUiFallback(FlutterUiStatus + "；WorldUi 不健康");
+            }
+#endif
+            // Editor has no native Flutter host; on Quest the shared WorldUi
+            // remains the default whenever it is healthy or still pending.
 #else
             QuestFlutterTexture = gameObject.GetComponent<QuestFlutterTextureHost>() ?? gameObject.AddComponent<QuestFlutterTextureHost>();
             FlutterUiStatus = QuestFlutterTexture.IsSupported
@@ -239,7 +485,11 @@ namespace QuestMmdPlayer
                 : QuestFlutterTexture.Status;
             if (!QuestFlutterTexture.IsSupported)
             {
-                CreateLegacyUiFallback(FlutterUiStatus);
+                FlutterUiStatus = "使用共享 Quest UiShell（Quest compositor 未支持）";
+                if (WorldUi == null || WorldUi.InitializationFailed)
+                {
+                    CreateLegacyUiFallback(FlutterUiStatus + "；WorldUi 不健康");
+                }
             }
 #endif
         }
@@ -274,13 +524,18 @@ namespace QuestMmdPlayer
                 QuestFlutterTexture = gameObject.GetComponent<QuestFlutterTextureHost>() ?? gameObject.AddComponent<QuestFlutterTextureHost>();
                 FlutterUiStatus = QuestFlutterTexture.IsSupported
                     ? "Quest compositor 已连接"
-                    : "Flutter host 已初始化；Quest 纹理合成待完成";
-                // Engine readiness alone is not UI readiness on Quest. Keep the
-                // proven world-space fallback visible until texture composition,
-                // frame synchronization, and XR pointer forwarding all pass QA.
+                    : QuestFlutterTexture.Status;
+                // QuestFlutterTextureHost.IsSupported remains false until the
+                // compositor is actually implemented. That gate must not disable
+                // the verified shared WorldUi shell; only an unhealthy WorldUi
+                // falls back to the legacy hardware menu.
                 if (!QuestFlutterTexture.IsSupported)
                 {
-                    CreateLegacyUiFallback(FlutterUiStatus);
+                    FlutterUiStatus = "Flutter host 已初始化；使用共享 Quest UiShell（纹理合成待完成）";
+                    if (WorldUi == null || WorldUi.InitializationFailed)
+                    {
+                        CreateLegacyUiFallback(FlutterUiStatus + "；WorldUi 不健康");
+                    }
                 }
                 else
                 {
@@ -292,8 +547,15 @@ namespace QuestMmdPlayer
             }
 
             FlutterUiStatus = "Flutter host 不可用：" + state;
+#if BANXIA_PHONE
             CreateLegacyUiFallback(FlutterUiStatus);
-            Debug.LogWarning("[BanxiaFlutter] Shared Flutter UI unavailable; using explicit legacy fallback: " + state, this);
+#else
+            if (WorldUi == null || WorldUi.InitializationFailed)
+            {
+                CreateLegacyUiFallback(FlutterUiStatus + "；WorldUi 不健康");
+            }
+#endif
+            Debug.LogWarning("[BanxiaFlutter] Shared Flutter host unavailable; retaining healthy Quest UiShell when available: " + state, this);
         }
 #endif
 
@@ -302,26 +564,48 @@ namespace QuestMmdPlayer
             if (!allowLegacyUiFallback)
             {
                 FlutterUiStatus = reason;
+                ApplyQuestUiEntry(QuestUiEntry.None);
                 Debug.LogWarning("[BanxiaFlutter] Legacy UI fallback disabled: " + reason, this);
                 return;
             }
 
             FlutterUiStatus = reason;
 #if BANXIA_PHONE
-            if (UiShell == null)
+            try
             {
-                UiShell = gameObject.GetComponent<BanxiaUiShell>() ?? gameObject.AddComponent<BanxiaUiShell>();
-                UiShell.Bind(this, runtimeMmdLoader, FileImport, DebugLog);
-                if (PhoneHud != null)
+                if (UiShell == null)
                 {
-                    UiShell.BindHud(PhoneHud);
+                    UiShell = gameObject.GetComponent<BanxiaUiShell>() ?? gameObject.AddComponent<BanxiaUiShell>();
+                    UiShell.Bind(this, runtimeMmdLoader, FileImport, DebugLog);
+                    if (PhoneHud != null)
+                    {
+                        UiShell.BindHud(PhoneHud);
+                    }
                 }
             }
-#elif !UNITY_EDITOR
-            if (Menu == null)
+            catch (System.Exception exception)
             {
-                Menu = gameObject.GetComponent<CompanionWorldMenu>() ?? gameObject.AddComponent<CompanionWorldMenu>();
-                Menu.Initialize(this);
+                QuestDebugMode.Report(exception, "phone-ui.fallback");
+                QuestDebugMode.RethrowIfEnabled(exception, "phone-ui.fallback");
+                Debug.LogWarning("[BanxiaUi] Phone UI fallback failed: " + exception.Message, this);
+            }
+#else
+            try
+            {
+                ApplyQuestUiEntry(QuestUiEntry.LegacyMenu);
+                if (Menu == null || !Menu.IsOpen)
+                {
+                    EffectiveQuestUiEntry = QuestUiEntry.None;
+                    Debug.LogWarning("[BanxiaUi] Legacy Quest fallback did not open.", this);
+                }
+            }
+            catch (System.Exception exception)
+            {
+                QuestDebugMode.Report(exception, "quest-ui.legacy-fallback");
+                QuestDebugMode.RethrowIfEnabled(exception, "quest-ui.legacy-fallback");
+                EffectiveQuestUiEntry = QuestUiEntry.None;
+                ApplyQuestUiEntry(QuestUiEntry.None);
+                Debug.LogWarning("[BanxiaUi] Legacy Quest fallback failed: " + exception.Message, this);
             }
 #endif
             BindInteractions();

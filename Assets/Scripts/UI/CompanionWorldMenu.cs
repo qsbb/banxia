@@ -359,7 +359,7 @@ namespace QuestMmdPlayer
                 yield break;
             }
 
-            owner.WorldUi.ShowInFront();
+            owner?.OpenWorldUi();
             // 等 UI Toolkit 完成一帧渲染后再读 RT，避免拿到纯 clear 色。
             yield return new WaitForSeconds(1f);
             yield return new WaitForEndOfFrame();
@@ -382,7 +382,11 @@ namespace QuestMmdPlayer
                 yield break;
             }
 
-            ShowInFront();
+            owner?.OpenLegacyMenu();
+            if (owner == null)
+            {
+                ShowInFront();
+            }
             ShowModelPanel();
             ShowModelList();
             Debug.Log("[CompanionMenu] Android QA model list opened.", this);
@@ -496,7 +500,11 @@ namespace QuestMmdPlayer
                 yield break;
             }
 
-            ShowInFront();
+            owner?.OpenLegacyMenu();
+            if (owner == null)
+            {
+                ShowInFront();
+            }
             ShowTextInputPanel();
             OpenConversationKeyboard();
             Debug.Log("[CompanionMenu] Android QA text input opened; keyboard_requested=" + (conversationKeyboard != null), this);
@@ -1180,8 +1188,25 @@ namespace QuestMmdPlayer
 
         public void Toggle()
         {
-            if (IsOpen) Hide();
-            else ShowInFront();
+            if (IsOpen)
+            {
+                if (owner != null)
+                {
+                    owner.HandleLegacyMenuClosed();
+                }
+                else
+                {
+                    Hide();
+                }
+            }
+            else if (owner != null)
+            {
+                owner.OpenLegacyMenu();
+            }
+            else
+            {
+                ShowInFront();
+            }
         }
 
         public void ShowInFront()
@@ -1210,6 +1235,12 @@ namespace QuestMmdPlayer
             UpdateStatusText();
             Status = "菜单已打开";
             Debug.Log($"[CompanionMenu] Opened at {pose.position:F3}.", this);
+        }
+
+        public void CloseFromUser()
+        {
+            Hide();
+            owner?.HandleLegacyMenuClosed();
         }
 
         public void Hide()
@@ -1274,7 +1305,7 @@ namespace QuestMmdPlayer
             CreateImage("Accent", mainLayer.transform, new Vector2(0f, 335f), new Vector2(720f, 10f), new Color(.25f, .86f, .66f, 1f));
             CreateText("陪伴", mainLayer.transform, new Vector2(0f, 286f), new Vector2(640f, 54f), 31, FontStyle.Bold, Color.white);
             CreateText("陪伴  /  对话  /  触碰", mainLayer.transform, new Vector2(0f, 244f), new Vector2(640f, 30f), 14, FontStyle.Normal, new Color(.62f, .72f, .75f, 1f));
-            CreateButton("X", 316f, 286f, 48f, 48f, Hide, mainLayer.transform);
+            CreateButton("X", 316f, 286f, 48f, 48f, CloseFromUser, mainLayer.transform);
             // Source contract aliases: PAIR BACKEND / SET HOST PORT / AUTO COMPLETE PATH.
 
             var buttonWidth = 204f;
@@ -1295,7 +1326,7 @@ namespace QuestMmdPlayer
             // Keep a stable object name for QA while the visible label reflects state.
             mainDebugButton.name = "调试模式";
             mainDebugModeToggleText = mainDebugButton.GetComponentInChildren<Text>();
-            CreateButton("新界面", x[1], y[3], buttonWidth, buttonHeight, () => owner?.WorldUi?.ShowInFront(), mainLayer.transform);
+            CreateButton("新界面", x[1], y[3], buttonWidth, buttonHeight, () => owner?.OpenWorldUi(), mainLayer.transform);
             CreateButton("诊断", x[2], y[3], buttonWidth, buttonHeight, ShowDebugPanel, mainLayer.transform);
 
             statusText = CreateText("", mainLayer.transform, new Vector2(0f, -177f), new Vector2(660f, 60f), 14, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
@@ -1330,7 +1361,7 @@ namespace QuestMmdPlayer
             voiceStatusText = CreateText("", voiceLayer.transform, new Vector2(0f, -45f), new Vector2(650f, 180f), 15, FontStyle.Normal, new Color(.74f, .86f, .82f, 1f));
             voiceStatusText.alignment = TextAnchor.UpperLeft;
             CreateButton("返回主菜单", -112f, -214f, 204f, 62f, ShowMainPanel, voiceLayer.transform);
-            CreateButton("关闭", 112f, -214f, 204f, 62f, Hide, voiceLayer.transform);
+            CreateButton("关闭", 112f, -214f, 204f, 62f, CloseFromUser, voiceLayer.transform);
             voiceLayer.SetActive(false);
         }
 
@@ -1356,7 +1387,7 @@ namespace QuestMmdPlayer
 
             conversationInputStatusText = CreateText("", textInputLayer.transform, new Vector2(0f, -104f), new Vector2(640f, 48f), 14, FontStyle.Normal, new Color(.74f, .86f, .82f, 1f));
             CreateButton("返回语音", -112f, -212f, 204f, 62f, ShowVoicePanel, textInputLayer.transform);
-            CreateButton("关闭", 112f, -212f, 204f, 62f, Hide, textInputLayer.transform);
+            CreateButton("关闭", 112f, -212f, 204f, 62f, CloseFromUser, textInputLayer.transform);
             textInputLayer.SetActive(false);
         }
 
@@ -1375,7 +1406,7 @@ namespace QuestMmdPlayer
             CreateButton("自动滚动", 132f, -186f, 120f, 42f, ToggleDebugAutoScroll, debugLayer.transform);
             CreateButton("清空记录", -132f, -242f, 120f, 48f, ClearDebugLog, debugLayer.transform);
             CreateButton("收起", 0f, -242f, 120f, 48f, ToggleDebugMode, debugLayer.transform);
-            CreateButton("关闭菜单", 132f, -242f, 120f, 48f, Hide, debugLayer.transform);
+            CreateButton("关闭菜单", 132f, -242f, 120f, 48f, CloseFromUser, debugLayer.transform);
             // 与手机端（Flutter/UiShell 设置页）同步的异常排错开关（双端共享
             // QuestDebugMode 状态；VR 侧日志主要进 logcat，本按钮提供状态回显）。
             debugModeToggleText = CreateButton(
@@ -1454,7 +1485,7 @@ namespace QuestMmdPlayer
 
             outlineStatusText = CreateText("", appearanceLayer.transform, new Vector2(0f, -151f), new Vector2(650f, 72f), 13, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
             CreateButton("返回主菜单", -112f, -234f, 204f, 56f, ShowMainPanel, appearanceLayer.transform);
-            CreateButton("关闭", 112f, -234f, 204f, 56f, Hide, appearanceLayer.transform);
+            CreateButton("关闭", 112f, -234f, 204f, 56f, CloseFromUser, appearanceLayer.transform);
             appearanceLayer.SetActive(false);
         }
 
@@ -1474,7 +1505,7 @@ namespace QuestMmdPlayer
             modelStatusText = CreateText("", modelLayer.transform, new Vector2(0f, -52f), new Vector2(650f, 170f), 15, FontStyle.Normal, new Color(.74f, .86f, .82f, 1f));
             modelStatusText.alignment = TextAnchor.UpperLeft;
             CreateButton("返回外观", -112f, -214f, 204f, 62f, ShowAppearancePanel, modelLayer.transform);
-            CreateButton("关闭", 112f, -214f, 204f, 62f, Hide, modelLayer.transform);
+            CreateButton("关闭", 112f, -214f, 204f, 62f, CloseFromUser, modelLayer.transform);
             BuildModelListLayer();
             modelLayer.SetActive(false);
         }
@@ -2486,7 +2517,7 @@ namespace QuestMmdPlayer
             CreateButton("恢复默认", 0f, 22f, 204f, 54f, ResetQualityPreset, qualityLayer.transform);
             qualityStatusText = CreateText("", qualityLayer.transform, new Vector2(0f, -82f), new Vector2(650f, 118f), 13, FontStyle.Normal, new Color(.74f, .82f, .84f, 1f));
             CreateButton("返回外观", -112f, -220f, 204f, 56f, ShowAppearancePanel, qualityLayer.transform);
-            CreateButton("关闭", 112f, -220f, 204f, 56f, Hide, qualityLayer.transform);
+            CreateButton("关闭", 112f, -220f, 204f, 56f, CloseFromUser, qualityLayer.transform);
             qualityLayer.SetActive(false);
         }
 
@@ -2499,7 +2530,7 @@ namespace QuestMmdPlayer
             performanceStatusText = CreateText("正在等待采样…", performanceLayer.transform, new Vector2(0f, 8f), new Vector2(660f, 480f), 13, FontStyle.Normal, new Color(.74f, .92f, .82f, 1f));
             performanceStatusText.alignment = TextAnchor.UpperLeft;
             CreateButton("返回主菜单", -112f, -252f, 204f, 58f, ShowMainPanel, performanceLayer.transform);
-            CreateButton("关闭", 112f, -252f, 204f, 58f, Hide, performanceLayer.transform);
+            CreateButton("关闭", 112f, -252f, 204f, 58f, CloseFromUser, performanceLayer.transform);
             performanceLayer.SetActive(false);
         }
 
